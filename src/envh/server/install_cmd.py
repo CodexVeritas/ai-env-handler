@@ -150,9 +150,9 @@ def install(args: argparse.Namespace) -> int:
     elif (DATA_DIR / "vault.age").exists():
         say("  vault already exists; skipping init")
     elif sys.stdin.isatty():
-        subprocess.run(["sudo", "-u", SERVICE_USER, "-H", str(ENVH_BIN), "init"], check=True)
+        subprocess.run(["sudo", "-u", SERVICE_USER, "-H", str(ENVH_BIN), "init", "--user", invoking_user or "root"], check=True)
     else:
-        say(f"  no terminal; finish with: sudo -u {SERVICE_USER} -H {ENVH_BIN} init")
+        say(f"  no terminal; finish with: sudo -u {SERVICE_USER} -H {ENVH_BIN} init --user {invoking_user or '<your login>'}")
     say("done. Start the console with: sudo envh-console   (or the 'envh console' launcher)")
     return 0
 

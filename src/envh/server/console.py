@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -58,7 +59,7 @@ def parse_line(text: str) -> ParsedLine:
 def render_request(request: Request, now: datetime) -> list[str]:
     reason = f'"{request.reason}"' if request.reason else "(no reason given)   <-- ask why before approving"
     header = f"{BELL}[{now:%H:%M:%S}] {request.kind.upper()} REQUEST #{request.id}   code {request.code}   pid {request.provenance.pid}  uid {request.provenance.uid}"
-    lines = [header, f"   reason:   {reason}"]
+    lines = [header, f"   from:     {login_name(request.provenance.uid)}", f"   reason:   {reason}"]
     if request.kind == "session":
         lines.append(f"   preset:   {request.preset or '(ad hoc)'}")
         lines.extend(f"   {var:<28} <- {secret}" for var, secret in sorted(request.mapping.items()))
@@ -173,7 +174,7 @@ class Console:
             self._show_presets()
         elif command == "sessions":
             for session in self.broker.state.live_sessions():
-                self.say(f"   {session.id}  {session.preset or '(ad hoc)':<24} expires {session.expires_at:%H:%M:%S}  vars {', '.join(sorted(session.mapping))}  reason {session.reason or '-'}")
+                self.say(f"   {session.id}  {login_name(session.provenance.uid):<12} {session.preset or '(ad hoc)':<24} expires {session.expires_at:%H:%M:%S}  vars {', '.join(sorted(session.mapping))}  reason {session.reason or '-'}")
         elif command == "runs":
             for run in self.broker.state.active_runs():
                 self.say(f"   run #{run.id} pid {run.provenance.pid} vars {', '.join(sorted(run.mapping))}  {' '.join(run.command)}")
@@ -304,6 +305,13 @@ class Console:
             termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, attributes)
             self.say("")
         return line.decode(errors="replace").rstrip("\n")
+
+
+def login_name(uid: int) -> str:
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return f"uid {uid}"
 
 
 def pick_editor() -> str | None:

@@ -82,6 +82,9 @@ class Connection:
             pass
 
     async def serve(self) -> None:
+        if self.provenance.uid not in self.broker.config.allowed_uids:
+            self.broker.audit.event("rejected_uid", uid=self.provenance.uid, pid=self.provenance.pid, cmdline=self.provenance.cmdline)
+            raise RequestError(f"uid {self.provenance.uid} is not in the broker's users list; a listed user can add it on the console with `edit config`")
         line = await self.reader.readline()
         if not line:
             return
@@ -149,7 +152,7 @@ class Connection:
 
     async def op_session_wait(self, message: dict[str, Any]) -> None:
         request = self.broker.state.requests.get(int(message.get("request_id") or 0))
-        if request is None or request.kind != "session":
+        if request is None or request.kind != "session" or request.provenance.uid != self.provenance.uid:
             raise RequestError("unknown session request id")
         request.abandon_at = None
         await self.send({"ok": True, "request_id": request.id, "pending": request.pending})
@@ -166,7 +169,7 @@ class Connection:
             self.broker.audit.event("detached", id=request.id, grace_until=request.abandon_at)
 
     async def op_session_end(self, message: dict[str, Any]) -> None:
-        session = self.broker.end_session(str(message.get("session_id") or ""), by=f"pid {self.provenance.pid}")
+        session = self.broker.end_session(str(message.get("session_id") or ""), by=f"pid {self.provenance.pid}", uid=self.provenance.uid)
         await self.send({"ok": True, "session_id": session.id})
 
     async def op_run(self, message: dict[str, Any]) -> None:
@@ -174,7 +177,7 @@ class Connection:
         command = self._command(message)
         session_id = message.get("session")
         if session_id:
-            session, mapping = self.broker.resolve_run_in_session(str(session_id), list(message.get("with") or []))
+            session, mapping = self.broker.resolve_run_in_session(str(session_id), list(message.get("with") or []), self.provenance.uid)
             self.broker.audit.event("run_auto_approved", session=session.id, vars=sorted(mapping), pid=self.provenance.pid, reason=reason or "(no reason given)")
             await self._start_run(mapping, session.id, reason, command)
             return
@@ -219,10 +222,10 @@ class Connection:
             )
 
     async def op_list(self, message: dict[str, Any]) -> None:
-        await self.send({"ok": True, **self.broker.list_payload()})
+        await self.send({"ok": True, **self.broker.list_payload(for_uid=self.provenance.uid)})
 
     async def op_status(self, message: dict[str, Any]) -> None:
-        await self.send({"ok": True, **self.broker.status_payload()})
+        await self.send({"ok": True, **self.broker.status_payload(for_uid=self.provenance.uid)})
 
     async def op_preset_validate(self, message: dict[str, Any]) -> None:
         try:

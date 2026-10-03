@@ -54,14 +54,21 @@ async def test_run_in_session_resolution(harness: Harness) -> None:
     request = broker.request_session(mapping, preset, 30, None, (), harness.provenance())
     broker.approve(request)
     session_id = request.result["session_id"]
-    session, resolved = broker.resolve_run_in_session(session_id, ["OPENAI_API_KEY"])
+    uid = harness.provenance().uid
+    session, resolved = broker.resolve_run_in_session(session_id, ["OPENAI_API_KEY"], uid)
     assert resolved == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
-    _, whole = broker.resolve_run_in_session(session_id, [])
+    _, whole = broker.resolve_run_in_session(session_id, [], uid)
     assert whole == mapping
     with pytest.raises(RequestError, match="not covered"):
-        broker.resolve_run_in_session(session_id, ["DATABASE_URL"])
+        broker.resolve_run_in_session(session_id, ["DATABASE_URL"], uid)
     with pytest.raises(RequestError, match="maps to"):
-        broker.resolve_run_in_session(session_id, ["OPENAI_API_KEY=MINIBENCH_OPENROUTER_KEY"])
+        broker.resolve_run_in_session(session_id, ["OPENAI_API_KEY=MINIBENCH_OPENROUTER_KEY"], uid)
+    with pytest.raises(RequestError, match="belongs to another user"):
+        broker.resolve_run_in_session(session_id, [], uid + 1)
+    with pytest.raises(RequestError, match="belongs to another user"):
+        broker.end_session(session_id, by="test", uid=uid + 1)
+    assert broker.list_payload(for_uid=uid + 1)["sessions"] == []
+    assert len(broker.list_payload(for_uid=uid)["sessions"]) == 1
     assert broker.env_for(resolved) == {"OPENAI_API_KEY": "sk-openai"}
 
 

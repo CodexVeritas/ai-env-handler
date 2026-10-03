@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pwd
 import re
 from dataclasses import dataclass
 from datetime import timedelta
@@ -20,6 +21,7 @@ VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PRESET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 CONFIG_TEMPLATE = """# envh policy. Secrets not listed here get the defaults.
+users: [{user}]          # login names allowed to talk to the broker; sessions belong to the user who opened them
 defaults:
   approval: session      # session: one console approval opens a session | per-run: ask on every run
   max_session: 1h        # longest session that may include a secret (hard cap 24h)
@@ -29,6 +31,10 @@ secrets: {}
 """
 
 PRESETS_TEMPLATE = "presets: {}\n"
+
+
+def render_config_template(user: str) -> str:
+    return CONFIG_TEMPLATE.replace("{user}", user)
 
 
 class ConfigError(ValueError):
@@ -68,6 +74,8 @@ class Config:
     secret_policies: dict[str, SecretPolicy]
     presets: dict[str, Preset]
     presets_raw: dict[str, Any]
+    users: tuple[str, ...] = ()
+    allowed_uids: frozenset[int] = frozenset()
 
     def policy_for(self, secret: str) -> SecretPolicy:
         policy = self.secret_policies.get(secret)
@@ -114,9 +122,24 @@ def _parse_session_duration(value: Any, where: str) -> timedelta:
     return duration
 
 
-def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy]]:
+def parse_users(value: Any) -> tuple[tuple[str, ...], frozenset[int]]:
+    if value is None:
+        return (), frozenset()
+    if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
+        raise ConfigError(f"{CONFIG_FILE}: users must be a list of login names")
+    uids: set[int] = set()
+    for name in value:
+        try:
+            uids.add(pwd.getpwnam(name).pw_uid)
+        except KeyError as error:
+            raise ConfigError(f"{CONFIG_FILE}: users: no such login name {name!r}") from error
+    return tuple(value), frozenset(uids)
+
+
+def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[str, ...], frozenset[int]]:
     document = _expect_mapping(yaml.safe_load(text), CONFIG_FILE)
-    _reject_unknown(document, ("defaults", "secrets"), CONFIG_FILE)
+    _reject_unknown(document, ("users", "defaults", "secrets"), CONFIG_FILE)
+    users, allowed_uids = parse_users(document.get("users"))
     raw_defaults = _expect_mapping(document.get("defaults"), f"{CONFIG_FILE}: defaults")
     _reject_unknown(raw_defaults, ("approval", "max_session"), f"{CONFIG_FILE}: defaults")
     defaults = Defaults(
@@ -135,7 +158,7 @@ def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy]]:
             approval=_parse_approval(fields.get("approval", defaults.approval), where),
             max_session=_parse_session_duration(fields.get("max_session", format_duration(defaults.max_session)), where),
         )
-    return defaults, policies
+    return defaults, policies, users, allowed_uids
 
 
 def parse_presets(text: str, known_secrets: set[str] | None) -> tuple[dict[str, Preset], dict[str, Any]]:
@@ -191,7 +214,9 @@ def load_config(data_dir: Path, known_secrets: set[str] | None) -> Config:
     presets_path = data_dir / PRESETS_FILE
     if not config_path.exists():
         raise ConfigError(f"{config_path} does not exist; run `envh init`")
-    defaults, policies = parse_config(config_path.read_text())
+    defaults, policies, users, allowed_uids = parse_config(config_path.read_text())
+    if not allowed_uids:
+        raise ConfigError(f"{config_path}: users is empty; list the login names allowed to talk to the broker, for example users: [alice]")
     presets_text = presets_path.read_text() if presets_path.exists() else PRESETS_TEMPLATE
     presets, raw = parse_presets(presets_text, known_secrets)
-    return Config(defaults=defaults, secret_policies=policies, presets=presets, presets_raw=raw)
+    return Config(defaults=defaults, secret_policies=policies, presets=presets, presets_raw=raw, users=users, allowed_uids=allowed_uids)

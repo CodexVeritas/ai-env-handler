@@ -130,8 +130,14 @@ class Broker:
         self._announce(request)
         return request
 
-    def resolve_run_in_session(self, session_id: str, items: list[str]) -> tuple[Session, dict[str, str]]:
+    def owned_session(self, session_id: str, uid: int) -> Session:
         session = self.state.session(session_id)
+        if session.provenance.uid != uid:
+            raise RequestError(f"session {session_id[:8]} belongs to another user")
+        return session
+
+    def resolve_run_in_session(self, session_id: str, items: list[str], uid: int) -> tuple[Session, dict[str, str]]:
+        session = self.owned_session(session_id, uid)
         if not items:
             return session, dict(session.mapping)
         mapping: dict[str, str] = {}
@@ -269,12 +275,14 @@ class Broker:
         self.config = load_config(self.data_dir, set(self.vault.names()))
         self.audit.event("reload", secrets=len(self.vault.names()), presets=len(self.config.presets))
 
-    def end_session(self, session_id: str, by: str) -> Session:
+    def end_session(self, session_id: str, by: str, uid: int | None = None) -> Session:
+        if uid is not None:
+            self.owned_session(session_id, uid)
         session = self.state.end_session(session_id)
         self.audit.event("session_end", session=session.id, by=by)
         return session
 
-    def list_payload(self) -> dict[str, Any]:
+    def list_payload(self, for_uid: int | None = None) -> dict[str, Any]:
         secrets = []
         for name in self.vault.names():
             policy = self.config.policy_for(name)
@@ -286,7 +294,8 @@ class Broker:
                 env.append({"var": var, "secret": entry.secret, "approval": self.config.effective_policy(entry).approval, "in_vault": entry.secret in self.vault})
             mapping = {var: entry.secret for var, entry in preset.env.items()}
             presets.append({"name": preset.name, "max_session": format_duration(self.session_cap(mapping, preset)), "env": env})
-        return {"secrets": secrets, "presets": presets, "sessions": [self.session_payload(session) for session in self.state.live_sessions()]}
+        sessions = [session for session in self.state.live_sessions() if for_uid is None or session.provenance.uid == for_uid]
+        return {"secrets": secrets, "presets": presets, "sessions": [self.session_payload(session) for session in sessions]}
 
     def session_payload(self, session: Session) -> dict[str, Any]:
         return {
@@ -296,18 +305,24 @@ class Broker:
             "expires_at": session.expires_at.isoformat(timespec="seconds"),
             "reason": session.reason,
             "pid": session.provenance.pid,
+            "uid": session.provenance.uid,
         }
 
-    def status_payload(self) -> dict[str, Any]:
+    def status_payload(self, for_uid: int | None = None) -> dict[str, Any]:
+        def mine(provenance: Provenance) -> bool:
+            return for_uid is None or provenance.uid == for_uid
+
         return {
             "pending": [
                 {"id": request.id, "kind": request.kind, "reason": request.reason, "vars": sorted(request.mapping), "pid": request.provenance.pid, "created_at": request.created_at.isoformat(timespec="seconds")}
                 for request in self.state.pending()
+                if mine(request.provenance)
             ],
             "runs": [
                 {"id": run.id, "vars": sorted(run.mapping), "session": run.session_id, "command": list(run.command), "pid": run.provenance.pid, "started_at": run.started_at.isoformat(timespec="seconds")}
                 for run in self.state.active_runs()
+                if mine(run.provenance)
             ],
-            "sessions": [self.session_payload(session) for session in self.state.live_sessions()],
+            "sessions": [self.session_payload(session) for session in self.state.live_sessions() if mine(session.provenance)],
         }
 

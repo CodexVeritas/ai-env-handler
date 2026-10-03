@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from envh.server.config import (
-    CONFIG_TEMPLATE,
+    render_config_template,
     PRESETS_TEMPLATE,
     ConfigError,
     PresetVar,
@@ -16,7 +16,11 @@ from envh.server.config import (
 
 
 def test_template_parses_with_defaults() -> None:
-    defaults, policies = parse_config(CONFIG_TEMPLATE)
+    import getpass
+    import os
+
+    defaults, policies, users, uids = parse_config(render_config_template(getpass.getuser()))
+    assert users == (getpass.getuser(),) and uids == frozenset({os.getuid()})
     assert defaults.approval == "session"
     assert defaults.max_session == timedelta(hours=1)
     assert policies == {}
@@ -29,7 +33,7 @@ secrets:
   DATABASE_URL: {approval: per-run}
   OPENAI_API_KEY: {max_session: 8h}
 """
-    defaults, policies = parse_config(text)
+    defaults, policies, _, _ = parse_config(text)
     assert policies["DATABASE_URL"].approval == "per-run"
     assert policies["DATABASE_URL"].max_session == timedelta(hours=2)
     assert policies["OPENAI_API_KEY"].approval == "session"
@@ -48,6 +52,8 @@ secrets:
         "secrets: {KEY: {max_session: 2d}}",
         "extra: 1",
         "- a list",
+        "users: alice",
+        "users: [no-such-login-name-xyz]",
     ],
 )
 def test_config_rejects(text: str) -> None:
@@ -99,8 +105,16 @@ def test_presets_require_known_secret_when_names_given() -> None:
     assert presets["p"].env["A"].secret == "MISSING"
 
 
+def test_load_requires_users(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_text("defaults: {approval: session}\n")
+    with pytest.raises(ConfigError, match="users is empty"):
+        load_config(tmp_path, set())
+
+
 def test_policy_resolution(tmp_path: Path) -> None:
-    (tmp_path / "config.yaml").write_text("defaults: {approval: session, max_session: 1h}\nsecrets: {DB: {approval: per-run}}\n")
+    import getpass
+
+    (tmp_path / "config.yaml").write_text(f"users: [{getpass.getuser()}]\ndefaults: {{approval: session, max_session: 1h}}\nsecrets: {{DB: {{approval: per-run}}}}\n")
     (tmp_path / "presets.yaml").write_text("presets: {p: {env: {DATABASE_URL: DB, KEY: {secret: KEY, approval: per-run}}}}\n")
     config = load_config(tmp_path, {"DB", "KEY"})
     assert config.policy_for("UNLISTED").approval == "session"

@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
+import pwd
 import secrets
 from pathlib import Path
 
 from envh.platform import PlatformError, service_user_home
-from envh.server.config import CONFIG_FILE, CONFIG_TEMPLATE, PRESETS_FILE, PRESETS_TEMPLATE
+from envh.server.config import CONFIG_FILE, PRESETS_FILE, PRESETS_TEMPLATE, render_config_template
 from envh.server.vault import VAULT_FILE, Vault, write_private_file
 
 PHRASE_FILE = "console-phrase"
@@ -39,7 +40,15 @@ def prompt_new_passphrase() -> str:
         print("they do not match; try again")
 
 
-def run_init(data_dir: Path) -> None:
+def default_user() -> str:
+    return os.environ.get("ENVH_INSTALL_USER") or os.environ.get("SUDO_USER") or getpass.getuser()
+
+
+def run_init(data_dir: Path, user: str) -> None:
+    try:
+        pwd.getpwnam(user)
+    except KeyError as error:
+        raise SystemExit(f"no such login name {user!r}; pass --user") from error
     data_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(data_dir, 0o700)
     config_path = data_dir / CONFIG_FILE
@@ -47,8 +56,8 @@ def run_init(data_dir: Path) -> None:
     vault_path = data_dir / VAULT_FILE
     phrase_path = data_dir / PHRASE_FILE
     if not config_path.exists():
-        write_private_file(config_path, CONFIG_TEMPLATE.encode())
-        print(f"wrote {config_path}")
+        write_private_file(config_path, render_config_template(user).encode())
+        print(f"wrote {config_path} (users: [{user}])")
     if not presets_path.exists():
         write_private_file(presets_path, PRESETS_TEMPLATE.encode())
         print(f"wrote {presets_path}")
@@ -70,6 +79,7 @@ def run_init(data_dir: Path) -> None:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="envh init", description="Create config, presets, vault and console phrase")
     parser.add_argument("--data-dir", type=Path, default=None, help="defaults to the envh service user's home directory")
+    parser.add_argument("--user", default=None, help="login name allowed to talk to the broker (default: the user who ran sudo, else you)")
     args = parser.parse_args(argv)
-    run_init(args.data_dir or default_data_dir())
+    run_init(args.data_dir or default_data_dir(), args.user or default_user())
     return 0

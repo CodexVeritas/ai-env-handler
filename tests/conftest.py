@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import getpass
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -11,7 +12,7 @@ import pytest
 
 from envh.server.audit import Audit
 from envh.server.broker import Broker
-from envh.server.config import CONFIG_TEMPLATE, load_config
+from envh.server.config import load_config, render_config_template
 from envh.server.control import ControlServer
 from envh.server.state import Provenance, StateTable
 from envh.server.vault import Vault
@@ -41,7 +42,10 @@ class Harness:
         return Provenance(pid=4242, uid=1000, cmdline="envh test")
 
 
-def build_broker(data_dir: Path, echoed: list[str], clock: FakeClock, config_text: str = CONFIG_TEMPLATE, presets_text: str = "presets: {}\n") -> Broker:
+ME = getpass.getuser()
+
+
+def build_broker(data_dir: Path, echoed: list[str], clock: FakeClock, config_text: str = render_config_template(ME), presets_text: str = "presets: {}\n") -> Broker:
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "config.yaml").write_text(config_text)
     (data_dir / "presets.yaml").write_text(presets_text)
@@ -67,7 +71,7 @@ presets:
       DATABASE_URL: {secret: DATABASE_URL, approval: per-run}
       OPENAI_API_KEY: OPENAI_API_KEY
 """
-    config = "defaults: {approval: session, max_session: 2h}\nsecrets: {OPENAI_API_KEY: {max_session: 1h}}\n"
+    config = f"users: [{ME}, nobody]\ndefaults: {{approval: session, max_session: 2h}}\nsecrets: {{OPENAI_API_KEY: {{max_session: 1h}}}}\n"
     broker = build_broker(tmp_path / "data", echoed, clock, config, presets)
     return Harness(data_dir=tmp_path / "data", broker=broker, clock=clock, echoed=echoed)
 
