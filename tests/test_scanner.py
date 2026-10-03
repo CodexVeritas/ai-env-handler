@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -83,3 +84,25 @@ def test_unreadable_files_are_reported_not_skipped(tmp_path: Path) -> None:
     finally:
         locked.chmod(0o600)
     assert hits == [] and scanned == 0 and unreadable == [locked]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can list every directory")
+def test_unreadable_directories_are_reported_not_skipped(tmp_path: Path) -> None:
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "notes.md").write_text(OPENAI + "\n")
+    locked.chmod(0)
+    try:
+        hits, _, unreadable = scan_paths([tmp_path], 1024 * 1024)
+    finally:
+        locked.chmod(0o700)
+    assert hits == [] and unreadable == [locked]
+
+
+def test_long_lines_are_scanned_to_the_end_in_linear_time() -> None:
+    blob = "6080604052" * 100_000
+    line = json.dumps({"content": blob + f" FRED_API_KEY={FRED} " + "a" * 300_000})
+    started = time.perf_counter()
+    hits = list(scan_text(Path("transcript.jsonl"), line))
+    assert time.perf_counter() - started < 2
+    assert [hit.name for hit in hits] == ["FRED_API_KEY"]

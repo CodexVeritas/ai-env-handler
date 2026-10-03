@@ -55,6 +55,9 @@ def run_hook(command: str, tool: str = "Bash") -> dict | None:
         ("envh run --with A -- python x.py --session abc", "ask"),
         ("envh run --session abc -- python x.py --other", None),
         ("envh run --with A -- true; echo --session", "ask"),
+        ('envh run --with A --reason "no --session here" -- true', "ask"),
+        ("envh run --session-file x --with A -- true", "ask"),
+        ("envh run --session=abc -- true", None),
         # privilege escalation is denied however it is spelled
         ("sudo apt install x", "deny"),
         ("ls && sudo -n true", "deny"),

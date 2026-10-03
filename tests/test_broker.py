@@ -143,3 +143,36 @@ async def test_approval_revalidates_against_the_current_vault(harness: Harness) 
     with pytest.raises(RequestError, match="no longer validates"):
         broker.approve(request)
     assert request.pending and "gamma" not in broker.config.presets
+
+
+async def test_import_approval_refuses_when_an_added_secret_now_exists(harness: Harness) -> None:
+    broker = harness.broker
+    shown: list[int] = []
+    broker.request_listeners.append(lambda request: shown.append(request.id))
+    first = broker.request_import({"NEW_KEY": "value-one"}, {}, "mine", harness.provenance())
+    second = broker.request_import({"NEW_KEY": "value-two"}, {}, "other", harness.provenance())
+    assert second.summary["added"] == ["NEW_KEY"]
+    broker.approve(first)
+    with pytest.raises(RequestError, match="vault changed since"):
+        broker.approve(second)
+    assert second.pending and shown.count(second.id) == 2
+    assert second.summary["added"] == [] and second.summary["changed"] == ["NEW_KEY"]
+    assert broker.vault.get("NEW_KEY") == "value-one"
+    broker.approve(second)
+    assert broker.vault.get("NEW_KEY") == "value-two"
+
+
+async def test_session_runs_refuse_secrets_that_became_per_run(harness: Harness) -> None:
+    broker = harness.broker
+    mapping, preset = broker.mapping_from_preset("team")
+    request = broker.request_session(mapping, preset, 30, None, (), harness.provenance())
+    broker.approve(request)
+    session_id = request.result["session_id"]
+    uid = harness.provenance().uid
+    config_path = harness.data_dir / "config.yaml"
+    config_path.write_text(config_path.read_text().replace("OPENAI_API_KEY: {max_session: 1h}", "OPENAI_API_KEY: {approval: per-run}"))
+    broker.reload()
+    with pytest.raises(RequestError, match="approval is now per-run for OPENAI_API_KEY"):
+        broker.resolve_run_in_session(session_id, [], uid)
+    _, resolved = broker.resolve_run_in_session(session_id, ["OPENROUTER_API_KEY"], uid)
+    assert resolved == {"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY"}

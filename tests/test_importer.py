@@ -12,6 +12,7 @@ from envh.tools.importer import (
     discover,
     looks_secret,
     parse_env_text,
+    review_names,
     rewrite_text,
     slugify_header,
     suggest_secret_names,
@@ -185,3 +186,30 @@ def test_write_rewrites_follows_symlinks(tmp_path: Path) -> None:
     write_rewrites(plan, said.append)
     assert link.is_symlink() and "xoxb" not in real.read_text() and "LOG_LEVEL=info" in real.read_text()
     assert not list(shared.glob("*.envh-tmp")) and any("symlink" in line for line in said)
+
+
+def test_secrets_the_importer_cannot_read_exactly_are_refused() -> None:
+    text = 'PASSWORD="pa\\"ss"\nPRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----"\n'
+    parsed = parse_env_text(Path("/code/bot/.env"), text)
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    with pytest.raises(ClientError, match=r"\.env:1: PASSWORD uses backslash escapes"):
+        build_plan([parsed], decisions, {})
+    with pytest.raises(ClientError, match=r"\.env:2: PRIVATE_KEY has a quoted value that does not close"):
+        build_plan([parsed], decisions[1:], {})
+
+
+def test_config_lines_with_escapes_do_not_block_an_import() -> None:
+    parsed = parse_env_text(Path("/code/bot/.env"), 'LOG_FORMAT="%(message)s\\t%(levelname)s"\nAPI_KEY=\'raw\\value\'\n')
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    plan = build_plan([parsed], decisions, {})
+    assert plan.secrets == {"API_KEY": "raw\\value"}
+
+
+def test_review_names_insists_on_valid_vault_names() -> None:
+    parsed = parse_env_text(Path("/code/bot/.env"), "_PRIVATE_TOKEN=tok-1234567890\n")
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    answers = iter(["", "_PRIVATE_TOKEN=private_token"])
+    said: list[str] = []
+    review_names(decisions, lambda prompt: next(answers), said.append)
+    assert decisions[0].secret_name == "PRIVATE_TOKEN"
+    assert any("cannot be vault names" in line and "_PRIVATE_TOKEN" in line for line in said)

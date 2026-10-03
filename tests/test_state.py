@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from envh.core.state import Provenance, StateError, StateTable
+from envh.core.state import MAX_PENDING_PER_USER, Provenance, StateError, StateTable
 from tests.conftest import FakeClock
 
 PROVENANCE = Provenance(pid=1, uid=1000, cmdline="x")
@@ -73,3 +73,13 @@ async def test_prune_history() -> None:
     clock.advance(timedelta(hours=2))
     assert table.prune_history() == 2
     assert decided.id not in table.requests and pending.id in table.requests and run.id not in table.runs
+
+
+async def test_pending_requests_are_capped_per_user() -> None:
+    table = StateTable(FakeClock())
+    requests = [table.new_request("run", {"A": "A"}, PROVENANCE, None) for _ in range(MAX_PENDING_PER_USER)]
+    with pytest.raises(StateError, match="waiting on the console"):
+        table.new_request("run", {"A": "A"}, PROVENANCE, None)
+    table.new_request("run", {"A": "A"}, Provenance(pid=2, uid=1001, cmdline="y"), None)
+    table.decide(requests[0], approved=False, by="console")
+    table.new_request("run", {"A": "A"}, PROVENANCE, None)
