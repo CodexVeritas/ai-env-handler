@@ -22,17 +22,12 @@ SESSION_ENV_VAR = "ENVH_SESSION"
 RUN_MARKER_VAR = "ENVH_RUN_MARKER"
 LINGER_GRACE_SECONDS = 2.0
 
+
 def parse_with(values: list[str] | None) -> list[str]:
     items: list[str] = []
     for value in values or []:
         items.extend(part.strip() for part in value.split(",") if part.strip())
     return items
-
-
-def waiting_notice(request_id: int, resume_hint: str | None) -> None:
-    print(f"envh: waiting for approval in the envh console (request #{request_id})", file=sys.stderr, flush=True)
-    if resume_hint:
-        print(f"envh: if this times out, resume with: {resume_hint}", file=sys.stderr, flush=True)
 
 
 def cmd_run(args: argparse.Namespace, sock: Path) -> int:

@@ -33,9 +33,10 @@ SESSION_PREFIX = re.compile(r"(?<![\w.-])ENVH_SESSION=")
 
 
 def segment(rest: str) -> str:
-    """The arguments that belong to this envh invocation: up to the next shell operator."""
+    """The arguments that belong to this envh invocation: up to the next shell operator, and not the command after `--`."""
     match = SEGMENT_END.search(rest)
-    return rest if match is None else rest[: match.start()]
+    own = rest if match is None else rest[: match.start()]
+    return own.split(" -- ", 1)[0]
 
 
 def classify_invocation(rest: str, whole_command: str) -> tuple[str, str] | None:

@@ -362,6 +362,18 @@ def confirm_rewrites(plan: ImportPlan, ask: Ask) -> None:
             del plan.rewrites[path]
 
 
+def write_rewrites(plan: ImportPlan, say: Callable[[str], None]) -> None:
+    """Replace each file's content in place, following symlinks so the file that holds the secrets is the one rewritten."""
+    for path, new_text in plan.rewrites.items():
+        target = path.resolve()
+        mode = os.stat(target).st_mode & 0o777
+        temp_path = target.with_name(target.name + ".envh-tmp")
+        temp_path.write_text(new_text)
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, target)
+        say(f"  rewrote {path}" + (f" (symlink to {target})" if path.is_symlink() else ""))
+
+
 def apply_plan(plan: ImportPlan, sock: Path, say: Callable[[str], None]) -> None:
     say("Step 6 of 6: sending to the broker; approve it on the envh console")
     with Connection(sock) as conn:
@@ -370,13 +382,7 @@ def apply_plan(plan: ImportPlan, sock: Path, say: Callable[[str], None]) -> None
         waiting_notice(reply["request_id"], None)
         reply = conn.recv_ok()
     say(f"  stored: {len(reply.get('added', []))} new, {len(reply.get('changed', []))} changed; presets: {', '.join(reply.get('presets', [])) or '(none)'}")
-    for path, new_text in plan.rewrites.items():
-        mode = os.stat(path).st_mode & 0o777
-        temp_path = path.with_name(path.name + ".envh-tmp")
-        temp_path.write_text(new_text)
-        os.chmod(temp_path, mode)
-        os.replace(temp_path, path)
-        say(f"  rewrote {path}")
+    write_rewrites(plan, say)
     for path in plan.skipped_files:
         say(f"  left untouched: {path} (its secrets are now ALSO in the vault; remove them by hand when ready)")
     if plan.presets:

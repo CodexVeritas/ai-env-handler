@@ -90,6 +90,13 @@ class Config:
         return SecretPolicy(name=policy.name, approval=preset_var.approval, max_session=policy.max_session)
 
 
+def _load_yaml(text: str, where: str) -> Any:
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise ConfigError(f"{where}: not valid YAML: {' '.join(str(error).split())}") from error
+
+
 def _expect_mapping(value: Any, where: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -137,7 +144,7 @@ def parse_users(value: Any) -> tuple[tuple[str, ...], frozenset[int]]:
 
 
 def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[str, ...], frozenset[int]]:
-    document = _expect_mapping(yaml.safe_load(text), CONFIG_FILE)
+    document = _expect_mapping(_load_yaml(text, CONFIG_FILE), CONFIG_FILE)
     _reject_unknown(document, ("users", "defaults", "secrets"), CONFIG_FILE)
     users, allowed_uids = parse_users(document.get("users"))
     raw_defaults = _expect_mapping(document.get("defaults"), f"{CONFIG_FILE}: defaults")
@@ -161,8 +168,16 @@ def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[st
     return defaults, policies, users, allowed_uids
 
 
+def parse_config_for_broker(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[str, ...], frozenset[int]]:
+    """parse_config plus the rule the broker needs to start: at least one allowed user."""
+    defaults, policies, users, allowed_uids = parse_config(text)
+    if not allowed_uids:
+        raise ConfigError(f"{CONFIG_FILE}: users is empty; list the login names allowed to talk to the broker, for example users: [alice]")
+    return defaults, policies, users, allowed_uids
+
+
 def parse_presets(text: str, known_secrets: set[str] | None) -> tuple[dict[str, Preset], dict[str, Any]]:
-    document = _expect_mapping(yaml.safe_load(text), PRESETS_FILE)
+    document = _expect_mapping(_load_yaml(text, PRESETS_FILE), PRESETS_FILE)
     _reject_unknown(document, ("presets",), PRESETS_FILE)
     raw_presets = _expect_mapping(document.get("presets"), f"{PRESETS_FILE}: presets")
     presets: dict[str, Preset] = {}
@@ -214,9 +229,7 @@ def load_config(data_dir: Path, known_secrets: set[str] | None) -> Config:
     presets_path = data_dir / PRESETS_FILE
     if not config_path.exists():
         raise ConfigError(f"{config_path} does not exist; run `envh init`")
-    defaults, policies, users, allowed_uids = parse_config(config_path.read_text())
-    if not allowed_uids:
-        raise ConfigError(f"{config_path}: users is empty; list the login names allowed to talk to the broker, for example users: [alice]")
+    defaults, policies, users, allowed_uids = parse_config_for_broker(config_path.read_text())
     presets_text = presets_path.read_text() if presets_path.exists() else PRESETS_TEMPLATE
     presets, raw = parse_presets(presets_text, known_secrets)
     return Config(defaults=defaults, secret_policies=policies, presets=presets, presets_raw=raw, users=users, allowed_uids=allowed_uids)

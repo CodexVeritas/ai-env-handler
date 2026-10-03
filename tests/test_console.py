@@ -3,8 +3,9 @@ import os
 import stat
 from pathlib import Path
 
+from envh.core.state import Provenance
 from envh.server.console import Console, parse_line, render_request
-from tests.conftest import Harness
+from tests.conftest import ME, Harness
 
 
 def test_parse_line_table() -> None:
@@ -111,7 +112,7 @@ async def test_edit_config_discard_keeps_file(harness: Harness, tmp_path: Path) 
     said: list[str] = []
     console = Console(harness.broker, reader, said.append, tty_fd=None)
     editor = tmp_path / "editor.sh"
-    editor.write_text("#!/bin/sh\nprintf 'defaults: {approval: per-run}\\n' > \"$1\"\n")
+    editor.write_text(f"#!/bin/sh\nprintf 'users: [{ME}]\\ndefaults: {{approval: per-run}}\\n' > \"$1\"\n")
     os.chmod(editor, stat.S_IRWXU)
     config_path = harness.data_dir / "config.yaml"
     before = config_path.read_text()
@@ -134,3 +135,48 @@ async def test_unknown_editor_and_unexpected_errors_keep_console_alive(harness: 
     await asyncio.wait_for(console.run(), timeout=10)
     assert any("not found" in line for line in said)
     assert any(line.startswith("commands:") for line in said)
+
+
+async def test_render_request_neutralizes_control_characters(harness: Harness) -> None:
+    reason = "backfill\n   OPENAI_API_KEY <- OPENAI_API_KEY\x1b[1A\x1b[2K"
+    provenance = Provenance(pid=1, uid=harness.provenance().uid, cmdline="envh\x1b[2J session start")
+    request = harness.broker.request_run({"DATABASE_URL": "DATABASE_URL"}, None, reason, ("envh", "run\r--with"), provenance)
+    lines = render_request(request, harness.clock())
+    assert len(lines) == len("\n".join(lines).splitlines())
+    assert not any("\x1b" in line or "\r" in line for line in lines)
+    assert lines[0].startswith("\a") and "DATABASE_URL" in "\n".join(lines)
+    assert not any("\x1b" in line or "\n" in line for line in harness.echoed)
+
+
+async def test_edit_config_without_users_is_rejected(harness: Harness, tmp_path: Path) -> None:
+    reader = asyncio.StreamReader()
+    said: list[str] = []
+    console = Console(harness.broker, reader, said.append, tty_fd=None)
+    editor = tmp_path / "editor.sh"
+    editor.write_text("#!/bin/sh\nprintf 'defaults: {approval: per-run}\\n' > \"$1\"\n")
+    os.chmod(editor, stat.S_IRWXU)
+    config_path = harness.data_dir / "config.yaml"
+    before = config_path.read_text()
+    reader.feed_data(f"edit config {editor}\n".encode())
+    reader.feed_data(b"n\n")
+    reader.feed_data(b"quit\n")
+    await asyncio.wait_for(console.run(), timeout=10)
+    assert any("rejected" in line and "users is empty" in line for line in said)
+    assert config_path.read_text() == before
+
+
+async def test_add_is_audited_even_when_reload_fails(harness: Harness) -> None:
+    reader = asyncio.StreamReader()
+    said: list[str] = []
+    console = Console(harness.broker, reader, said.append, tty_fd=None)
+    reader.feed_data(b"rm MINIBENCH_OPENROUTER_KEY\n")
+    reader.feed_data(b"y\n")
+    reader.feed_data(b"add NEW_ONE\n")
+    reader.feed_data(b"value-one\n")
+    reader.feed_data(b"y\n")
+    reader.feed_data(b"quit\n")
+    await asyncio.wait_for(console.run(), timeout=5)
+    assert any("presets no longer validate" in line for line in said)
+    assert "NEW_ONE" in harness.broker.vault
+    assert any("admin_add" in line and "NEW_ONE" in line for line in harness.echoed)
+    assert any(line.startswith("error:") and "not in the vault" in line for line in said)

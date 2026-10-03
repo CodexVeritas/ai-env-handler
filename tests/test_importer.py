@@ -13,6 +13,7 @@ from envh.tools.importer import (
     slugify_header,
     suggest_secret_names,
     unquote,
+    write_rewrites,
 )
 
 AUTO_QUESTIONS_ENV = """METACULUS_TOKEN=met-token-1234567890
@@ -142,3 +143,21 @@ def test_envh_notes_are_not_group_headers_and_duplicate_names_rejected() -> None
     decisions[1].secret_name = decisions[0].secret_name
     with pytest.raises(ClientError, match="two different values"):
         build_plan([first], decisions, build_presets([first], decisions))
+
+
+def test_write_rewrites_follows_symlinks(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    real = shared / ".env"
+    real.write_text("SLACK_TOKEN=xoxb-real-value-123\nLOG_LEVEL=info\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    link = repo / ".env"
+    link.symlink_to(real)
+    parsed = parse_env_text(link, link.read_text())
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    plan = build_plan([parsed], decisions, build_presets([parsed], decisions))
+    said: list[str] = []
+    write_rewrites(plan, said.append)
+    assert link.is_symlink() and "xoxb" not in real.read_text() and "LOG_LEVEL=info" in real.read_text()
+    assert not list(shared.glob("*.envh-tmp")) and any("symlink" in line for line in said)

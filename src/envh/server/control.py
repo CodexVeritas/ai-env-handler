@@ -105,10 +105,14 @@ class Connection:
         if preset_name:
             mapping, preset = self.broker.mapping_from_preset(str(preset_name))
             if items:
-                mapping = {var: secret for var, secret in mapping.items() if var in {item.partition("=")[0] for item in items}}
-                missing = sorted({item.partition("=")[0] for item in items} - set(mapping))
+                requested = {var: secret for var, _, secret in (str(item).partition("=") for item in items)}
+                missing = sorted(set(requested) - set(mapping))
                 if missing:
                     raise RequestError(f"preset {preset.name} does not define {', '.join(missing)}")
+                for var, secret in requested.items():
+                    if secret and secret != mapping[var]:
+                        raise RequestError(f"{var} maps to {mapping[var]} in preset {preset.name}, not {secret}; drop the =SECRET part or request it without a preset")
+                mapping = {var: secret for var, secret in mapping.items() if var in requested}
             return mapping, preset
         return self.broker.mapping_from_with(items), None
 
@@ -126,7 +130,11 @@ class Connection:
                 incoming.cancel()
                 await asyncio.gather(incoming, return_exceptions=True)
                 return True
-            if incoming.result() == b"":
+            try:
+                line = incoming.result()
+            except (ConnectionError, ValueError):
+                line = b""
+            if line == b"":
                 decision.cancel()
                 return False
 
