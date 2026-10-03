@@ -64,18 +64,18 @@ def test_config_rejects(text: str) -> None:
 def test_presets_short_and_long_form() -> None:
     text = """
 presets:
-  minibench:
+  team:
     max_session: 3h
     env:
-      OPENROUTER_API_KEY: MINIBENCH_OPENROUTER_KEY
-      METACULUS_TOKEN: {secret: METACULUS_TOKEN, approval: per-run}
+      OPENROUTER_API_KEY: TEAM_OPENROUTER_KEY
+      GITHUB_TOKEN: {secret: GITHUB_TOKEN, approval: per-run}
 """
-    presets, raw = parse_presets(text, {"MINIBENCH_OPENROUTER_KEY", "METACULUS_TOKEN"})
-    preset = presets["minibench"]
+    presets, raw = parse_presets(text, {"TEAM_OPENROUTER_KEY", "GITHUB_TOKEN"})
+    preset = presets["team"]
     assert preset.max_session == timedelta(hours=3)
-    assert preset.env["OPENROUTER_API_KEY"] == PresetVar("OPENROUTER_API_KEY", "MINIBENCH_OPENROUTER_KEY", None)
-    assert preset.env["METACULUS_TOKEN"].approval == "per-run"
-    assert "minibench" in raw
+    assert preset.env["OPENROUTER_API_KEY"] == PresetVar("OPENROUTER_API_KEY", "TEAM_OPENROUTER_KEY", None)
+    assert preset.env["GITHUB_TOKEN"].approval == "per-run"
+    assert "team" in raw
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,7 @@ if [ -z "$uv_bin" ] && [ -x "$invoker_home/.local/bin/uv" ]; then
     uv_bin="$invoker_home/.local/bin/uv"
 fi
 if [ -z "$uv_bin" ]; then
-    echo "uv not found. Install it as your normal user first:  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    echo "uv not found. Install it first; a root-owned copy is safest, since this script runs it as root:  curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin sh" >&2
     exit 1
 fi
 staging=$(mktemp -d)

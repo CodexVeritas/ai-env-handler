@@ -1,11 +1,14 @@
+import stat
 from pathlib import Path
 
 import pytest
 
 from envh.client.transport import ClientError
 from envh.tools.importer import (
+    backup_originals,
     build_plan,
     build_presets,
+    default_backup_root,
     discover,
     looks_secret,
     parse_env_text,
@@ -17,17 +20,17 @@ from envh.tools.importer import (
     write_rewrites,
 )
 
-AUTO_QUESTIONS_ENV = """METACULUS_TOKEN=met-token-1234567890
+NEWS_BOT_ENV = """GITHUB_TOKEN=gh-token-1234567890
 LOG_LEVEL=info
 export DATABASE_URL="postgres://user:pw@localhost/db"
 
-# MiniBench Mode
-OPENROUTER_API_KEY=sk-or-minibench-000000
-ASKNEWS_API_KEY='an-mini-000000'
+# Team Mode
+OPENROUTER_API_KEY=sk-or-team-000000
+ASKNEWS_API_KEY='an-team-000000'
 
-# Ben Mode
-# OPENROUTER_API_KEY=sk-or-ben-1111111
-# ASKNEWS_API_KEY=an-ben-1111111
+# Personal Mode
+# OPENROUTER_API_KEY=sk-or-personal-1111111
+# ASKNEWS_API_KEY=an-personal-1111111
 """
 
 
@@ -36,21 +39,21 @@ def flags_for(parsed) -> dict[tuple[Path, int], bool]:
 
 
 def test_parse_groups_and_commented_assignments() -> None:
-    parsed = parse_env_text(Path("/code/auto-questions/.env"), AUTO_QUESTIONS_ENV)
-    assert parsed.groups == ["MiniBench Mode", "Ben Mode"]
-    assert parsed.repo == "auto-questions"
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    assert parsed.groups == ["Team Mode", "Personal Mode"]
+    assert parsed.repo == "news-bot"
     names = [(a.name, a.active, a.group) for a in parsed.assignments]
     assert names == [
-        ("METACULUS_TOKEN", True, None),
+        ("GITHUB_TOKEN", True, None),
         ("LOG_LEVEL", True, None),
         ("DATABASE_URL", True, None),
-        ("OPENROUTER_API_KEY", True, "MiniBench Mode"),
-        ("ASKNEWS_API_KEY", True, "MiniBench Mode"),
-        ("OPENROUTER_API_KEY", False, "Ben Mode"),
-        ("ASKNEWS_API_KEY", False, "Ben Mode"),
+        ("OPENROUTER_API_KEY", True, "Team Mode"),
+        ("ASKNEWS_API_KEY", True, "Team Mode"),
+        ("OPENROUTER_API_KEY", False, "Personal Mode"),
+        ("ASKNEWS_API_KEY", False, "Personal Mode"),
     ]
     assert parsed.assignments[2].value == "postgres://user:pw@localhost/db"
-    assert parsed.assignments[4].value == "an-mini-000000"
+    assert parsed.assignments[4].value == "an-team-000000"
 
 
 def test_classification_and_unquote() -> None:
@@ -60,39 +63,39 @@ def test_classification_and_unquote() -> None:
 
 
 def test_header_slugs() -> None:
-    assert slugify_header("MiniBench Mode") == "minibench"
-    assert slugify_header("Ben Mode") == "ben"
+    assert slugify_header("Team Mode") == "team"
+    assert slugify_header("Personal Mode") == "personal"
     assert slugify_header("Production keys") == "production"
     assert slugify_header("Mode") == "mode"
 
 
 def test_names_presets_and_rewrite() -> None:
-    parsed = parse_env_text(Path("/code/auto-questions/.env"), AUTO_QUESTIONS_ENV)
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
     decisions = suggest_secret_names([parsed], flags_for(parsed))
     by_line = {d.assignment.line_index: d.secret_name for d in decisions}
     assert by_line == {
-        0: "METACULUS_TOKEN",
+        0: "GITHUB_TOKEN",
         2: "DATABASE_URL",
-        5: "MINIBENCH_OPENROUTER_API_KEY",
-        6: "MINIBENCH_ASKNEWS_API_KEY",
-        9: "BEN_OPENROUTER_API_KEY",
-        10: "BEN_ASKNEWS_API_KEY",
+        5: "TEAM_OPENROUTER_API_KEY",
+        6: "TEAM_ASKNEWS_API_KEY",
+        9: "PERSONAL_OPENROUTER_API_KEY",
+        10: "PERSONAL_ASKNEWS_API_KEY",
     }
     presets = build_presets([parsed], decisions)
     assert presets == {
-        "auto-questions-minibench": {"env": {"METACULUS_TOKEN": "METACULUS_TOKEN", "DATABASE_URL": "DATABASE_URL", "OPENROUTER_API_KEY": "MINIBENCH_OPENROUTER_API_KEY", "ASKNEWS_API_KEY": "MINIBENCH_ASKNEWS_API_KEY"}},
-        "auto-questions-ben": {"env": {"METACULUS_TOKEN": "METACULUS_TOKEN", "DATABASE_URL": "DATABASE_URL", "OPENROUTER_API_KEY": "BEN_OPENROUTER_API_KEY", "ASKNEWS_API_KEY": "BEN_ASKNEWS_API_KEY"}},
+        "news-bot-team": {"env": {"GITHUB_TOKEN": "GITHUB_TOKEN", "DATABASE_URL": "DATABASE_URL", "OPENROUTER_API_KEY": "TEAM_OPENROUTER_API_KEY", "ASKNEWS_API_KEY": "TEAM_ASKNEWS_API_KEY"}},
+        "news-bot-personal": {"env": {"GITHUB_TOKEN": "GITHUB_TOKEN", "DATABASE_URL": "DATABASE_URL", "OPENROUTER_API_KEY": "PERSONAL_OPENROUTER_API_KEY", "ASKNEWS_API_KEY": "PERSONAL_ASKNEWS_API_KEY"}},
     }
     rewritten = rewrite_text(parsed, decisions, presets)
     assert "LOG_LEVEL=info" in rewritten
-    assert "# MiniBench Mode" in rewritten and "# Ben Mode" in rewritten
-    assert "sk-or" not in rewritten and "met-token" not in rewritten and "pw@localhost" not in rewritten
-    assert "# OPENROUTER_API_KEY -> envh secret MINIBENCH_OPENROUTER_API_KEY (presets: auto-questions-minibench)" in rewritten
-    assert "# OPENROUTER_API_KEY -> envh secret BEN_OPENROUTER_API_KEY (presets: auto-questions-ben)" in rewritten
+    assert "# Team Mode" in rewritten and "# Personal Mode" in rewritten
+    assert "sk-or" not in rewritten and "gh-token" not in rewritten and "pw@localhost" not in rewritten
+    assert "# OPENROUTER_API_KEY -> envh secret TEAM_OPENROUTER_API_KEY (presets: news-bot-team)" in rewritten
+    assert "# OPENROUTER_API_KEY -> envh secret PERSONAL_OPENROUTER_API_KEY (presets: news-bot-personal)" in rewritten
     assert rewritten.endswith("\n")
     plan = build_plan([parsed], decisions, presets)
     assert set(plan.secrets) == set(by_line.values())
-    assert plan.secrets["BEN_ASKNEWS_API_KEY"] == "an-ben-1111111"
+    assert plan.secrets["PERSONAL_ASKNEWS_API_KEY"] == "an-personal-1111111"
 
 
 def test_cross_repo_conflicts_and_dedupe() -> None:
@@ -144,6 +147,27 @@ def test_envh_notes_are_not_group_headers_and_duplicate_names_rejected() -> None
     decisions[1].secret_name = decisions[0].secret_name
     with pytest.raises(ClientError, match="two different values"):
         build_plan([first], decisions, build_presets([first], decisions))
+
+
+def test_backup_mirrors_each_original_in_a_private_folder(tmp_path: Path) -> None:
+    env_file = tmp_path / "repo" / ".env"
+    env_file.parent.mkdir()
+    env_file.write_text("OPENAI_API_KEY=sk-original\n")
+    backup_dir = backup_originals([env_file], tmp_path / "backups", "20261003-120000")
+    copy = backup_dir / env_file.relative_to("/")
+    assert backup_dir == tmp_path / "backups" / "20261003-120000"
+    assert copy.read_text() == "OPENAI_API_KEY=sk-original\n"
+    assert stat.S_IMODE(backup_dir.stat().st_mode) == 0o700 and stat.S_IMODE(copy.stat().st_mode) == 0o600
+    with pytest.raises(ClientError, match="could not back up the original files"):
+        backup_originals([env_file], tmp_path / "backups", "20261003-120000")
+
+
+def test_default_backup_root_follows_xdg_state_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    assert default_backup_root() == tmp_path / "state" / "envh" / "import-backups"
+    monkeypatch.delenv("XDG_STATE_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert default_backup_root() == tmp_path / ".local" / "state" / "envh" / "import-backups"
 
 
 def test_write_rewrites_follows_symlinks(tmp_path: Path) -> None:

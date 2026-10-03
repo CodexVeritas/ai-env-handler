@@ -13,11 +13,15 @@ import pytest
 from envh.core.audit import Audit
 from envh.core.broker import Broker
 from envh.core.config import load_config, render_config_template
+from envh.core.password import hash_password
 from envh.server.control import ControlServer
 from envh.core.state import Provenance, StateTable
 from envh.core.vault import Vault
 
 PASSPHRASE = "test-passphrase"
+APPROVAL_PASSWORD = "test-approval-password"
+APPROVAL_PASSWORD_HASH = hash_password(APPROVAL_PASSWORD)
+PASSWORD_LINE = f"{APPROVAL_PASSWORD}\n".encode()
 
 
 class FakeClock:
@@ -49,7 +53,7 @@ def build_broker(data_dir: Path, echoed: list[str], clock: FakeClock, config_tex
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "config.yaml").write_text(config_text)
     (data_dir / "presets.yaml").write_text(presets_text)
-    vault = Vault(data_dir / "vault.age", PASSPHRASE, {"OPENAI_API_KEY": "sk-openai", "MINIBENCH_OPENROUTER_KEY": "sk-or-mini", "DATABASE_URL": "postgres://x"})
+    vault = Vault(data_dir / "vault.age", PASSPHRASE, {"OPENAI_API_KEY": "sk-openai", "TEAM_OPENROUTER_KEY": "sk-or-team", "DATABASE_URL": "postgres://x"})
     config = load_config(data_dir, set(vault.names()))
     audit = Audit(data_dir / "audit.jsonl", echoed.append, clock)
     return Broker(data_dir, config, vault, StateTable(clock), audit)
@@ -61,10 +65,10 @@ def harness(tmp_path: Path) -> Harness:
     echoed: list[str] = []
     presets = """
 presets:
-  minibench:
+  team:
     max_session: 3h
     env:
-      OPENROUTER_API_KEY: MINIBENCH_OPENROUTER_KEY
+      OPENROUTER_API_KEY: TEAM_OPENROUTER_KEY
       OPENAI_API_KEY: OPENAI_API_KEY
   dbwork:
     env:

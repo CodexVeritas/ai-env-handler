@@ -31,7 +31,7 @@ async def test_run_prompts_then_injects_env(control: Path, harness: Harness) -> 
 
 
 async def test_session_start_then_run_and_end(control: Path, harness: Harness) -> None:
-    task = asyncio.create_task(run_cli(control, "session", "start", "minibench", "--minutes", "30", "--reason", "e2e", "--quiet"))
+    task = asyncio.create_task(run_cli(control, "session", "start", "team", "--minutes", "30", "--reason", "e2e", "--quiet"))
     await approve_next(harness)
     code, out, err = await asyncio.wait_for(task, timeout=20)
     assert code == 0, err
@@ -40,13 +40,13 @@ async def test_session_start_then_run_and_end(control: Path, harness: Harness) -
     assert code == 0, err
     assert out.strip() == "['OPENAI_API_KEY']"
     code, out, err = await run_cli(control, "run", "--", sys.executable, "-c", "import os; print(os.environ['OPENROUTER_API_KEY'])", env={"ENVH_SESSION": session_id})
-    assert code == 0 and out.strip() == "sk-or-mini"
+    assert code == 0 and out.strip() == "sk-or-team"
     code, out, err = await run_cli(control, "run", "--session", session_id, "--with", "DATABASE_URL", "--", "true")
     assert code == 5 and "not covered" in err
     code, out, err = await run_cli(control, "session", "end", session_id)
     assert code == 0
     code, out, err = await run_cli(control, "list")
-    assert code == 0 and "minibench" in out and "sk-openai" not in out
+    assert code == 0 and "team" in out and "sk-openai" not in out
 
 
 async def test_denied_and_no_broker(control: Path, harness: Harness, tmp_path: Path) -> None:
