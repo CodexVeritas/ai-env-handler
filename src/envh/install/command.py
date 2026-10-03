@@ -1,4 +1,4 @@
-"""`envh install` / `envh uninstall`: system setup, run as root by scripts/bootstrap.sh."""
+"""`envh install` / `envh uninstall`: system setup, run as root by scripts/setup_wizard.py."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ import sys
 from pathlib import Path
 
 from envh.platform import SERVICE_USER, preflight_problems, preflight_warnings
+from envh.server.init_cmd import run_init
 
 HELPER_PATH = Path("/usr/local/sbin/envh-console")
 DESKTOP_PATH = Path("/usr/share/applications/envh.desktop")
-SUDOERS_PATH = Path("/etc/sudoers.d/envh-no-credential-cache")
 ENVH_BIN = Path("/usr/local/bin/envh")
 DATA_DIR = Path("/var/lib/envh")
 
@@ -52,9 +52,6 @@ Icon=dialog-password
 Terminal=false
 Categories=Utility;Security;
 """
-
-SUDOERS_CONTENT = "Defaults timestamp_timeout=0\n"
-
 
 class InstallError(RuntimeError):
     pass
@@ -114,7 +111,7 @@ def install(args: argparse.Namespace) -> int:
         if not args.ignore_preflight:
             raise InstallError("fix the problems above (or pass --ignore-preflight if you accept them)")
     if not ENVH_BIN.exists() and not args.dry_run:
-        raise InstallError(f"{ENVH_BIN} is missing; run scripts/bootstrap.sh instead of `envh install` directly")
+        raise InstallError(f"{ENVH_BIN} is missing; run scripts/setup_wizard.py instead of `envh install` directly")
     say("1. service user")
     if user_exists(SERVICE_USER):
         say(f"  {SERVICE_USER} already exists")
@@ -129,37 +126,23 @@ def install(args: argparse.Namespace) -> int:
         write_root_file(DESKTOP_PATH, DESKTOP_ENTRY.replace("TERMINAL_COMMAND", command), 0o644, args.dry_run)
     else:
         say("  no desktop terminal found; start the console with `sudo envh-console`")
-    say("4. sudo credential cache")
-    if args.disable_sudo_cache:
-        say(f"  write {SUDOERS_PATH} after visudo validates it")
-        if not args.dry_run:
-            candidate = SUDOERS_PATH.with_name(SUDOERS_PATH.name + ".candidate")
-            candidate.write_text(SUDOERS_CONTENT)
-            os.chmod(candidate, 0o440)
-            try:
-                subprocess.run(["visudo", "-cf", str(candidate)], check=True)
-                os.replace(candidate, SUDOERS_PATH)
-            finally:
-                candidate.unlink(missing_ok=True)
-        say("  sudo will now ask for your password every time (timestamp_timeout=0)")
+    say("4. vault and policy")
+    if (DATA_DIR / "vault.age").exists():
+        say(f"  {DATA_DIR / 'vault.age'} already exists; keeping the vault, its passphrase and the policy")
+    elif args.dry_run:
+        say(f"  would create the vault, config.yaml (users: [{invoking_user or 'root'}]) and presets.yaml in {DATA_DIR}, asking you for a vault passphrase")
+    elif not sys.stdin.isatty():
+        raise InstallError("creating the vault asks for a passphrase; run the setup wizard in a terminal")
     else:
-        say("  unchanged; rerun with --disable-sudo-cache to make sudo always ask (recommended on machines that run agents)")
-    say("5. data directory")
-    if args.dry_run:
-        say(f"  would run: sudo -u {SERVICE_USER} {ENVH_BIN} init")
-    elif (DATA_DIR / "vault.age").exists():
-        say("  vault already exists; skipping init")
-    elif sys.stdin.isatty():
-        subprocess.run(["sudo", "-u", SERVICE_USER, "-H", str(ENVH_BIN), "init", "--user", invoking_user or "root"], check=True)
-    else:
-        say(f"  no terminal; finish with: sudo -u {SERVICE_USER} -H {ENVH_BIN} init --user {invoking_user or '<your login>'}")
+        run_init(DATA_DIR, invoking_user or "root")
+        run(["chown", "-R", f"{SERVICE_USER}:{SERVICE_USER}", str(DATA_DIR)], args.dry_run)
     say("done. Start the console with: sudo envh-console   (or the 'envh console' launcher)")
     return 0
 
 
 def uninstall(args: argparse.Namespace) -> int:
     require_root(args.dry_run)
-    for path in (HELPER_PATH, DESKTOP_PATH, SUDOERS_PATH, ENVH_BIN):
+    for path in (HELPER_PATH, DESKTOP_PATH, ENVH_BIN):
         say(f"  remove {path}")
         if not args.dry_run:
             path.unlink(missing_ok=True)
@@ -180,7 +163,6 @@ def main(command: str, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog=f"envh {command}")
     parser.add_argument("--dry-run", action="store_true", help="print every action without doing it")
     if command == "install":
-        parser.add_argument("--disable-sudo-cache", action="store_true", help="write a sudoers drop-in with timestamp_timeout=0")
         parser.add_argument("--ignore-preflight", action="store_true")
     else:
         parser.add_argument("--purge", action="store_true", help="also delete the service user and the vault")

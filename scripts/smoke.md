@@ -1,6 +1,6 @@
 # Manual smoke test (not automated: needs root, a terminal and a desktop)
 
-1. `sudo scripts/bootstrap.sh --dry-run` prints the plan; then `sudo scripts/bootstrap.sh`. Choose a vault passphrase and an approval password; note the console phrase.
+1. `python3 scripts/setup_wizard.py`: the dry run prints the plan; answer n once to check that nothing changed (no `/opt/envh`, no `envh` user), then rerun and install. Choose a vault passphrase and an approval password; note the console phrase. `ls -l /usr/local/bin/envh` points into `/opt/envh/env`, and `/opt/envh/installed-from` names the commit.
 2. Open a separate terminal (not the Claude desktop pane): `sudo envh-console`. Expect: console phrase, passphrase prompt, "console ready".
 3. In your own terminal: `envh list` shows no secrets. `cat /var/lib/envh/vault.age` is denied.
 4. `envh import --dry-run ~/code/some-project` on a repo with `# Mode` headers; check names and presets; rerun without `--dry-run`, approve on the console, confirm the `.env` diff, check the original is in the printed backup folder, then delete that folder.

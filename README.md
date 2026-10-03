@@ -34,6 +34,19 @@ session 3f9c... approved, expires 15:02:11
 envh run --session 3f9c... --reason "fetch" -- uv run python scripts/research.py
 ```
 
+## Install
+
+Open a terminal window of its own (not a terminal inside an AI tool) and run:
+
+```bash
+git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
+python3 scripts/setup_wizard.py
+```
+
+The wizard checks your system, tells you what each step will change, and asks before doing it. If something needs fixing first, it tells you how. Linux only.
+
+Later, run it again to upgrade (after `git pull`) or to import more projects.
+
 ## How a request flows, and where the boundaries are
 
 ![How an envh request flows: a session approval and a run, with the two trust zones](docs/request-flow.svg)
@@ -71,35 +84,6 @@ The boundaries, in words:
 
 See [What envh does not do](#what-envh-does-not-do) before relying on it.
 
-## Prerequisites
-
-- Linux with a kernel of 6.2 or newer (`sysctl dev.tty.legacy_tiocsti` prints 0) and Yama (`sysctl kernel.yama.ptrace_scope` prints 1 or more). Ubuntu 22.04 and newer, Pop!_OS 22.04, Fedora, Arch and Debian 12 all qualify.
-- `sudo` with a password: no `NOPASSWD` rules or `Defaults !authenticate` for your user (`sudo -l` shows them). Any one of them lets a process running as you act as root. The installer lists those it finds and refuses to proceed; pass `--ignore-preflight` only if each is a fixed, root-owned command you cannot edit that reads no file you can write. A root script that reads a list from your home directory, for example, can be pointed at `/etc/shadow` with a symlink.
-- You must not be in a group that grants root without a password. The common one is `docker`: being in it means any process running as you can become root with `docker run -v /:/host`. Leave it with `sudo gpasswd -d $USER docker` and log out and in; use `sudo docker` afterwards. The installer refuses to proceed while you are in such a group.
-- [uv](https://docs.astral.sh/uv/). The bootstrap runs it as root, so prefer a root-owned copy: `curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin sh`. A uv in `~/.local/bin` also works, but anything running as you can replace that file before your next install or upgrade. Python 3.12 is fetched by uv if your system lacks it.
-- A terminal application. GNOME Terminal gets a launcher icon; any other terminal works with one command.
-
-## Install
-
-```bash
-git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
-sudo scripts/bootstrap.sh --dry-run     # prints everything it would do
-sudo scripts/bootstrap.sh               # add --disable-sudo-cache to make sudo always ask (recommended, see Habits)
-```
-
-What the bootstrap does: copies the repository to a staging directory, creates `/opt/envh` (a root-owned Python 3.12 environment) and installs envh into it, links `/usr/local/bin/envh`, then runs `envh install`, which:
-
-1. runs preflight checks (TIOCSTI, Yama, root-granting groups, passwordless sudo rules) and prints a warning if you are on an X11 session;
-2. creates the service user `envh` with home `/var/lib/envh` (mode 0700);
-3. installs `/usr/local/sbin/envh-console`, the root helper that starts the broker;
-4. installs a desktop launcher named "envh console" if a desktop terminal is found;
-5. optionally writes `/etc/sudoers.d/envh-no-credential-cache` (`--disable-sudo-cache`);
-6. runs `envh init` as the service user: it writes `users: [<your login>]` into the policy, you choose the vault passphrase and the **approval password** (stored only as a hash), and you get a **console phrase**.
-
-Write the console phrase down. The real console prints it before asking for your passphrase. If a window asks for the passphrase without showing it, close it: something is impersonating envh.
-
-Upgrade from a fresh clone, not from a checkout you or your agents work in: the bootstrap runs as root whatever is in the folder it starts from, uncommitted changes included. `git clone --depth 1 https://github.com/CodexVeritas/ai-env-handler.git /tmp/envh-release && sudo /tmp/envh-release/scripts/bootstrap.sh`, then delete `/tmp/envh-release` and restart the console (the running broker keeps the old code until then). Uninstall: `sudo envh uninstall` (keeps the vault) or `sudo envh uninstall --purge`.
-
 ## Start the console
 
 Open a **separate terminal window** (not a terminal pane inside an AI tool) and run:
@@ -108,7 +92,7 @@ Open a **separate terminal window** (not a terminal pane inside an AI tool) and 
 sudo envh-console
 ```
 
-Or click the "envh console" launcher. Enter your sudo password, check the console phrase, enter the vault passphrase. Leave this window open; it is where you approve requests. Closing it ends all sessions.
+Or click the "envh console" launcher. Enter your sudo password, check the console phrase, enter the vault passphrase. If a window asks for the passphrase without showing the console phrase, close it: something is impersonating envh. Leave this window open; it is where you approve requests. Closing it ends all sessions.
 
 The helper chowns the terminal device to the service user for the duration and restores it afterwards.
 
@@ -118,6 +102,8 @@ The helper chowns the terminal device to the service user for the duration and r
 envh import --dry-run ~/code            # scan a directory (depth 3) and show the plan
 envh import ~/code                      # or give specific files: envh import ~/code/bot/.env
 ```
+
+Import one project now and others whenever you like: each import adds to the vault and the presets. If a suggested secret name is already in the vault with a different value, the console lists it as `changed` and approving replaces the stored value, so rename it in step 3 instead.
 
 The wizard walks through six steps and writes nothing until the last one:
 
@@ -242,7 +228,7 @@ Agents can draft presets: they write a YAML file, run `envh preset validate draf
 
 ## Habits that keep this safe
 
-- **Never type `sudo` in a terminal an agent can reach**, such as the terminal pane of the Claude desktop app. sudo caches your credential for that terminal for several minutes, and the agent could run `sudo -n <anything>` there. Run privileged commands in a separate window, and consider `sudo -k` right after, or install with `--disable-sudo-cache` so sudo always asks.
+- **Never type `sudo` in a terminal an agent can reach**, such as the terminal pane of the Claude desktop app. sudo caches your credential for that terminal for several minutes, and the agent could run `sudo -n <anything>` there. Run privileged commands in a separate window, and consider `sudo -k` right after (the wizard does this for you).
 - Start the console in its own window. Never inside an agent's terminal pane.
 - Keep `NOPASSWD` out of sudoers and stay out of the `docker` group.
 - Read the whole prompt before typing a code: the reason, the variables, the duration, the command line.
@@ -292,6 +278,24 @@ What does:
 ## Reporting a vulnerability
 
 Please report privately, not in a public issue. See [SECURITY.md](SECURITY.md).
+
+## What the install changes, upgrading, uninstalling
+
+The wizard's install step asks for sudo once. Root copies the source files from your clone to a root-only folder and builds `/opt/envh` from that copy: Python 3.12 in `/opt/envh/python`, envh in `/opt/envh/env`, and the commit it came from in `/opt/envh/installed-from`. It links `/usr/local/bin/envh` and runs `envh install`, which:
+
+1. checks the system and refuses to go on where a process running as you could become root: it needs Linux 6.2 or newer with Yama, `sudo` that asks for a password (no `NOPASSWD` rules for you), and your user outside root-granting groups such as `docker`. It prints how to fix anything it finds, and warns on X11;
+2. creates the service user `envh` with home `/var/lib/envh` (mode 0700);
+3. installs `/usr/local/sbin/envh-console`, the root helper that starts the broker;
+4. installs a desktop launcher named "envh console" if a desktop terminal is found;
+5. creates the vault and the policy in `/var/lib/envh`, owned by `envh`: it writes `users: [<your login>]` into the policy, you choose the vault passphrase and the **approval password** (stored only as a hash), and you get a **console phrase**.
+
+Nothing else on your system changes: no sudo, shell or desktop settings.
+
+envh never runs from your clone. Your agents can edit the clone, and the console runs the code that holds your keys, so that code must live where only root can change it.
+
+**Upgrade:** `git pull` in your clone and run the wizard again. It shows the installed commit next to the clone's, lists any uncommitted changes (root installs those too), and asks before upgrading. The vault, the passwords and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then.
+
+**Uninstall:** `sudo envh uninstall` keeps the vault; `sudo envh uninstall --purge` deletes it too.
 
 ## Development
 
