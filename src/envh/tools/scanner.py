@@ -12,7 +12,7 @@ import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 # Provider formats that are distinctive enough to recognize anywhere, including transcripts and shell history.
 VALUE_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -117,13 +117,13 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
             yield Hit(path, line_number, "named-assignment", match.group("name"), prefix, digest, len(value))
 
 
-def is_probably_text(path: Path) -> bool:
-    try:
-        with path.open("rb") as handle:
-            head = handle.read(8192)
-    except OSError:
-        return False
-    return b"\0" not in head
+def read_if_text(path: Path) -> str | None:
+    """The file's text, or None when it looks binary. Raises OSError when it cannot be read."""
+    with path.open("rb") as handle:
+        head = handle.read(8192)
+        if b"\0" in head:
+            return None
+        return (head + handle.read()).decode("utf-8", errors="replace")
 
 
 def iter_files(roots: list[Path], max_bytes: int) -> Iterator[Path]:
@@ -163,19 +163,19 @@ def scan_paths(roots: list[Path], max_bytes: int) -> tuple[list[Hit], int, list[
     scanned = 0
     unreadable: list[Path] = []
     for path in iter_files(roots, max_bytes):
-        if not is_probably_text(path):
-            continue
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = read_if_text(path)
         except OSError:
             unreadable.append(path)
+            continue
+        if text is None:
             continue
         scanned += 1
         hits.extend(scan_text(path, text))
     return hits, scanned, unreadable
 
 
-def report(hits: list[Hit], scanned: int, unreadable: list[Path], say=print) -> None:
+def report(hits: list[Hit], scanned: int, unreadable: list[Path], say: Callable[[str], None] = print) -> None:
     by_path: dict[Path, list[Hit]] = defaultdict(list)
     for hit in hits:
         by_path[hit.path].append(hit)

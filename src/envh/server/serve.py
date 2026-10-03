@@ -29,6 +29,11 @@ def say(text: str) -> None:
     print(text, flush=True)
 
 
+def local_now() -> datetime:
+    """Timezone-aware local time, so session durations stay exact across daylight-saving changes."""
+    return datetime.now().astimezone()
+
+
 def unlock_vault(data_dir: Path) -> Vault:
     phrase_path = data_dir / PHRASE_FILE
     if phrase_path.exists():
@@ -50,8 +55,8 @@ async def run_broker(data_dir: Path, socket_path: Path) -> None:
     except ConfigError as error:
         raise SystemExit(f"config error: {error}")
     say(f"config loaded: {len(config.secret_policies)} secret policies, {len(config.presets)} presets")
-    state = StateTable(datetime.now)
-    audit = Audit(data_dir / AUDIT_FILE, say, datetime.now)
+    state = StateTable(local_now)
+    audit = Audit(data_dir / AUDIT_FILE, say, local_now)
     broker = Broker(data_dir, config, vault, state, audit)
     control = ControlServer(broker, socket_path)
     await control.start()
