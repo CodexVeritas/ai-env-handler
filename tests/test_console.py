@@ -60,7 +60,7 @@ async def test_console_admin_add_rm_reload_quit(harness: Harness) -> None:
     assert "NEW_SECRET" not in harness.broker.vault
     assert any("admin_add" in line for line in harness.echoed)
     assert any("admin_rm" in line for line in harness.echoed)
-    assert any("minibench" in line for line in said)
+    assert any("team" in line for line in said)
     assert any("unknown command" in line for line in said)
     assert not any("super-secret-value" in line for line in said)
 
@@ -101,7 +101,7 @@ async def test_edit_presets_validates_before_saving(harness: Harness, tmp_path: 
     await asyncio.wait_for(console.run(), timeout=10)
     assert any("rejected" in line and "not in the vault" in line for line in said)
     assert "edited" in harness.broker.config.presets
-    assert "minibench" not in presets_path.read_text() and before != presets_path.read_text()
+    assert "team" not in presets_path.read_text() and before != presets_path.read_text()
     assert not (harness.data_dir / "presets.yaml.edit").exists()
     assert any("config_edited" in line for line in harness.echoed)
 

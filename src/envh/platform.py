@@ -8,6 +8,7 @@ import os
 import pwd
 import socket
 import struct
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,6 +85,17 @@ def root_granting_groups_of(username: str) -> list[str]:
     return [name for name in memberships if name in ROOT_GRANTING_GROUPS]
 
 
+def sudo_listing(username: str) -> str:
+    result = subprocess.run(["sudo", "-n", "-l", "-U", username], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise PlatformError(f"`sudo -n -l -U {username}` failed: {result.stderr.strip() or f'exit code {result.returncode}'}")
+    return result.stdout
+
+
+def passwordless_sudo_entries(listing: str) -> list[str]:
+    return [line.strip() for line in listing.splitlines() if "NOPASSWD" in line or "!authenticate" in line]
+
+
 def session_type() -> str:
     return os.environ.get("XDG_SESSION_TYPE", "unknown")
 
@@ -104,11 +116,23 @@ def preflight_problems(invoking_user: str | None) -> list[str]:
         groups = root_granting_groups_of(invoking_user)
         if groups:
             problems.append(f"user {invoking_user} is in root-granting group(s) {', '.join(groups)}: remove with `sudo gpasswd -d {invoking_user} <group>` and log in again")
+        try:
+            entries = passwordless_sudo_entries(sudo_listing(invoking_user))
+        except PlatformError as error:
+            problems.append(f"could not check the sudo rules of {invoking_user}: {error}")
+        else:
+            if entries:
+                listed = "".join(f"\n    {entry}" for entry in entries)
+                problems.append(
+                    f"user {invoking_user} can run commands with sudo without a password:{listed}\n"
+                    "  an agent running as you can use these as root; remove them, or pass --ignore-preflight "
+                    "if each one is narrow (a fixed root-owned command you cannot edit that reads no file you can write)"
+                )
     return problems
 
 
 def preflight_warnings() -> list[str]:
     warnings: list[str] = []
     if session_type() == "x11":
-        warnings.append("this is an X11 session: any process running as you can type into windows and read the screen, so the console is only as trusted as the processes you run; consider a Wayland session, a text console, or Claude Code's Bash sandbox")
+        warnings.append("this is an X11 session: any process running as you can read the screen, record keys and type into windows, the console included; see 'Who else can see and type into the console' in the README")
     return warnings

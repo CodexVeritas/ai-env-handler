@@ -31,7 +31,7 @@ def as_uid(monkeypatch: pytest.MonkeyPatch):
 
 async def open_session(control: Path, harness: Harness) -> str:
     async with Client(control) as client:
-        await client.send(op="session_start", preset="minibench", minutes=30, reason="mine")
+        await client.send(op="session_start", preset="team", minutes=30, reason="mine")
         await client.recv()
         await approve_next(harness)
         return (await client.recv())["session_id"]

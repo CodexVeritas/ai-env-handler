@@ -21,7 +21,7 @@ trap 'rm -rf "$staging"' EXIT
 echo "copying the repository to a staging directory (no editable install: root runs only what it copied)"
 tar --exclude=.venv --exclude=.git --exclude=temp -C "$repo" -cf - . | tar -C "$staging" -xf -
 echo "creating /opt/envh with Python 3.12"
-"$uv_bin" venv /opt/envh --python 3.12 --quiet
+"$uv_bin" venv /opt/envh --python 3.12 --clear --quiet
 "$uv_bin" pip install --python /opt/envh/bin/python --quiet "$staging"
 chown -R root:root /opt/envh
 chmod -R go-w /opt/envh

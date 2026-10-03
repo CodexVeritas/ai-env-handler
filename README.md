@@ -25,52 +25,7 @@ envh run --session 3f9c... --reason "fetch" \
 
 ![How an envh request flows: a session approval and a run, with the two trust zones](docs/request-flow.svg)
 
-<details>
-<summary>Diagram source (Mermaid), for editing</summary>
-
-```mermaid
-sequenceDiagram
-    autonumber
-    box rgb(70, 45, 45) Runs as you (uid 1000): your shell, or an agent acting as you. Nothing here can read the vault or type into the console.
-        actor You as You in your terminal<br/>(or an agent)
-        participant CLI as envh command<br/>(envh session start / envh run)
-        participant Script as your script
-    end
-    box rgb(45, 70, 45) Runs as the service user envh: files mode 0600, memory not readable by uid 1000
-        participant Broker as broker<br/>(envh serve)
-        participant Console as console window<br/>(the broker's own terminal)
-        participant Vault as vault + policy files
-    end
-    actor Approver as You at the<br/>console window
-
-    You->>CLI: type: envh session start research --minutes 60 --reason "weekly digest"
-    CLI->>Broker: request over the Unix socket /run/envh/ctl.sock
-    Note over CLI,Broker: the only door through the boundary; the kernel attaches your pid and uid (informational)
-    Broker->>Vault: check the preset, policies and caps
-    Broker->>Console: print the request with a fresh 4-digit code
-    Note over Console,Approver: only the keyboard reaches this terminal: TIOCSTI is disabled and the device is owned by envh
-    Console-->>Approver: you see: reason, preset, variables, duration, the exact command line, the code
-    Approver->>Console: type the code (or n + code to deny)
-    Console->>Broker: decision
-    Broker->>Vault: append to the audit log
-    Broker-->>CLI: session id and expiry
-    CLI-->>You: you see: "session 3f9c… approved, expires 15:02"
-
-    You->>CLI: type: envh run --session 3f9c… --reason "fetch" -- python research.py
-    CLI->>Broker: request with the session id
-    Broker->>Vault: session live? variables covered? none per-run?
-    Broker->>Vault: append run_start to the audit log
-    Broker-->>CLI: the values for those variables (once, on this connection)
-    CLI->>Script: start it with the values in its environment
-    Note over Script: from here the values are visible to this process, its imports, and other processes running as you
-    Script-->>CLI: exit code
-    CLI->>Broker: run_done
-    Broker->>Vault: append run_end to the audit log
-```
-
-</details>
-
-What each line means for you:
+What each step means for you:
 
 - **Steps 1 and 9 are commands you (or an agent) type in an ordinary terminal.** The `envh` command is just a client; it holds no secrets and has no special rights.
 - **Steps 3 to 6 happen in a different window**: the console that `sudo envh-console` opened. It is where every approval happens, and it is the only place.
@@ -84,8 +39,8 @@ The boundaries, in words:
 | **Red box vs green box** | Linux user separation. The vault, policy files and audit log are owned by `envh` with mode 0600; the broker is a different user, non-dumpable, with no secrets in its environment. | You, your scripts, and any agent running as you cannot read a secret, a policy or the log, and cannot change what is allowed. |
 | **The socket** | A Unix socket in `/run/envh`, a directory only `envh` can write. The broker reads the connecting process's uid from the kernel (`SO_PEERCRED`, not spoofable) and only talks to logins listed under `users:` in `config.yaml`. | Anyone running as a listed user can *ask*. Asking never grants anything; it only puts a prompt on the console. Other local accounts are refused before they can see or request anything. |
 | **Per-user sessions** | Every session and pending request is tagged with the kernel-reported uid that created it. | A session can be used, waited on, listed or ended only by the user who opened it. Two listed users on one machine cannot use each other's sessions; only the console sees everything. |
-| **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal device chowned to `envh`, approval by a random code shown only there. | No process running as you can inject the keystroke that approves. A printed fake prompt fails because its code will not match. |
-| **Not a boundary** | | During step 12 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, a same-user process with display access can type and read the screen; see Habits. |
+| **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal device chowned to `envh`, approval by a random code shown only there. | No process running as you can inject the approving keystroke through the terminal itself. A printed fake prompt fails because its code will not match. Your display and input devices are a separate way in; see the next row. |
+| **Not a boundary** | | During step 12 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, or with write access to `/dev/uinput`, a same-user process can read the code and type it; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). |
 
 ## What it protects, and what it does not
 
@@ -94,7 +49,7 @@ The boundaries, in words:
 - The vault, the policy files and the audit log are owned by the service user `envh` with mode 0600. You cannot read them; neither can an agent.
 - The vault is encrypted at rest (age, passphrase mode) for the case of a stolen or copied disk.
 - The broker's memory is unreadable: a different user, marked non-dumpable, with no secrets in its environment.
-- Nothing can type into the console. Linux 6.2+ disables the `TIOCSTI` ioctl (checked at start), and the console's terminal device is chowned to `envh` before the broker starts.
+- Nothing can type into the console through its terminal. Linux 6.2+ disables the `TIOCSTI` ioctl (checked at start), and the console's terminal device is chowned to `envh` before the broker starts. Your display server and input devices are another way in; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console).
 - The code is root-owned under `/opt/envh`; the only client is `/usr/local/bin/envh`.
 
 **What a key use means:** the approved command receives the real value in its environment. It is visible to that process, to everything it imports, and to every other process running as you while it runs. A malicious dependency no longer gets every key on disk whenever it likes; it gets the values of the one approved run it is part of, and you see that run in the log.
@@ -104,22 +59,22 @@ See [What envh does not do](#what-envh-does-not-do) before relying on it.
 ## Prerequisites
 
 - Linux with a kernel of 6.2 or newer (`sysctl dev.tty.legacy_tiocsti` prints 0) and Yama (`sysctl kernel.yama.ptrace_scope` prints 1 or more). Ubuntu 22.04 and newer, Pop!_OS 22.04, Fedora, Arch and Debian 12 all qualify.
-- `sudo` with a password. No `NOPASSWD` rules for your user.
+- `sudo` with a password: no `NOPASSWD` rules or `Defaults !authenticate` for your user (`sudo -l` shows them). Any one of them lets a process running as you act as root. The installer lists those it finds and refuses to proceed; pass `--ignore-preflight` only if each is a fixed, root-owned command you cannot edit that reads no file you can write. A root script that reads a list from your home directory, for example, can be pointed at `/etc/shadow` with a symlink.
 - You must not be in a group that grants root without a password. The common one is `docker`: being in it means any process running as you can become root with `docker run -v /:/host`. Leave it with `sudo gpasswd -d $USER docker` and log out and in; use `sudo docker` afterwards. The installer refuses to proceed while you are in such a group.
-- [uv](https://docs.astral.sh/uv/) installed for your normal user (`curl -LsSf https://astral.sh/uv/install.sh | sh`). Python 3.12 is fetched by uv if your system lacks it.
+- [uv](https://docs.astral.sh/uv/). The bootstrap runs it as root, so prefer a root-owned copy: `curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin sh`. A uv in `~/.local/bin` also works, but anything running as you can replace that file before your next install or upgrade. Python 3.12 is fetched by uv if your system lacks it.
 - A terminal application. GNOME Terminal gets a launcher icon; any other terminal works with one command.
 
 ## Install
 
 ```bash
-git clone <this repository> envh && cd envh
+git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
 sudo scripts/bootstrap.sh --dry-run     # prints everything it would do
 sudo scripts/bootstrap.sh               # add --disable-sudo-cache to make sudo always ask (recommended, see Habits)
 ```
 
 What the bootstrap does: copies the repository to a staging directory, creates `/opt/envh` (a root-owned Python 3.12 environment) and installs envh into it, links `/usr/local/bin/envh`, then runs `envh install`, which:
 
-1. runs preflight checks (TIOCSTI, Yama, root-granting groups) and prints a warning if you are on an X11 session;
+1. runs preflight checks (TIOCSTI, Yama, root-granting groups, passwordless sudo rules) and prints a warning if you are on an X11 session;
 2. creates the service user `envh` with home `/var/lib/envh` (mode 0700);
 3. installs `/usr/local/sbin/envh-console`, the root helper that starts the broker;
 4. installs a desktop launcher named "envh console" if a desktop terminal is found;
@@ -128,7 +83,7 @@ What the bootstrap does: copies the repository to a staging directory, creates `
 
 Write the console phrase down. The real console prints it before asking for your passphrase. If a window asks for the passphrase without showing it, close it: something is impersonating envh.
 
-Upgrade: stop the console, pull, rerun `sudo scripts/bootstrap.sh`. Uninstall: `sudo envh uninstall` (keeps the vault) or `sudo envh uninstall --purge`.
+Upgrade from a fresh clone, not from a checkout you or your agents work in: the bootstrap runs as root whatever is in the folder it starts from, uncommitted changes included. `git clone --depth 1 https://github.com/CodexVeritas/ai-env-handler.git /tmp/envh-release && sudo /tmp/envh-release/scripts/bootstrap.sh`, then delete `/tmp/envh-release` and restart the console (the running broker keeps the old code until then). Uninstall: `sudo envh uninstall` (keeps the vault) or `sudo envh uninstall --purge`.
 
 ## Start the console
 
@@ -155,25 +110,27 @@ The wizard walks through six steps and writes nothing until the last one:
 2. **Contents.** Parses active lines and commented-out assignments, and treats comment headers as **groups**. A file like this
 
    ```
-   METACULUS_TOKEN=...
+   GITHUB_TOKEN=...
    LOG_LEVEL=info
 
-   # MiniBench Mode
+   # Team Mode
    OPENROUTER_API_KEY=...
    ASKNEWS_API_KEY=...
 
-   # Ben Mode
+   # Personal Mode
    # OPENROUTER_API_KEY=...
    # ASKNEWS_API_KEY=...
    ```
 
-   has a base group (`METACULUS_TOKEN`, `LOG_LEVEL`) and two mode groups. Each variable is classified as secret or config by its name and value; you can flip any.
-3. **Names.** Secrets get vault names: `METACULUS_TOKEN`, `MINIBENCH_OPENROUTER_API_KEY`, `BEN_OPENROUTER_API_KEY`, and so on. Identical values anywhere share one entry; the same variable with different values in different repos gets the repo as prefix. Rename anything.
-4. **Presets.** One preset per group, named `<repo>-<group>` (`auto-questions-minibench`, `auto-questions-ben`), each containing the base variables plus the group's. A repo without groups gets one preset named after it. Rename or drop presets.
+   has a base group (`GITHUB_TOKEN`, `LOG_LEVEL`) and two mode groups. Each variable is classified as secret or config by its name and value; you can flip any.
+3. **Names.** Secrets get vault names: `GITHUB_TOKEN`, `TEAM_OPENROUTER_API_KEY`, `PERSONAL_OPENROUTER_API_KEY`, and so on. Identical values anywhere share one entry; the same variable with different values in different repos gets the repo as prefix. Rename anything.
+4. **Presets.** One preset per group, named `<repo>-<group>` (`news-bot-team`, `news-bot-personal`), each containing the base variables plus the group's. A repo without groups gets one preset named after it. Rename or drop presets.
 5. **Plan.** Secrets to store (names and fingerprints only), presets in full, and a diff per file: secret lines become `# VAR -> envh secret NAME (presets: ...)`, headers and config lines stay as they are. Choose per file whether to rewrite it.
-6. **Apply.** The console shows the same summary and asks for a code. Then the files are rewritten.
+6. **Apply.** The console shows the same summary and asks for a code. Then each original file is backed up and the files are rewritten.
 
-There is no plaintext backup, by design. To see a value again: `envh run --with VAR=SECRET --reason "recover" -- printenv VAR`, approved on the console.
+**The backup.** Before rewriting, the wizard copies each original file into a new folder, `~/.local/state/envh/import-backups/<date-time>/` (under `$XDG_STATE_HOME` if you set it), at its full path: `/home/you/code/bot/.env` is backed up as `.../<date-time>/home/you/code/bot/.env`. The folder is mode 0700 and the wizard prints its exact path, with the command to delete it. The copies hold the old values in plaintext, readable by anything running as you, just as the original files were. So once the rewritten files work, delete the folder (`rm -r ~/.local/state/envh/import-backups/<date-time>`). `envh scan ~` keeps reporting it until you do.
+
+To see a value later without the backup: `envh run --with VAR=SECRET --reason "recover" -- printenv VAR`, approved on the console.
 
 ## Find leftover copies
 
@@ -198,7 +155,7 @@ The scan stays separate from the import wizard on purpose: the wizard moves valu
 
 ```bash
 envh list                                                        # secrets (names, policy), presets, live sessions
-envh session start auto-questions-ben --minutes 120 --reason "backfill questions"
+envh session start news-bot-personal --minutes 120 --reason "backfill articles"
 envh run --session <id> --reason "backfill" -- uv run python scripts/backfill.py
 envh session end <id>
 ```
@@ -206,7 +163,7 @@ envh session end <id>
 - A session is approved once; every `envh run --session` inside it is approved instantly and logged. The session lasts the minutes you asked for, capped by each secret's `max_session` and by 24 hours.
 - `export ENVH_SESSION=<id>` lets you omit `--session`. `envh session start ... --quiet` prints only the id.
 - `envh run` without a session prompts on the console for that one run.
-- `--with` narrows a run to some of the session's variables, or maps variables ad hoc: `--with OPENAI_API_KEY,OPENROUTER_API_KEY=MINIBENCH_OPENROUTER_KEY`.
+- `--with` narrows a run to some of the session's variables, or maps variables ad hoc: `--with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY`.
 - `--reason` is optional but the console shows its absence loudly. Write what you would want to read before approving.
 - A running command is never killed when its session expires; expiry only stops new approvals. When the command itself exits, any process it left running is terminated so the values do not outlive the run (`--keep-background` to opt out).
 - `envh status` shows pending requests, active runs and live sessions as JSON.
@@ -241,15 +198,15 @@ secrets:
 
 ```yaml
 presets:
-  auto-questions-minibench:
+  news-bot-team:
     max_session: 3h
     env:
-      METACULUS_TOKEN: METACULUS_TOKEN
-      OPENROUTER_API_KEY: MINIBENCH_OPENROUTER_API_KEY
-  auto-questions-ben:
+      GITHUB_TOKEN: GITHUB_TOKEN
+      OPENROUTER_API_KEY: TEAM_OPENROUTER_API_KEY
+  news-bot-personal:
     env:
-      METACULUS_TOKEN: { secret: METACULUS_TOKEN, approval: per-run }
-      OPENROUTER_API_KEY: BEN_OPENROUTER_API_KEY
+      GITHUB_TOKEN: { secret: GITHUB_TOKEN, approval: per-run }
+      OPENROUTER_API_KEY: PERSONAL_OPENROUTER_API_KEY
 ```
 
 The same variable can point at different secrets in different presets; that replaces commenting lines in and out. Unknown fields, bad durations, caps over 24h and secrets missing from the vault are rejected, never warned about.
@@ -276,20 +233,48 @@ Agents can draft presets: they write a YAML file, run `envh preset validate draf
 - Read the whole prompt before typing a code: the reason, the variables, the duration, the command line.
 - Do not paste secrets into chats, commits, logs or command lines.
 - Treat `/var/lib/envh` as secret material if you ever copy or back it up. Back up `vault.age` only to encrypted media; recovering it needs only the standard `age` tool: `age -d vault.age`.
-- On X11 (`echo $XDG_SESSION_TYPE`), any process running as you can type into windows and read the screen. Options, strictest first: run the console on a text console (Ctrl-Alt-F3), use a Wayland session, or enable Claude Code's Bash sandbox so agent commands cannot reach the X socket.
+- Approve only where nothing running as you can see or type. On X11, or with `/dev/uinput` writable by you, a desktop terminal window does not qualify; see the next section.
+
+## Who else can see and type into the console
+
+The console is only as safe as the screen you read it on and the keyboard you type into it. On an ordinary desktop, three things let a program running as you reach both. An agent that gets past the Claude Code hook, or never meets it, can use them.
+
+- **An X11 session** (`echo $XDG_SESSION_TYPE` prints `x11`). Every program running as you can read any window, record every key you type, and type into any window. It can read the approval code off the console and type it. It can record the vault passphrase, and your sudo password, as you enter them. With your sudo password it has root, and root beats envh.
+- **Write access to `/dev/uinput`.** It lets a program create a virtual keyboard that types into whatever has focus: X11, Wayland and text consoles alike. Some udev rules give it to the logged-in user, for example Steam's `60-steam-input.rules`; `getfacl /dev/uinput` then shows a `user:<you>` line. To remove it, override the rule with a file of the same name in `/etc/udev/rules.d` without the uinput line, then reboot. The console does not yet limit wrong codes, so a program that types blindly can try all 10,000.
+- **Running the console inside tmux or screen started as you.** Anything running as you can send keys to it.
+
+What does not fix it:
+
+- **A password or one-time codes on the console.** A password you type is recorded the first time you use it. A one-time code (backup codes, an authenticator app) cannot be replayed. But a program that can draw over and type into your windows can show you a fake request, or change the request as you type, so your code approves its request.
+- **The Claude Code hook.** It sees only the command text, so a few lines of Python that talk to the display get past it, and so does a script file. It also covers only Claude Code's Bash tool, not MCP servers, other agents, or a package inside a script you run.
+
+What does:
+
+- **Approving where nothing running as you can see or type.** That can be a text console: press Ctrl-Alt-F3, log in, run `exec sudo envh-console`, after making sure `/dev/uinput` is not writable by you. Your desktop's lock screen does not cover text consoles. It can also be another device over SSH: key-only, not reachable from the internet, and not inside a tmux or screen you own. Closing that connection closes the console and ends all sessions.
+- **A Wayland session.** It stops programs reading and recording across windows, which protects your sudo password everywhere, but it does nothing about `/dev/uinput`.
+- **An OS sandbox around agent commands** (Claude Code's Bash sandbox, a dev container). It protects against agents only, and only if it actually blocks the display and `/dev/uinput`: inside it, `xset q` and `test -w /dev/uinput` should both fail.
 
 ## What envh does not do
 
 - **It does not hide a value from the command that receives it.** Values are visible to that process, everything it imports, and every other process running as you for the duration of the run. envh cannot revoke a value once delivered, cannot undo a copy the command made (a log line, a file, a cache), and a session expiring does not stop a running command. It does end the run cleanly: processes the command left behind are terminated when it exits.
-- **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent, which is a separate project. On the host, your agent's own permission rules and classifier are the only control over what else it reads.
+- **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent; see the [Roadmap](#roadmap). On the host, your agent's own permission rules and classifier are the only control over what else it reads.
 - **A session id is a bearer capability within your own account.** Anything running as you that obtains it, for example from a process environment, can use it until it expires. Keep sessions short and specific. Other local accounts cannot use it: the broker checks the kernel-reported uid of every connection against the session's owner.
 - **Reasons and provenance are claims.** The `--reason` text and the pid and command line shown in prompts come from the requester and help you decide; they are not verified.
-- **The console is only as trusted as your display and terminal.** On X11, same-user processes can type and read the screen. The desktop launcher can be shadowed by a file in `~/.local/share/applications`; the console phrase makes an impostor recognizable, it does not prevent one.
+- **The console is only as trusted as your display and terminal.** On X11, or with write access to `/dev/uinput`, same-user processes can read the approval code and type it; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). The desktop launcher can be shadowed by a file in `~/.local/share/applications`; the console phrase makes an impostor recognizable, it does not prevent one.
 - **It does not stop a persistent same-user attacker from phishing you later.** An agent that can edit your shell startup files or desktop configuration could capture the sudo password or vault passphrase at the next start. Claude Code's protected-path rules reduce this; only running agents in a container removes it.
 - **The vault is only as strong as the passphrase**, and copies of `vault.age` or `audit.jsonl` outside `/var/lib/envh` must be treated as secrets. The audit log holds command lines and reasons, never values.
-- **The import wizard rewrites `.env` files in place with no plaintext backup.** It shows the exact diff first and leaves config lines untouched.
+- **The import wizard leaves a plaintext backup until you delete it.** It copies each original file to `~/.local/state/envh/import-backups/<date-time>/` before rewriting it in place, and prints that path. Until you remove the folder, the old values are exactly as exposed as they were in the original files.
 - **Requirements it will refuse without:** Linux 6.2+ with `legacy_tiocsti=0`, Yama ptrace scope 1 or more, sudo with a password, and your user outside root-granting groups.
 - **Not provided:** rotating or revoking keys at the provider, per-request network allow-lists, rate limits, remote use, macOS or Windows support, protection against root or physical access while the broker is running. Several local users can be listed in `users:` and each gets their own sessions, but they share one vault, one policy and one console.
+
+## Roadmap
+
+- **Phone approval, like a Duo push.** The broker sends each request's details to your phone and you approve there; only a reply signed by a key that never leaves the phone counts. The screen you read and the button you press are then off the computer, which closes the attacks in [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console) without a text console.
+- **An OS sandbox for agents.** Run each agent in a dev container or VM, or a checked configuration of Claude Code's Bash sandbox. The agent then cannot reach your display, `/dev/uinput`, your home directory, or more of the network than it needs, and envh's socket is its way to ask for keys. This also isolates agents from your other repositories, which envh does not do today.
+
+## Reporting a vulnerability
+
+Please report privately, not in a public issue. See [SECURITY.md](SECURITY.md).
 
 ## Development
 

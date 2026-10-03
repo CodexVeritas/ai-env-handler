@@ -8,6 +8,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -340,7 +341,27 @@ def build_plan(files: list[ParsedFile], decisions: list[SecretDecision], presets
     return plan
 
 
-def show_plan(plan: ImportPlan, files: list[ParsedFile], say: Callable[[str], None]) -> None:
+def default_backup_root() -> Path:
+    state_home = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(state_home) / "envh" / "import-backups"
+
+
+def backup_originals(paths: list[Path], backup_root: Path, stamp: str) -> Path:
+    """Copy each file to backup_root/stamp/<its absolute path>, in a folder only its owner can open."""
+    backup_dir = backup_root / stamp
+    try:
+        backup_dir.mkdir(mode=0o700, parents=True)
+        for path in paths:
+            target = backup_dir / Path(os.path.abspath(path)).relative_to("/")
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            with os.fdopen(os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
+                handle.write(path.read_bytes())
+    except OSError as error:
+        raise ClientError(f"could not back up the original files to {backup_dir}: {error}") from error
+    return backup_dir
+
+
+def show_plan(plan: ImportPlan, files: list[ParsedFile], backup_root: Path, say: Callable[[str], None]) -> None:
     say("Step 5 of 6: the change plan (nothing has been written yet)")
     say("  secrets to store:")
     for name in sorted(plan.secrets):
@@ -352,6 +373,8 @@ def show_plan(plan: ImportPlan, files: list[ParsedFile], say: Callable[[str], No
     by_path = {parsed.path: parsed for parsed in files}
     for path, new_text in plan.rewrites.items():
         say(unified_diff(by_path[path], new_text).rstrip() or f"    {path}: no change")
+    if plan.rewrites:
+        say(f"  backup: before rewriting, each original file is copied to a new folder under {backup_root}")
 
 
 def confirm_rewrites(plan: ImportPlan, ask: Ask) -> None:
@@ -362,7 +385,7 @@ def confirm_rewrites(plan: ImportPlan, ask: Ask) -> None:
             del plan.rewrites[path]
 
 
-def apply_plan(plan: ImportPlan, sock: Path, say: Callable[[str], None]) -> None:
+def apply_plan(plan: ImportPlan, sock: Path, backup_root: Path, say: Callable[[str], None]) -> None:
     say("Step 6 of 6: sending to the broker; approve it on the envh console")
     with Connection(sock) as conn:
         conn.send(op="import", secrets=plan.secrets, presets=plan.presets, reason="envh import wizard")
@@ -370,6 +393,10 @@ def apply_plan(plan: ImportPlan, sock: Path, say: Callable[[str], None]) -> None
         waiting_notice(reply["request_id"], None)
         reply = conn.recv_ok()
     say(f"  stored: {len(reply.get('added', []))} new, {len(reply.get('changed', []))} changed; presets: {', '.join(reply.get('presets', [])) or '(none)'}")
+    backup_dir = None
+    if plan.rewrites:
+        backup_dir = backup_originals(list(plan.rewrites), backup_root, datetime.now().strftime("%Y%m%d-%H%M%S"))
+        say(f"  copied the original files to {backup_dir}")
     for path, new_text in plan.rewrites.items():
         mode = os.stat(path).st_mode & 0o777
         temp_path = path.with_name(path.name + ".envh-tmp")
@@ -383,6 +410,9 @@ def apply_plan(plan: ImportPlan, sock: Path, say: Callable[[str], None]) -> None
         first = next(iter(plan.presets))
         say(f"  next: envh session start {first} --minutes 60 --reason \"...\"   then   envh run --session <id> --reason \"...\" -- <command>")
     say("  then: envh scan ~   finds leftover copies of these keys (shell history, transcripts, notebooks, other repos)")
+    if backup_dir:
+        say(f"  backup: {backup_dir} holds the old values in plaintext, readable by anything running as you, like the original files were")
+        say(f"          once the rewritten files work, delete it:  rm -r {backup_dir}")
 
 
 def run_wizard(args: argparse.Namespace, sock: Path) -> int:
@@ -401,7 +431,8 @@ def run_wizard(args: argparse.Namespace, sock: Path) -> int:
     review_names(decisions, ask, say)
     presets = review_presets(build_presets(files, decisions), files, ask, say)
     plan = build_plan(files, decisions, presets)
-    show_plan(plan, files, say)
+    backup_root = default_backup_root()
+    show_plan(plan, files, backup_root, say)
     if args.dry_run:
         say("dry run: stopping here")
         return 0
@@ -410,7 +441,7 @@ def run_wizard(args: argparse.Namespace, sock: Path) -> int:
         say("aborted; nothing written")
         return 1
     try:
-        apply_plan(plan, sock, say)
+        apply_plan(plan, sock, backup_root, say)
     except ClientError as error:
         print(f"envh: {error}; no files were rewritten", file=sys.stderr)
         return error.exit_code

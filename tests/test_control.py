@@ -7,7 +7,7 @@ from tests.conftest import Client, Harness, approve_next
 
 async def test_session_lifecycle(control: Path, harness: Harness) -> None:
     async with Client(control) as client:
-        await client.send(op="session_start", preset="minibench", minutes=30, reason="research", command=["envh", "session", "start"])
+        await client.send(op="session_start", preset="team", minutes=30, reason="research", command=["envh", "session", "start"])
         first = await client.recv()
         assert first["pending"] is True
         request_id = first["request_id"]
@@ -48,11 +48,11 @@ async def test_run_without_session_prompts_and_denial(control: Path, harness: Ha
         reply = await client.recv()
         assert reply == {"ok": False, "request_id": pending.id, "error": "denied"}
     async with Client(control) as client:
-        await client.send(op="run", preset="minibench", command=["python", "y.py"])
+        await client.send(op="run", preset="team", command=["python", "y.py"])
         assert (await client.recv())["pending"] is True
         await approve_next(harness)
         reply = await client.recv()
-        assert reply["env"] == {"OPENROUTER_API_KEY": "sk-or-mini", "OPENAI_API_KEY": "sk-openai"}
+        assert reply["env"] == {"OPENROUTER_API_KEY": "sk-or-team", "OPENAI_API_KEY": "sk-openai"}
     await asyncio.sleep(0.05)
     assert harness.broker.state.active_runs() == []
     assert any("run_end" in line and "client gone" in line for line in harness.echoed)
@@ -95,7 +95,7 @@ async def test_list_status_validate_and_errors(control: Path, harness: Harness) 
     async with Client(control) as client:
         await client.send(op="list")
         payload = await client.recv()
-        assert {entry["name"] for entry in payload["secrets"]} == {"DATABASE_URL", "MINIBENCH_OPENROUTER_KEY", "OPENAI_API_KEY"}
+        assert {entry["name"] for entry in payload["secrets"]} == {"DATABASE_URL", "TEAM_OPENROUTER_KEY", "OPENAI_API_KEY"}
         assert "sk-openai" not in str(payload)
     async with Client(control) as client:
         await client.send(op="status")

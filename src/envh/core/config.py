@@ -174,7 +174,7 @@ def parse_presets(text: str, known_secrets: set[str] | None) -> tuple[dict[str, 
 def parse_preset(name: Any, raw: Any, known_secrets: set[str] | None) -> Preset:
     where = f"preset {name!r}"
     if not isinstance(name, str) or not PRESET_NAME.match(name):
-        raise ConfigError(f"{where}: preset names are lowercase, like forecasting-bot or auto-questions.minibench")
+        raise ConfigError(f"{where}: preset names are lowercase, like forecasting-bot or news-bot.team")
     fields = _expect_mapping(raw, where)
     _reject_unknown(fields, ("max_session", "env"), where)
     max_session = None
