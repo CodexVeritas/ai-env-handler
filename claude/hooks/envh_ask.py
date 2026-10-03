@@ -5,7 +5,7 @@ Turns the moments the envh console needs a human into in-app "ask" prompts, and 
 It fails closed: any mention of envh that is not a recognized safe form asks. A hook only sees the command
 string, so a script file or a variable-built command can get around it; nothing depends on it. A disguised
 session-less `envh run` still prompts on the envh console and a disguised `envh session start` still needs the
-code typed there. The hook is attention plus a second chance to deny, not the boundary.
+passphrase typed there. The hook is attention plus a second chance to deny, not the boundary.
 Install: see settings.snippet.json.
 """
 
@@ -25,7 +25,7 @@ SAFE_FORMS = (
     re.compile(r"^\s+preset\s+validate\b"),
 )
 ASK_FORMS = (
-    (re.compile(r"^\s+session\s+start\b"), "envh: starting a secret session; approve it on the envh console (code shown there)"),
+    (re.compile(r"^\s+session\s+start\b"), "envh: starting a secret session; approve it on the envh console with your vault passphrase"),
     (re.compile(r"^\s+preset\s+propose\b"), "envh: proposing a preset change; review the diff on the envh console"),
     (re.compile(r"^\s+import\b"), "envh: importing secrets; this is an interactive wizard meant for a human"),
 )

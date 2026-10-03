@@ -261,7 +261,7 @@ class Broker:
         if any(request.summary[label] != names for label, names in current.items()):
             request.summary.update(current)
             self._show(request)
-            raise RequestError(f"the vault changed since request #{request.id} was shown; it is shown again with the current changes, type its code again to approve that")
+            raise RequestError(f"the vault changed since request #{request.id} was shown; it is shown again with the current changes, type the passphrase again to approve that")
 
     def merged_for_approval(self, request: Request, known_secrets: set[str]) -> dict[str, Any]:
         """The presets to write for this request, recomputed against the current files; refuses when they differ from what the approver saw."""
@@ -270,7 +270,7 @@ class Broker:
             request.summary["merged"] = merged
             request.summary["diff"] = self.presets_diff(merged)
             self._show(request)
-            raise RequestError(f"presets changed since request #{request.id} was shown; it is shown again with the current diff, type its code again to approve that")
+            raise RequestError(f"presets changed since request #{request.id} was shown; it is shown again with the current diff, type the passphrase again to approve that")
         try:
             parse_presets(dump_presets(merged), known_secrets)
         except ConfigError as error:

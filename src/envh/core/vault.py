@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import pyrage
 import pyrage.passphrase
 
 VAULT_FILE = "vault.age"
+MIN_PASSPHRASE_LENGTH = 8
 
 
 class VaultError(RuntimeError):
@@ -90,6 +92,13 @@ class Vault:
         if name not in self._secrets:
             raise VaultError(f"secret {name} is not in the vault")
         del self._secrets[name]
+
+    def matches_passphrase(self, candidate: str) -> bool:
+        return hmac.compare_digest(candidate.encode(), self._passphrase.encode())
+
+    def change_passphrase(self, new_passphrase: str) -> None:
+        self._passphrase = new_passphrase
+        self.save()
 
     def save(self) -> None:
         write_private_file(self._path, encrypt_secrets(self._secrets, self._passphrase))

@@ -170,7 +170,7 @@ def ensure_uv() -> bool:
 
 def step_install() -> str:
     say("Installs envh root-owned under /opt/envh, creates the 'envh' service user that owns the vault, and sets your")
-    say("vault passphrase and approval password. envh never runs from this folder: root copies it to /opt/envh,")
+    say("vault passphrase. envh never runs from this folder: root copies it to /opt/envh,")
     say("because agents can edit this folder and the console runs the code that holds your keys.")
     fresh_install = not envh_installed()
     label, changes = folder_source()
@@ -210,13 +210,11 @@ def step_install() -> str:
             raise SystemExit("the dry run failed; see the output above")
         say()
         if fresh_install:
-            say("The install asks for three things:")
-            say("  - your sudo password;")
-            say("  - a vault passphrase: encrypts the vault on disk, typed every time you start the console. It is")
-            say("    stored nowhere: forget it and the stored keys are gone (you would import them again);")
-            say("  - an approval password: typed on the console to approve each request and to change secrets or")
-            say("    policy. Make it different from the passphrase and from your sudo password. Only a hash is kept.")
-            say("Then it prints a console phrase (three words). The real console always shows it; write it down.")
+            say("The install asks for your sudo password, then for a vault passphrase. The passphrase encrypts the")
+            say("vault; you type it to start the console and to approve each request. It is stored nowhere: forget it")
+            say("and the stored keys are gone (you would import them again).")
+            say("Then it prints a console phrase (three words). The console shows it with every request; type your")
+            say("passphrase only where you see it. Write it down.")
         if not ask_yes("Make the changes listed in the dry run?"):
             return "skipped after the dry run"
         if run_shown(root_install_command(label, flags)) != 0:

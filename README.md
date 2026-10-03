@@ -13,16 +13,16 @@ envh session start weekly-report --minutes 90 --reason "forecast digest: researc
 **2. The envh console shows the request.** It runs in its own window, as its own user:
 
 ```
-SESSION REQUEST #3   code 4821   pid 51234
+SESSION REQUEST #3   pid 51234
    reason:   "forecast digest: research step"
    preset:   weekly-report
    OPENAI_API_KEY      <- OPENAI_API_KEY
    OPENROUTER_API_KEY  <- PERSONAL_OPENROUTER_KEY
    duration: 1h (capped from 90m)
-   type 4821 and then the approval password to approve, n4821 to deny
+   [amber basil cedar] vault passphrase to approve #3 (hidden), or n to deny:
 ```
 
-**3. You type `4821` on the console, then your approval password** (hidden). Back in the terminal, the request returns:
+**3. You type your vault passphrase on the console** (hidden), or `n` to deny. Back in the terminal, the request returns:
 
 ```
 session 3f9c... approved, expires 15:02:11
@@ -65,8 +65,8 @@ The boundaries, in words:
 | **Red box vs green box** | Linux user separation. The vault, policy files and audit log are owned by `envh` with mode 0600; the broker is a different user, non-dumpable, with no secrets in its environment. | You, your scripts, and any agent running as you cannot read a secret, a policy or the log, and cannot change what is allowed. |
 | **The socket** | A Unix socket in `/run/envh`, a directory only `envh` can write. The broker reads the connecting process's uid from the kernel (`SO_PEERCRED`, not spoofable) and only talks to logins listed under `users:` in `config.yaml`. | Anyone running as a listed user can *ask*. Asking never grants anything; it only puts a prompt on the console. Other local accounts are refused before they can see or request anything. |
 | **Per-user sessions** | Every session and pending request is tagged with the kernel-reported uid that created it. | A session can be used, waited on, listed or ended only by the user who opened it. Two listed users on one machine cannot use each other's sessions; only the console sees everything. |
-| **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal device chowned to `envh`, approval by a random code shown only there plus the approval password. | No process running as you can inject the approving keystroke through the terminal itself. A printed fake prompt fails because its code will not match. Something that can type but cannot see your screen or record your keys cannot approve without the password. Your display and input devices are a separate way in; see the next row. |
-| **Not a boundary** | | During step 12 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, or with write access to `/dev/uinput`, a same-user process can read the code and type it; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). |
+| **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal device chowned to `envh`, approval by your vault passphrase typed hidden, next to your console phrase. | No process running as you can inject keystrokes through the terminal itself. Something that can type but cannot see your screen or record your keys cannot approve without the passphrase. A fake prompt elsewhere cannot show your console phrase. Your display and input devices are a separate way in; see the next row. |
+| **Not a boundary** | | During step 12 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, a same-user process can record the passphrase as you type it and then type it into the console itself; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). |
 
 ## What it protects, and what it does not
 
@@ -80,7 +80,9 @@ The boundaries, in words:
 
 **What a key use means:** the approved command receives the real value in its environment. It is visible to that process, to everything it imports, and to every other process running as you while it runs. A malicious dependency no longer gets every key on disk whenever it likes; it gets the values of the one approved run it is part of, and you see that run in the log.
 
-**While you are not at the console, nothing is approved or changed.** Approving a request, and `add`, `rm`, `preset rm` and `edit` on the console, all ask for the approval password you chose at install, typed hidden. envh keeps only a scrypt hash of it, readable only by `envh`. A wrong password is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with a passphrase that is stored nowhere. The exception is a session you already approved: it keeps working until it expires. On X11, a program running as you can record the password as you type it; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console).
+**While you are not at the console, nothing is approved or changed.** Approving a request, and `add`, `rm`, `preset rm`, `edit` and `passphrase` on the console, all ask for your vault passphrase, typed hidden. A wrong passphrase is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with that passphrase, which is stored nowhere. The exception is a session you already approved: it keeps working until it expires.
+
+**One passphrase, on purpose.** The vault passphrase both unlocks the vault and approves requests, so approving is one thing to type. That costs some security, and you should know what: you type the passphrase often, so on X11 a program running as you has many chances to record it; and anyone who learns it can approve at your console and also decrypt any copy of `vault.age`, such as a backup. To make a fake prompt easy to spot, every approval prompt shows your console phrase: type the passphrase only where you see it. See [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console).
 
 See [What envh does not do](#what-envh-does-not-do) before relying on it.
 
@@ -127,7 +129,7 @@ The wizard walks through six steps and writes nothing until the last one:
 3. **Names.** Secrets get vault names: `GITHUB_TOKEN`, `TEAM_OPENROUTER_API_KEY`, `PERSONAL_OPENROUTER_API_KEY`, and so on. Identical values anywhere share one entry; the same variable with different values in different repos gets the repo as prefix. Rename anything.
 4. **Presets.** One preset per group, named `<repo>-<group>` (`news-bot-team`, `news-bot-personal`), each containing the base variables plus the group's. A repo without groups gets one preset named after it. Rename or drop presets.
 5. **Plan.** Secrets to store (names and fingerprints only), presets in full, and a diff per file: secret lines become `# VAR -> envh secret NAME (presets: ...)`, headers and config lines stay as they are. Choose per file whether to rewrite it.
-6. **Apply.** The console shows the same summary and asks for a code. Then each original file is backed up and the files are rewritten.
+6. **Apply.** The console shows the same summary and asks for your vault passphrase. Then each original file is backed up and the files are rewritten.
 
 **The backup.** Before rewriting, the wizard copies each original file into a new folder, `~/.local/state/envh/import-backups/<date-time>/` (under `$XDG_STATE_HOME` if you set it), at its full path: `/home/you/code/bot/.env` is backed up as `.../<date-time>/home/you/code/bot/.env`. The folder is mode 0700 and the wizard prints its exact path, with the command to delete it. The copies hold the old values in plaintext, readable by anything running as you, just as the original files were. So once the rewritten files work, delete the folder (`rm -r ~/.local/state/envh/import-backups/<date-time>`). `envh scan ~` keeps reporting it until you do.
 
@@ -178,7 +180,7 @@ Both policy files are owned by the `envh` user with mode 0600. Nothing running a
 | File | Who can change it | How |
 |---|---|---|
 | `config.yaml` (defaults, per-secret policy) | you, on the console | `edit config` opens it in an editor; the result is validated and shown as a diff before it is saved |
-| `presets.yaml` | you, on the console | `edit presets`, `preset rm NAME`, the import wizard, or approving an agent's `envh preset propose` (shown as a diff, approved with a code) |
+| `presets.yaml` | you, on the console | `edit presets`, `preset rm NAME`, the import wizard, or approving an agent's `envh preset propose` (shown as a diff, approved with your passphrase) |
 | the vault | you, on the console | `add`, `rm`, the import wizard |
 
 An agent can only *propose*: `envh preset validate draft.yaml` checks a draft without changing anything, `envh preset propose draft.yaml --reason "..."` puts the diff on your console. A proposal that maps a variable to a secret the agent should not have is just a diff you deny. Root can of course edit the files directly; the console `reload` command picks that up.
@@ -212,7 +214,7 @@ presets:
 
 The same variable can point at different secrets in different presets; that replaces commenting lines in and out. Unknown fields, bad durations, caps over 24h and secrets missing from the vault are rejected, never warned about.
 
-Console commands: `<code>` approve (then the approval password), `n<code>` deny, `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `pending`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `password` (change the approval password), `reload`, `help`, `quit`. Approving, `add`, `rm`, `preset rm`, `edit` and `password` all ask for the approval password.
+On the console, requests appear on their own, one at a time: type the vault passphrase to approve the one on screen, or `n` to deny it; others wait their turn. Commands: `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `passphrase` (change the vault passphrase; the vault is re-encrypted), `reload`, `help`, `quit`. `add`, `rm`, `preset rm`, `edit` and `passphrase` ask for the vault passphrase too.
 
 ## Using it with Claude Code
 
@@ -221,7 +223,7 @@ Copy the pieces under `claude/`:
 - `claude/skills/envh/SKILL.md` → `~/.claude/skills/envh/SKILL.md` (or a project's `.claude/skills/envh/`). It teaches the agent the session flow, to always give a reason, what to do when refused, and a list of things it must never do.
 - `claude/hooks/envh_ask.py` plus the hooks block from `claude/settings.snippet.json` → your `settings.json`. The hook turns `envh session start`, `envh preset propose`, `envh import` and session-less `envh run` into in-app "ask" prompts, so you are notified exactly when the console needs you, and it denies any `sudo`, `su`, `doas` or `pkexec` the agent attempts. It fails closed: `envh` reached through `&&` chains, subshells, `bash -c`, interpreter one-liners, or a path prefix also asks, as does any invocation it does not recognize. Prefer rules only? The snippet has that variant too, with the caveat that plain rules match only the start of a command.
 
-  A hook sees only the command string. A script file or a variable-built command can get around it, which is why nothing depends on it: a disguised session-less run still prompts on the envh console, and a disguised session start still needs the code typed there. The hook is attention and a second chance to deny; the console is the boundary.
+  A hook sees only the command string. A script file or a variable-built command can get around it, which is why nothing depends on it: a disguised session-less run still prompts on the envh console, and a disguised session start still needs your passphrase typed there. The hook is attention and a second chance to deny; the console is the boundary.
 - `claude/CLAUDE.snippet.md` → three lines for a project's `CLAUDE.md`.
 
 Agents can draft presets: they write a YAML file, run `envh preset validate draft.yaml`, then `envh preset propose draft.yaml --reason "..."`; you see a diff on the console and decide. They cannot edit the files.
@@ -231,8 +233,8 @@ Agents can draft presets: they write a YAML file, run `envh preset validate draf
 - **Never type `sudo` in a terminal an agent can reach**, such as the terminal pane of the Claude desktop app. sudo caches your credential for that terminal for several minutes, and the agent could run `sudo -n <anything>` there. Run privileged commands in a separate window, and consider `sudo -k` right after (the wizard does this for you).
 - Start the console in its own window. Never inside an agent's terminal pane.
 - Keep `NOPASSWD` out of sudoers and stay out of the `docker` group.
-- Read the whole prompt before typing a code: the reason, the variables, the duration, the command line.
-- Type the approval password only into the console. If you typed it on an X11 desktop while something untrusted was running, change it with `password` from a text console.
+- Read the whole prompt before typing the passphrase: the reason, the variables, the duration, the command line.
+- Type the vault passphrase only where your console phrase is shown. If you typed it on an X11 desktop while something untrusted was running, change it with `passphrase` from a text console.
 - Do not paste secrets into chats, commits, logs or command lines.
 - Treat `/var/lib/envh` as secret material if you ever copy or back it up. Back up `vault.age` only to encrypted media; recovering it needs only the standard `age` tool: `age -d vault.age`.
 - Approve only where nothing running as you can see or type. On X11, or with `/dev/uinput` writable by you, a desktop terminal window does not qualify; see the next section.
@@ -241,13 +243,13 @@ Agents can draft presets: they write a YAML file, run `envh preset validate draf
 
 The console is only as safe as the screen you read it on and the keyboard you type into it. On an ordinary desktop, three things let a program running as you reach both. An agent that gets past the Claude Code hook, or never meets it, can use them.
 
-- **An X11 session** (`echo $XDG_SESSION_TYPE` prints `x11`). Every program running as you can read any window, record every key you type, and type into any window. It can read the approval code off the console and type it. It can record the vault passphrase, and your sudo password, as you enter them. With your sudo password it has root, and root beats envh.
-- **Write access to `/dev/uinput`.** It lets a program create a virtual keyboard that types into whatever has focus: X11, Wayland and text consoles alike. Some udev rules give it to the logged-in user, for example Steam's `60-steam-input.rules`; `getfacl /dev/uinput` then shows a `user:<you>` line. To remove it, override the rule with a file of the same name in `/etc/udev/rules.d` without the uinput line, then reboot. Typing blind, it cannot see the code or the password; the approval password, with its pause after each wrong attempt, is what stops it from guessing.
+- **An X11 session** (`echo $XDG_SESSION_TYPE` prints `x11`). Every program running as you can read any window, record every key you type, and type into any window. It can record the vault passphrase, and your sudo password, as you enter them, and then type the passphrase into the console itself. With your sudo password it has root, and root beats envh.
+- **Write access to `/dev/uinput`.** It lets a program create a virtual keyboard that types into whatever has focus: X11, Wayland and text consoles alike. Some udev rules give it to the logged-in user, for example Steam's `60-steam-input.rules`; `getfacl /dev/uinput` then shows a `user:<you>` line. To remove it, override the rule with a file of the same name in `/etc/udev/rules.d` without the uinput line, then reboot. Typing blind, it does not know the passphrase; the pause after each wrong attempt keeps it from guessing.
 - **Running the console inside tmux or screen started as you.** Anything running as you can send keys to it.
 
 What does not fix it:
 
-- **The approval password, on X11.** It stops anything that can type but cannot see or record, such as a virtual keyboard on Wayland or a text console. On X11, a program running as you can record it the first time you type it, and approve on its own after that. If that may have happened, change it with `password` from a text console.
+- **The passphrase, on X11.** It stops anything that can type but cannot see or record, such as a virtual keyboard on Wayland or a text console. On X11, a program running as you can record it the first time you type it, and approve on its own after that. If that may have happened, change it with `passphrase` from a text console.
 - **One-time codes** (backup codes, an authenticator app). A recorded code cannot be replayed. But a program that can draw over and type into your windows can show you a fake request, or change the request as you type, so your code approves its request.
 - **The Claude Code hook.** It sees only the command text, so a few lines of Python that talk to the display get past it, and so does a script file. It also covers only Claude Code's Bash tool, not MCP servers, other agents, or a package inside a script you run.
 
@@ -263,9 +265,10 @@ What does:
 - **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent; see the [Roadmap](#roadmap). On the host, your agent's own permission rules and classifier are the only control over what else it reads.
 - **A session id is a bearer capability within your own account.** Anything running as you that obtains it, for example from a process environment, can use it until it expires. Keep sessions short and specific. Other local accounts cannot use it: the broker checks the kernel-reported uid of every connection against the session's owner.
 - **Reasons and provenance are claims.** The `--reason` text and the pid and command line shown in prompts come from the requester and help you decide; they are not verified.
-- **The console is only as trusted as your display and terminal.** On X11, or with write access to `/dev/uinput`, same-user processes can read the approval code and type it; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). The desktop launcher can be shadowed by a file in `~/.local/share/applications`; the console phrase makes an impostor recognizable, it does not prevent one.
+- **The console is only as trusted as your display and terminal.** On X11, same-user processes can record the passphrase and type it into the console; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). The desktop launcher can be shadowed by a file in `~/.local/share/applications`; the console phrase makes an impostor recognizable, it does not prevent one.
 - **It does not stop a persistent same-user attacker from phishing you later.** An agent that can edit your shell startup files or desktop configuration could capture the sudo password or vault passphrase at the next start. Claude Code's protected-path rules reduce this; only running agents in a container removes it.
-- **The vault is only as strong as the passphrase**, and copies of `vault.age` or `audit.jsonl` outside `/var/lib/envh` must be treated as secrets. The audit log holds command lines and reasons, never values.
+- **It does not change your sudo settings.** sudo keeps remembering your password for several minutes in the terminal you typed it in, and anything running there can use it. Run the wizard and `sudo envh-console` in windows no agent can type into; the wizard runs `sudo -k` when it is done.
+- **The vault is only as strong as the passphrase**, which also approves requests. Copies of `vault.age` or `audit.jsonl` outside `/var/lib/envh` must be treated as secrets. The audit log holds command lines and reasons, never values.
 - **The import wizard leaves a plaintext backup until you delete it.** It copies each original file to `~/.local/state/envh/import-backups/<date-time>/` before rewriting it in place, and prints that path. Until you remove the folder, the old values are exactly as exposed as they were in the original files.
 - **Requirements it will refuse without:** Linux 6.2+ with `legacy_tiocsti=0`, Yama ptrace scope 1 or more, sudo with a password, and your user outside root-granting groups.
 - **Not provided:** rotating or revoking keys at the provider, per-request network allow-lists, rate limits, remote use, macOS or Windows support, protection against root or physical access while the broker is running. Several local users can be listed in `users:` and each gets their own sessions, but they share one vault, one policy and one console.
@@ -287,13 +290,13 @@ The wizard's install step asks for sudo once. Root copies the source files from 
 2. creates the service user `envh` with home `/var/lib/envh` (mode 0700);
 3. installs `/usr/local/sbin/envh-console`, the root helper that starts the broker;
 4. installs a desktop launcher named "envh console" if a desktop terminal is found;
-5. creates the vault and the policy in `/var/lib/envh`, owned by `envh`: it writes `users: [<your login>]` into the policy, you choose the vault passphrase and the **approval password** (stored only as a hash), and you get a **console phrase**.
+5. creates the vault and the policy in `/var/lib/envh`, owned by `envh`: it writes `users: [<your login>]` into the policy, you choose the **vault passphrase** (stored nowhere; you type it to start the console and to approve requests), and you get a **console phrase**.
 
 Nothing else on your system changes: no sudo, shell or desktop settings.
 
 envh never runs from your clone. Your agents can edit the clone, and the console runs the code that holds your keys, so that code must live where only root can change it.
 
-**Upgrade:** `git pull` in your clone and run the wizard again. It shows the installed commit next to the clone's, lists any uncommitted changes (root installs those too), and asks before upgrading. The vault, the passwords and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then.
+**Upgrade:** `git pull` in your clone and run the wizard again. It shows the installed commit next to the clone's, lists any uncommitted changes (root installs those too), and asks before upgrading. The vault, its passphrase and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then.
 
 **Uninstall:** `sudo envh uninstall` keeps the vault; `sudo envh uninstall --purge` deletes it too.
 

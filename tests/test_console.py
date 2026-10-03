@@ -5,58 +5,111 @@ from pathlib import Path
 
 import pytest
 
-from envh.core.password import PASSWORD_FILE, verify_password
-from envh.core.state import Provenance
+from envh.core.state import Provenance, Request
+from envh.core.vault import Vault
 from envh.server import console as console_module
 from envh.server.console import Console, parse_line, render_request
-from tests.conftest import APPROVAL_PASSWORD_HASH, ME, PASSWORD_LINE, Harness
+from tests.conftest import ME, PASSPHRASE, PASSPHRASE_LINE, Harness
+
+PHRASE = "amber basil cedar"
 
 
 def test_parse_line_table() -> None:
-    assert parse_line("4821").kind == "approve"
-    assert parse_line("n4821") == parse_line("n4821") and parse_line("n4821").kind == "deny"
     assert parse_line("  ").kind == "empty"
     assert parse_line("add KEY").command == "add" and parse_line("add KEY").args == ("KEY",)
-    assert parse_line("12345").kind == "command"
-    assert parse_line("y").kind == "command"
+    assert parse_line("4821").kind == "command"
 
 
-async def test_render_request_shows_code_and_reason(harness: Harness) -> None:
+async def test_render_request_shows_reason_and_the_passphrase_prompt(harness: Harness) -> None:
     mapping, preset = harness.broker.mapping_from_preset("dbwork")
     request = harness.broker.request_session(mapping, preset, 30, None, ("envh", "session", "start", "dbwork"), harness.provenance())
     text = "\n".join(render_request(request, harness.clock()))
-    assert f"code {request.code}" in text
     assert "no reason given" in text
     assert "OPENAI_API_KEY" in text and "excluded" in text and "DATABASE_URL" in text
     assert "sk-openai" not in text
 
 
-async def test_console_approve_deny_and_unknown_code(harness: Harness) -> None:
+def new_console(harness: Harness) -> tuple[Console, asyncio.StreamReader, list[str]]:
     reader = asyncio.StreamReader()
     said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
-    request = harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, None, "why", ("python", "x.py"), harness.provenance())
-    assert any(f"code {request.code}" in line for line in said)
-    await console.handle_line("0000" if request.code != "0000" else "0001")
-    assert any("no pending request" in line for line in said)
-    reader.feed_data(PASSWORD_LINE)
-    await console.handle_line(request.code)
-    assert request.decision.result().outcome == "approved"
-    other = harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, None, None, (), harness.provenance())
-    await console.handle_line(f"n{other.code}")
-    assert other.decision.result().outcome == "denied"
+    return Console(harness.broker, reader, said.append, tty_fd=None, phrase=PHRASE), reader, said
+
+
+def run_request(harness: Harness, reason: str | None = "why") -> Request:
+    return harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, None, reason, ("python", "x.py"), harness.provenance())
+
+
+async def test_requests_are_shown_one_at_a_time_and_approved_with_the_passphrase(harness: Harness) -> None:
+    console, reader, said = new_console(harness)
+    first = run_request(harness)
+    second = run_request(harness)
+    assert console.current is first
+    assert said[-1] == f"   [{PHRASE}] vault passphrase to approve #{first.id} (hidden), or n to deny:"
+    assert not any(f"REQUEST #{second.id}" in line for line in said)
+    reader.feed_data(PASSPHRASE_LINE)
+    reader.feed_data(b"n\n")
+    reader.feed_data(b"quit\n")
+    await asyncio.wait_for(console.run(), timeout=5)
+    assert first.decision.result().outcome == "approved"
+    assert second.decision.result().outcome == "denied"
+    approved_at = said.index(f"approved #{first.id}")
+    assert any(f"REQUEST #{second.id}" in line for line in said[approved_at:])
+    assert console.quit_requested.is_set()
+    assert not any(PASSPHRASE in line for line in said + harness.echoed)
+
+
+async def test_wrong_passphrase_neither_approves_nor_changes_anything(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(console_module, "WRONG_PASSPHRASE_PAUSE_SECONDS", 0)
+    console, reader, said = new_console(harness)
+    request = run_request(harness)
+    await console.handle_line("guess-one\n")
+    assert request.pending and console.current is request
+    assert any(f"#{request.id} is still waiting" in line for line in said)
+    await console.handle_line("n\n")
+    reader.feed_data(b"guess-two\n")
+    await console.handle_line("add NEW_SECRET")
+    assert "NEW_SECRET" not in harness.broker.vault
+    assert sum("wrong_passphrase" in line for line in harness.echoed) == 2
+    assert not any("guess-" in line for line in said + harness.echoed)
+
+
+async def test_commands_typed_while_a_request_waits_are_taken_as_answers(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(console_module, "WRONG_PASSPHRASE_PAUSE_SECONDS", 0)
+    console, _, said = new_console(harness)
+    request = run_request(harness)
+    await console.handle_line("quit\n")
+    assert not console.quit_requested.is_set()
+    assert request.pending
+    assert not any("quit" in line for line in said)
+
+
+async def test_a_withdrawn_request_discards_the_next_line_unread(harness: Harness) -> None:
+    console, _, said = new_console(harness)
+    withdrawn = run_request(harness)
+    harness.broker.state.withdraw(withdrawn)
+    await asyncio.sleep(0)
+    assert console.current is None
+    assert any(f"#{withdrawn.id} was withdrawn" in line for line in said)
+    waiting = run_request(harness)
+    await console.handle_line(PASSPHRASE_LINE.decode())
+    assert waiting.pending
+    assert "input discarded" in said
+    console._advance()
+    assert console.current is waiting
+    await console.handle_line(PASSPHRASE_LINE.decode())
+    assert waiting.decision.result().outcome == "approved"
 
 
 async def test_console_admin_add_rm_reload_quit(harness: Harness) -> None:
     reader = asyncio.StreamReader()
     said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
+    console = Console(harness.broker, reader, said.append, tty_fd=None, phrase=PHRASE)
     reader.feed_data(b"add NEW_SECRET\n")
-    reader.feed_data(PASSWORD_LINE)
+    reader.feed_data(PASSPHRASE_LINE)
     reader.feed_data(b"super-secret-value\n")
     reader.feed_data(b"y\n")
     reader.feed_data(b"rm NEW_SECRET\n")
-    reader.feed_data(PASSWORD_LINE)
+    reader.feed_data(PASSPHRASE_LINE)
     reader.feed_data(b"y\n")
     reader.feed_data(b"secrets\n")
     reader.feed_data(b"presets\n")
@@ -74,26 +127,27 @@ async def test_console_admin_add_rm_reload_quit(harness: Harness) -> None:
 
 
 async def test_requests_arriving_while_busy_are_shown_after(harness: Harness) -> None:
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
+    console, reader, said = new_console(harness)
     reader.feed_data(b"add LATER_KEY\n")
     task = asyncio.create_task(console.run())
     await asyncio.sleep(0.05)
-    request = harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, None, None, (), harness.provenance())
-    assert not any(f"code {request.code}" in line for line in said)
-    reader.feed_data(PASSWORD_LINE)
+    request = run_request(harness, reason=None)
+    assert not any(f"REQUEST #{request.id}" in line for line in said)
+    reader.feed_data(PASSPHRASE_LINE)
     reader.feed_data(b"value\n")
+    reader.feed_data(b"n\n")
+    await asyncio.sleep(0.05)
+    assert any(f"REQUEST #{request.id}" in line for line in said)
     reader.feed_data(b"n\n")
     reader.feed_data(b"quit\n")
     await asyncio.wait_for(task, timeout=5)
-    assert any(f"code {request.code}" in line for line in said)
+    assert request.decision.result().outcome == "denied"
 
 
 async def test_edit_presets_validates_before_saving(harness: Harness, tmp_path: Path) -> None:
     reader = asyncio.StreamReader()
     said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
+    console = Console(harness.broker, reader, said.append, tty_fd=None, phrase=PHRASE)
     bad_editor = tmp_path / "bad_editor.sh"
     bad_editor.write_text("#!/bin/sh\nprintf 'presets: {broken: {env: {X: NOPE}}}\\n' > \"$1\"\n")
     good_editor = tmp_path / "good_editor.sh"
@@ -103,10 +157,10 @@ async def test_edit_presets_validates_before_saving(harness: Harness, tmp_path: 
     presets_path = harness.data_dir / "presets.yaml"
     before = presets_path.read_text()
     reader.feed_data(f"edit presets {bad_editor}\n".encode())
-    reader.feed_data(PASSWORD_LINE)
+    reader.feed_data(PASSPHRASE_LINE)
     reader.feed_data(b"n\n")
     reader.feed_data(f"edit presets {good_editor}\n".encode())
-    reader.feed_data(PASSWORD_LINE)
+    reader.feed_data(PASSPHRASE_LINE)
     reader.feed_data(b"y\n")
     reader.feed_data(b"quit\n")
     await asyncio.wait_for(console.run(), timeout=10)
@@ -120,14 +174,14 @@ async def test_edit_presets_validates_before_saving(harness: Harness, tmp_path: 
 async def test_edit_config_discard_keeps_file(harness: Harness, tmp_path: Path) -> None:
     reader = asyncio.StreamReader()
     said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
+    console = Console(harness.broker, reader, said.append, tty_fd=None, phrase=PHRASE)
     editor = tmp_path / "editor.sh"
     editor.write_text(f"#!/bin/sh\nprintf 'users: [{ME}]\\ndefaults: {{approval: per-run}}\\n' > \"$1\"\n")
     os.chmod(editor, stat.S_IRWXU)
     config_path = harness.data_dir / "config.yaml"
     before = config_path.read_text()
     reader.feed_data(f"edit config {editor}\n".encode())
-    reader.feed_data(PASSWORD_LINE)
+    reader.feed_data(PASSPHRASE_LINE)
     reader.feed_data(b"n\n")
     reader.feed_data(b"quit\n")
     await asyncio.wait_for(console.run(), timeout=10)
@@ -139,13 +193,13 @@ async def test_edit_config_discard_keeps_file(harness: Harness, tmp_path: Path) 
 async def test_unknown_editor_and_unexpected_errors_keep_console_alive(harness: Harness) -> None:
     reader = asyncio.StreamReader()
     said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
+    console = Console(harness.broker, reader, said.append, tty_fd=None, phrase=PHRASE)
     reader.feed_data(b"edit presets definitely-not-an-editor\n")
     reader.feed_data(b"help\n")
     reader.feed_data(b"quit\n")
     await asyncio.wait_for(console.run(), timeout=10)
     assert any("not found" in line for line in said)
-    assert any(line.startswith("commands:") for line in said)
+    assert any("commands:" in line for line in said)
 
 
 async def test_render_request_neutralizes_control_characters(harness: Harness) -> None:
@@ -162,14 +216,14 @@ async def test_render_request_neutralizes_control_characters(harness: Harness) -
 async def test_edit_config_without_users_is_rejected(harness: Harness, tmp_path: Path) -> None:
     reader = asyncio.StreamReader()
     said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
+    console = Console(harness.broker, reader, said.append, tty_fd=None, phrase=PHRASE)
     editor = tmp_path / "editor.sh"
     editor.write_text("#!/bin/sh\nprintf 'defaults: {approval: per-run}\\n' > \"$1\"\n")
     os.chmod(editor, stat.S_IRWXU)
     config_path = harness.data_dir / "config.yaml"
     before = config_path.read_text()
     reader.feed_data(f"edit config {editor}\n".encode())
-    reader.feed_data(PASSWORD_LINE)
+    reader.feed_data(PASSPHRASE_LINE)
     reader.feed_data(b"n\n")
     reader.feed_data(b"quit\n")
     await asyncio.wait_for(console.run(), timeout=10)
@@ -180,10 +234,10 @@ async def test_edit_config_without_users_is_rejected(harness: Harness, tmp_path:
 async def test_add_is_audited_even_when_reload_fails(harness: Harness) -> None:
     reader = asyncio.StreamReader()
     said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
+    console = Console(harness.broker, reader, said.append, tty_fd=None, phrase=PHRASE)
     (harness.data_dir / "presets.yaml").write_text("presets: {broken: {env: {X: NOPE}}}\n")
     reader.feed_data(b"add NEW_ONE\n")
-    reader.feed_data(PASSWORD_LINE)
+    reader.feed_data(PASSPHRASE_LINE)
     reader.feed_data(b"value-one\n")
     reader.feed_data(b"y\n")
     reader.feed_data(b"quit\n")
@@ -193,44 +247,26 @@ async def test_add_is_audited_even_when_reload_fails(harness: Harness) -> None:
     assert any(line.startswith("error:") and "not in the vault" in line for line in said)
 
 
-async def test_wrong_password_neither_approves_nor_changes_anything(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(console_module, "WRONG_PASSWORD_PAUSE_SECONDS", 0)
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
-    request = harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, None, "why", ("python", "x.py"), harness.provenance())
-    reader.feed_data(b"guess-one\n")
-    await console.handle_line(request.code)
+async def test_passphrase_change_reencrypts_the_vault_and_takes_effect(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(console_module, "WRONG_PASSPHRASE_PAUSE_SECONDS", 0)
+    console, reader, said = new_console(harness)
+    reader.feed_data(PASSPHRASE_LINE)
+    reader.feed_data(b"new-vault-passphrase\n")
+    reader.feed_data(b"new-vault-passphrase\n")
+    await console.handle_line("passphrase")
+    assert Vault.open(harness.data_dir / "vault.age", "new-vault-passphrase").names() == harness.broker.vault.names()
+    assert any("vault_passphrase_changed" in line for line in harness.echoed)
+    request = run_request(harness)
+    await console.handle_line(PASSPHRASE_LINE.decode())
     assert request.pending
-    reader.feed_data(b"guess-two\n")
-    await console.handle_line("add NEW_SECRET")
-    assert "NEW_SECRET" not in harness.broker.vault
-    assert sum("wrong_approval_password" in line for line in harness.echoed) == 2
-    assert not any("guess-" in line for line in said + harness.echoed)
-
-
-async def test_password_change_takes_effect_and_is_stored_hashed(harness: Harness) -> None:
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
-    reader.feed_data(PASSWORD_LINE)
-    reader.feed_data(b"new-approval-password\n")
-    reader.feed_data(b"new-approval-password\n")
-    await console.handle_line("password")
-    password_path = harness.data_dir / PASSWORD_FILE
-    stored = password_path.read_text()
-    assert verify_password("new-approval-password", stored) and "new-approval-password" not in stored
-    assert stat.S_IMODE(os.stat(password_path).st_mode) == 0o600
-    request = harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, None, "why", ("python", "x.py"), harness.provenance())
-    reader.feed_data(b"new-approval-password\n")
-    await console.handle_line(request.code)
+    await console.handle_line("new-vault-passphrase\n")
     assert request.decision.result().outcome == "approved"
 
 
 async def test_rm_refuses_a_secret_that_presets_use(harness: Harness) -> None:
     reader = asyncio.StreamReader()
     said: list[str] = []
-    console = Console(harness.broker, reader, said.append, tty_fd=None, password_hash=APPROVAL_PASSWORD_HASH)
+    console = Console(harness.broker, reader, said.append, tty_fd=None, phrase=PHRASE)
     reader.feed_data(b"rm TEAM_OPENROUTER_KEY\n")
     reader.feed_data(b"quit\n")
     await asyncio.wait_for(console.run(), timeout=5)

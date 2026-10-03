@@ -32,9 +32,9 @@
 <g text-anchor="middle" fill="#2C2C2A" font-size="12">
 <text x="130" y="118">1 envh session start</text>
 <text x="275" y="152">2 request via Unix socket</text>
-<text x="425" y="230">3 prompt + code</text>
-<text x="550" y="264">4 shows reason, code</text>
-<text x="550" y="298">5 code, then password</text>
+<text x="425" y="230">3 prompt</text>
+<text x="550" y="264">4 shows the request</text>
+<text x="550" y="298">5 your passphrase</text>
 <text x="425" y="332">6 decision</text>
 <text x="275" y="408">7 session id, expiry</text>
 <text x="130" y="442">8 approved, expires</text>

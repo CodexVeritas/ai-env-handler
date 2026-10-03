@@ -37,7 +37,6 @@ class Decision:
 class Request:
     id: int
     kind: RequestKind
-    code: str
     mapping: dict[str, str]
     preset: str | None
     requested: timedelta | None
@@ -104,13 +103,6 @@ class StateTable:
         self._next_id += 1
         return allocated
 
-    def _fresh_code(self) -> str:
-        taken = {request.code for request in self.pending()}
-        while True:
-            code = "".join(random_secrets.choice("0123456789") for _ in range(4))
-            if code not in taken:
-                return code
-
     def new_request(
         self,
         kind: RequestKind,
@@ -128,7 +120,6 @@ class StateTable:
         request = Request(
             id=self._allocate_id(),
             kind=kind,
-            code=self._fresh_code(),
             mapping=dict(mapping),
             preset=preset,
             requested=requested,
@@ -145,12 +136,6 @@ class StateTable:
 
     def pending(self) -> list[Request]:
         return [request for request in self.requests.values() if request.pending]
-
-    def find_by_code(self, code: str) -> Request | None:
-        for request in self.pending():
-            if request.code == code:
-                return request
-        return None
 
     def decide(self, request: Request, approved: bool, by: str) -> Decision:
         if request.decided:
