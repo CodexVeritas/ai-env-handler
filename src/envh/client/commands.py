@@ -72,7 +72,8 @@ def spawn(command: list[str], extra_env: dict[str, str]) -> int:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     for signum in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, forward)
-    return child.wait()
+    returncode = child.wait()
+    return 128 - returncode if returncode < 0 else returncode
 
 
 def processes_with_marker(marker: str) -> list[int]:

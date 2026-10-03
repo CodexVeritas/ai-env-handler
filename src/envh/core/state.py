@@ -10,6 +10,7 @@ from typing import Any, Callable, Literal
 
 DETACHED_GRACE = timedelta(minutes=10)
 HISTORY_RETENTION = timedelta(hours=1)
+MAX_PENDING_PER_USER = 20
 RequestKind = Literal["session", "run", "import", "preset"]
 Outcome = Literal["approved", "denied", "withdrawn"]
 
@@ -122,6 +123,8 @@ class StateTable:
         granted: timedelta | None = None,
         summary: dict[str, Any] | None = None,
     ) -> Request:
+        if sum(1 for request in self.pending() if request.provenance.uid == provenance.uid) >= MAX_PENDING_PER_USER:
+            raise StateError(f"uid {provenance.uid} already has {MAX_PENDING_PER_USER} requests waiting on the console; wait for those to be decided")
         request = Request(
             id=self._allocate_id(),
             kind=kind,

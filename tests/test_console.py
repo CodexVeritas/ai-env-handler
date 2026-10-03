@@ -169,14 +169,24 @@ async def test_add_is_audited_even_when_reload_fails(harness: Harness) -> None:
     reader = asyncio.StreamReader()
     said: list[str] = []
     console = Console(harness.broker, reader, said.append, tty_fd=None)
-    reader.feed_data(b"rm MINIBENCH_OPENROUTER_KEY\n")
-    reader.feed_data(b"y\n")
+    (harness.data_dir / "presets.yaml").write_text("presets: {broken: {env: {X: NOPE}}}\n")
     reader.feed_data(b"add NEW_ONE\n")
     reader.feed_data(b"value-one\n")
     reader.feed_data(b"y\n")
     reader.feed_data(b"quit\n")
     await asyncio.wait_for(console.run(), timeout=5)
-    assert any("presets no longer validate" in line for line in said)
     assert "NEW_ONE" in harness.broker.vault
     assert any("admin_add" in line and "NEW_ONE" in line for line in harness.echoed)
     assert any(line.startswith("error:") and "not in the vault" in line for line in said)
+
+
+async def test_rm_refuses_a_secret_that_presets_use(harness: Harness) -> None:
+    reader = asyncio.StreamReader()
+    said: list[str] = []
+    console = Console(harness.broker, reader, said.append, tty_fd=None)
+    reader.feed_data(b"rm MINIBENCH_OPENROUTER_KEY\n")
+    reader.feed_data(b"quit\n")
+    await asyncio.wait_for(console.run(), timeout=5)
+    assert "MINIBENCH_OPENROUTER_KEY" in harness.broker.vault
+    assert any(line.startswith("error:") and "used by presets minibench" in line for line in said)
+    assert not any("admin_rm" in line for line in harness.echoed)
