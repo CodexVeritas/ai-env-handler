@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from envh.scanner import looks_placeholder, scan_paths, scan_text
+from envh.tools.scanner import looks_placeholder, scan_paths, scan_text
 
 OPENAI = "sk-proj-" + "A1b2C3d4" * 6
 OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4

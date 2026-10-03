@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from envh.server.durations import MAX_SESSION, DurationError, format_duration, parse_duration
+from envh.core.durations import MAX_SESSION, DurationError, format_duration, parse_duration
 
 CONFIG_FILE = "config.yaml"
 PRESETS_FILE = "presets.yaml"

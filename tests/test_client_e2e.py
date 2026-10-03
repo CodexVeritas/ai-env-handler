@@ -62,12 +62,6 @@ async def test_denied_and_no_broker(control: Path, harness: Harness, tmp_path: P
     assert code == 3 and "broker not running" in err
 
 
-def test_client_and_importer_are_stdlib_only() -> None:
-    program = "import sys; sys.modules.update({name: None for name in ('yaml', 'pyrage', 'envh.server')}); import envh.client, envh.importer, envh.scanner; print('ok')"
-    result = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(ROOT / "src")})
-    assert result.stdout.strip() == "ok", result.stderr
-
-
 async def test_background_processes_are_terminated_after_the_run(control: Path, harness: Harness) -> None:
     sleeper = "import subprocess, sys; subprocess.Popen(['sleep', '1234.5'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); print('started')"
     task = asyncio.create_task(run_cli(control, "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", sleeper))

@@ -17,10 +17,10 @@ def main(argv: list[str] | None = None) -> int:
             from envh.server.init_cmd import main as init_main
 
             return init_main(rest)
-        from envh.server.install_cmd import main as install_main
+        from envh.install.command import main as install_main
 
         return install_main(command, rest)
-    from envh.client import main as client_main
+    from envh.client.commands import main as client_main
 
     return client_main(arguments)
 

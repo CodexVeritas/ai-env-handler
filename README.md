@@ -301,4 +301,15 @@ uv run envh --help
 
 Run a development broker as yourself, without installing: `uv run envh init --data-dir /tmp/envh-dev`, then in a terminal `uv run envh serve --data-dir /tmp/envh-dev --socket /tmp/envh-dev/ctl.sock`, and point clients at it with `--socket /tmp/envh-dev/ctl.sock` or `ENVH_SOCKET=/tmp/envh-dev/ctl.sock`. This gives none of the user-separation guarantees; it is for working on envh itself.
 
-Layout: `src/envh/client.py`, `src/envh/importer.py` and `src/envh/scanner.py` are standard-library only (a test enforces it). `src/envh/server/` holds the broker: `config.py` (policy files), `vault.py` (age encryption), `state.py` (requests, sessions, runs), `broker.py` (decisions and side effects), `control.py` (Unix-socket protocol), `console.py` (prompts and admin commands), `serve.py` (startup and hardening), `install_cmd.py` (system setup).
+Layout, in review order. The directory tree states the trust boundaries and a test (`tests/test_boundaries.py`) keeps the imports inside them:
+
+| Package | Side of the boundary | Contents |
+|---|---|---|
+| `src/envh/core/` | trusted logic, no sockets or terminals | `config.py` policy files, `durations.py`, `vault.py` (age encryption), `state.py` (requests, sessions, runs), `broker.py` (decisions and their side effects), `audit.py` |
+| `src/envh/server/` | the trusted process, runs as user `envh` | `control.py` (Unix-socket protocol, peer uid), `console.py` (prompts, codes, admin commands), `hardening.py`, `serve.py` (startup), `init_cmd.py` |
+| `src/envh/client/` | the untrusted side, runs as you or an agent, standard library only | `transport.py` (socket client), `commands.py` (`envh run`, `session`, `list`, …) |
+| `src/envh/tools/` | set-aside utilities, standard library only | `importer.py` (the `.env` wizard), `scanner.py` (`envh scan`); deleting the package removes two subcommands and nothing else |
+| `src/envh/install/` | root-only system setup | `command.py` (`envh install` / `uninstall`, the console helper and launcher) |
+| `src/envh/platform.py`, `common.py`, `cli.py` | shared | OS facts (uid, socket path, prctl, preflight), the value fingerprint, command dispatch |
+
+The security argument lives in `core/` and `server/`, about 1,200 lines; the rest cannot touch a secret except through the socket like any other client.

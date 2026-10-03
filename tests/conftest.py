@@ -10,12 +10,12 @@ from typing import Any, AsyncIterator
 
 import pytest
 
-from envh.server.audit import Audit
-from envh.server.broker import Broker
-from envh.server.config import load_config, render_config_template
+from envh.core.audit import Audit
+from envh.core.broker import Broker
+from envh.core.config import load_config, render_config_template
 from envh.server.control import ControlServer
-from envh.server.state import Provenance, StateTable
-from envh.server.vault import Vault
+from envh.core.state import Provenance, StateTable
+from envh.core.vault import Vault
 
 PASSPHRASE = "test-passphrase"
 

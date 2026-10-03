@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from envh.common import fingerprint
-from envh.server.audit import Audit
-from envh.server.config import (
+from envh.core.audit import Audit
+from envh.core.config import (
     PRESETS_FILE,
     SECRET_NAME,
     VAR_NAME,
@@ -20,9 +20,9 @@ from envh.server.config import (
     load_config,
     parse_presets,
 )
-from envh.server.durations import MAX_SESSION, format_duration
-from envh.server.state import Provenance, Request, Session, StateTable
-from envh.server.vault import Vault, write_private_file
+from envh.core.durations import MAX_SESSION, format_duration
+from envh.core.state import Provenance, Request, Session, StateTable
+from envh.core.vault import Vault, write_private_file
 
 
 class RequestError(ValueError):

@@ -2,9 +2,9 @@ from datetime import timedelta
 
 import pytest
 
-from envh.server.broker import RequestError, fingerprint
-from envh.server.config import ConfigError, load_config
-from envh.server.vault import Vault
+from envh.core.broker import RequestError, fingerprint
+from envh.core.config import ConfigError, load_config
+from envh.core.vault import Vault
 from tests.conftest import PASSPHRASE, Harness
 
 

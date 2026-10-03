@@ -10,8 +10,8 @@ import secrets
 from pathlib import Path
 
 from envh.platform import PlatformError, service_user_home
-from envh.server.config import CONFIG_FILE, PRESETS_FILE, PRESETS_TEMPLATE, render_config_template
-from envh.server.vault import VAULT_FILE, Vault, write_private_file
+from envh.core.config import CONFIG_FILE, PRESETS_FILE, PRESETS_TEMPLATE, render_config_template
+from envh.core.vault import VAULT_FILE, Vault, write_private_file
 
 PHRASE_FILE = "console-phrase"
 WORDS = (

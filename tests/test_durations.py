@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from envh.server.durations import DurationError, cap_session, format_duration, parse_duration
+from envh.core.durations import DurationError, cap_session, format_duration, parse_duration
 
 
 @pytest.mark.parametrize(

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from envh.common import fingerprint
-from envh.transport import ClientError, Connection, waiting_notice
+from envh.client.transport import ClientError, Connection, waiting_notice
 
 ASSIGNMENT = re.compile(r"^(?P<indent>\s*)(?P<comment>#\s*)?(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*)$")
 SECRET_WORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "AUTH", "CREDENTIAL", "API", "PRIVATE", "DSN")

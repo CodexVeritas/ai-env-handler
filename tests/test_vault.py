@@ -6,7 +6,7 @@ from pathlib import Path
 import pyrage.passphrase
 import pytest
 
-from envh.server.vault import Vault, VaultError, decrypt_secrets, encrypt_secrets
+from envh.core.vault import Vault, VaultError, decrypt_secrets, encrypt_secrets
 
 
 def test_round_trip(tmp_path: Path) -> None:

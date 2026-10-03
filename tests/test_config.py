@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from envh.server.config import (
+from envh.core.config import (
     render_config_template,
     PRESETS_TEMPLATE,
     ConfigError,

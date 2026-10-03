@@ -12,15 +12,15 @@ from datetime import datetime
 from pathlib import Path
 
 from envh.platform import socket_path as default_socket_path
-from envh.server.audit import AUDIT_FILE, Audit
-from envh.server.broker import Broker
-from envh.server.config import ConfigError, load_config
+from envh.core.audit import AUDIT_FILE, Audit
+from envh.core.broker import Broker
+from envh.core.config import ConfigError, load_config
 from envh.server.console import Console
 from envh.server.control import ControlServer
 from envh.server.hardening import HardeningError, acquire_instance_lock, assert_no_tiocsti, assert_terminal_is_ours, harden_process
 from envh.server.init_cmd import PHRASE_FILE, default_data_dir
-from envh.server.state import StateTable
-from envh.server.vault import VAULT_FILE, Vault, VaultError
+from envh.core.state import StateTable
+from envh.core.vault import VAULT_FILE, Vault, VaultError
 
 SWEEP_INTERVAL_SECONDS = 15
 

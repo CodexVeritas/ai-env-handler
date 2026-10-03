@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from envh.server.state import Provenance, StateError, StateTable
+from envh.core.state import Provenance, StateError, StateTable
 from tests.conftest import FakeClock
 
 PROVENANCE = Provenance(pid=1, uid=1000, cmdline="x")

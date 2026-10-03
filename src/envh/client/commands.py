@@ -13,10 +13,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from envh.importer import run_wizard
-from envh.scanner import main as scan_main
+from envh.tools.importer import run_wizard
+from envh.tools.scanner import main as scan_main
 from envh.platform import socket_path as default_socket_path
-from envh.transport import EXIT_USAGE, ClientError, Connection, waiting_notice
+from envh.client.transport import EXIT_USAGE, ClientError, Connection, waiting_notice
 
 SESSION_ENV_VAR = "ENVH_SESSION"
 RUN_MARKER_VAR = "ENVH_RUN_MARKER"

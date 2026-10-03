@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from envh.transport import ClientError
-from envh.importer import (
+from envh.client.transport import ClientError
+from envh.tools.importer import (
     build_plan,
     build_presets,
     discover,
