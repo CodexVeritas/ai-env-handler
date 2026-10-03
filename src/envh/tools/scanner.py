@@ -40,8 +40,9 @@ VALUE_PATTERNS: tuple[tuple[str, str], ...] = (
 VALUE_REGEX = re.compile("|".join(f"(?P<{name.replace('-', '_')}>{pattern})" for name, pattern in VALUE_PATTERNS))
 
 # Named assignments: NAME=value / NAME: value / "NAME": "value" where NAME looks like a secret and value looks random.
+# NAME starts only at the beginning of an identifier and its parts are bounded, which keeps the scan linear on long lines.
 ASSIGNMENT_REGEX = re.compile(
-    r"(?P<name>[A-Za-z][A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|APIKEY|ACCESS_KEY|CLIENT_ID|CLIENT_SECRET)[A-Za-z0-9_]*)"
+    r"(?<![A-Za-z0-9_])(?P<name>[A-Za-z_][A-Za-z0-9_]{0,64}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_KEY|APIKEY|ACCESS_KEY|CLIENT_ID|CLIENT_SECRET)[A-Za-z0-9_]{0,64})"
     r"[\"']?\s*[=:]\s*[\"']?(?P<value>[A-Za-z0-9_\-./+=]{16,})",
     re.IGNORECASE,
 )
@@ -98,8 +99,6 @@ def redact(value: str) -> tuple[str, str]:
 
 def scan_text(path: Path, text: str) -> Iterator[Hit]:
     for line_number, line in enumerate(text.splitlines(), start=1):
-        if len(line) > 200_000:
-            line = line[:200_000]
         seen_spans: list[tuple[int, int]] = []
         for match in VALUE_REGEX.finditer(line):
             value = match.group(0)
@@ -126,12 +125,12 @@ def read_if_text(path: Path) -> str | None:
         return (head + handle.read()).decode("utf-8", errors="replace")
 
 
-def iter_files(roots: list[Path], max_bytes: int) -> Iterator[Path]:
+def iter_files(roots: list[Path], max_bytes: int, unreadable: list[Path]) -> Iterator[Path]:
     for root in roots:
         if root.is_file():
             yield root
             continue
-        for current, directories, files in os.walk(root, followlinks=False):
+        for current, directories, files in os.walk(root, followlinks=False, onerror=lambda error: unreadable.append(Path(error.filename))):
             current_path = Path(current)
             kept: list[str] = []
             for directory in directories:
@@ -162,7 +161,7 @@ def scan_paths(roots: list[Path], max_bytes: int) -> tuple[list[Hit], int, list[
     hits: list[Hit] = []
     scanned = 0
     unreadable: list[Path] = []
-    for path in iter_files(roots, max_bytes):
+    for path in iter_files(roots, max_bytes, unreadable):
         try:
             text = read_if_text(path)
         except OSError:
@@ -196,7 +195,7 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], say: Callable[
             for path in sorted(paths):
                 say(f"      {path}")
     if unreadable:
-        say(f"\n{len(unreadable)} files could not be read (permissions); run as the owning user to check them")
+        say(f"\n{len(unreadable)} files or directories could not be read (permissions); run as the owning user to check them")
     say("")
     for line in NOT_SCANNED_NOTE:
         say(line)

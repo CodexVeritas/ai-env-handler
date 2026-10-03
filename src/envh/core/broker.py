@@ -49,6 +49,9 @@ class Broker:
             preset=request.preset,
             vars=sorted(request.mapping),
         )
+        self._show(request)
+
+    def _show(self, request: Request) -> None:
         for listener in self.request_listeners:
             listener(request)
 
@@ -139,9 +142,7 @@ class Broker:
 
     def resolve_run_in_session(self, session_id: str, items: list[str], uid: int) -> tuple[Session, dict[str, str]]:
         session = self.owned_session(session_id, uid)
-        if not items:
-            return session, dict(session.mapping)
-        mapping: dict[str, str] = {}
+        mapping: dict[str, str] = {} if items else dict(session.mapping)
         for item in items:
             var, _, secret = item.partition("=")
             if var not in session.mapping:
@@ -149,6 +150,10 @@ class Broker:
             if secret and secret != session.mapping[var]:
                 raise RequestError(f"{var} maps to {session.mapping[var]} in session {session_id[:8]}, not {secret}")
             mapping[var] = session.mapping[var]
+        preset = self.config.presets.get(session.preset) if session.preset else None
+        _, per_run = self.split_per_run(mapping, preset)
+        if per_run:
+            raise RequestError(f"approval is now per-run for {', '.join(sorted(per_run))}; run without --session")
         return session, mapping
 
     def request_run(
@@ -224,9 +229,6 @@ class Broker:
             parse_presets(dump_presets(presets), known_after)
         except ConfigError as error:
             raise RequestError(str(error)) from error
-        added = sorted(name for name in secrets if name not in self.vault)
-        changed = sorted(name for name in secrets if name in self.vault and self.vault.get(name) != secrets[name])
-        unchanged = sorted(name for name in secrets if name in self.vault and self.vault.get(name) == secrets[name])
         merged = self.merged_presets(presets)
         request = self.state.new_request(
             kind="import",
@@ -234,9 +236,7 @@ class Broker:
             provenance=provenance,
             reason=reason,
             summary={
-                "added": added,
-                "changed": changed,
-                "unchanged": unchanged,
+                **self.vault_changes(secrets),
                 "fingerprints": {name: fingerprint(value) for name, value in secrets.items()},
                 "secrets": secrets,
                 "presets": sorted(presets),
@@ -248,14 +248,28 @@ class Broker:
         self._announce(request)
         return request
 
+    def vault_changes(self, secrets: dict[str, str]) -> dict[str, list[str]]:
+        return {
+            "added": sorted(name for name in secrets if name not in self.vault),
+            "changed": sorted(name for name in secrets if name in self.vault and self.vault.get(name) != secrets[name]),
+            "unchanged": sorted(name for name in secrets if name in self.vault and self.vault.get(name) == secrets[name]),
+        }
+
+    def confirm_vault_changes(self, request: Request) -> None:
+        """Refuses an import whose added/changed split differs from what the approver saw, so a secret shown as added is never silently overwritten."""
+        current = self.vault_changes(request.summary["secrets"])
+        if any(request.summary[label] != names for label, names in current.items()):
+            request.summary.update(current)
+            self._show(request)
+            raise RequestError(f"the vault changed since request #{request.id} was shown; it is shown again with the current changes, type its code again to approve that")
+
     def merged_for_approval(self, request: Request, known_secrets: set[str]) -> dict[str, Any]:
         """The presets to write for this request, recomputed against the current files; refuses when they differ from what the approver saw."""
         merged = self.merged_presets(request.summary["additions"])
         if merged != request.summary["merged"]:
             request.summary["merged"] = merged
             request.summary["diff"] = self.presets_diff(merged)
-            for listener in self.request_listeners:
-                listener(request)
+            self._show(request)
             raise RequestError(f"presets changed since request #{request.id} was shown; it is shown again with the current diff, type its code again to approve that")
         try:
             parse_presets(dump_presets(merged), known_secrets)
@@ -272,6 +286,7 @@ class Broker:
             self.write_presets(self.merged_for_approval(request, set(self.vault.names())))
             self.audit.event("presets_updated", presets=request.summary["presets"], by=by)
         elif request.kind == "import":
+            self.confirm_vault_changes(request)
             merged = self.merged_for_approval(request, set(self.vault.names()) | set(request.summary["secrets"]))
             for name, value in request.summary["secrets"].items():
                 self.vault.set(name, value)

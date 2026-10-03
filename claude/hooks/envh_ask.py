@@ -11,6 +11,7 @@ Install: see settings.snippet.json.
 
 import json
 import re
+import shlex
 import sys
 
 WORD_START = r"(?<![\w.-])(?:[\w./-]*/)?"
@@ -39,6 +40,14 @@ def segment(rest: str) -> str:
     return own.split(" -- ", 1)[0]
 
 
+def has_session_flag(arguments: str) -> bool:
+    try:
+        tokens = shlex.split(arguments)
+    except ValueError:
+        return False
+    return any(token == "--session" or token.startswith("--session=") for token in tokens)
+
+
 def classify_invocation(rest: str, whole_command: str) -> tuple[str, str] | None:
     for form in SAFE_FORMS:
         if form.match(rest):
@@ -47,7 +56,7 @@ def classify_invocation(rest: str, whole_command: str) -> tuple[str, str] | None
         if form.match(rest):
             return "ask", reason
     if RUN_FORM.match(rest):
-        if "--session" in segment(rest) or SESSION_PREFIX.search(whole_command):
+        if has_session_flag(segment(rest)) or SESSION_PREFIX.search(whole_command):
             return None
         return "ask", "envh: running with secrets outside a session prompts on the envh console for every run; approve here first"
     return "ask", "envh: unrecognized way of invoking envh; approve only if you understand exactly what it does"

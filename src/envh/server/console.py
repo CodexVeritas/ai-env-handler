@@ -222,16 +222,13 @@ class Console:
             raise VaultError(f"secret {name} is not in the vault")
         users = [preset.name for preset in self.broker.config.presets.values() if any(entry.secret == name for entry in preset.env.values())]
         if users:
-            self.say(f"   used by presets: {', '.join(users)} (they will fail validation until updated)")
+            raise RequestError(f"{name} is used by presets {', '.join(users)}; change or remove them first (edit presets, preset rm NAME), since presets naming a missing secret stop the broker from starting")
         if not await self.confirm(f"remove {name}?"):
             return
         self.broker.vault.remove(name)
         self.broker.vault.save()
         self.broker.audit.event("admin_rm", secret=name)
-        try:
-            self.broker.reload()
-        except ConfigError as error:
-            self.say(f"warning: presets no longer validate: {error}")
+        self.broker.reload()
 
     async def _remove_preset(self, name: str) -> None:
         if name not in self.broker.config.presets_raw:

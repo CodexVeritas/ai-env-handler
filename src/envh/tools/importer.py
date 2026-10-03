@@ -31,6 +31,7 @@ class Assignment:
     active: bool
     line_index: int
     group: str | None
+    problem: str | None = None
 
     @property
     def group_slug(self) -> str | None:
@@ -100,6 +101,20 @@ def unquote(value: str) -> str:
     return stripped
 
 
+def quoting_problem(value: str) -> str | None:
+    """Why `unquote` cannot return this value exactly as a dotenv loader would, if it cannot."""
+    stripped = value.strip()
+    quote = stripped[:1]
+    if quote not in ("'", '"'):
+        return None
+    closing = stripped.find(quote, 1)
+    if closing < 0:
+        return "has a quoted value that does not close on its line (multi-line values are not supported)"
+    if quote == '"' and "\\" in stripped[1:closing]:
+        return "uses backslash escapes inside double quotes, which the importer does not interpret"
+    return None
+
+
 def parse_env_text(path: Path, text: str) -> ParsedFile:
     lines = text.splitlines()
     assignments: list[Assignment] = []
@@ -110,7 +125,7 @@ def parse_env_text(path: Path, text: str) -> ParsedFile:
         if match:
             value = unquote(match.group("value"))
             if value:
-                assignments.append(Assignment(match.group("name"), value, match.group("comment") is None, index, current_group))
+                assignments.append(Assignment(match.group("name"), value, match.group("comment") is None, index, current_group, quoting_problem(match.group("value"))))
             continue
         stripped = line.strip()
         if stripped.startswith("#") and stripped.lstrip("# ").strip() and ENVH_NOTE not in stripped:
@@ -300,6 +315,10 @@ def review_names(decisions: list[SecretDecision], ask: Ask, say: Callable[[str],
             new_name = renames.get(decision.secret_name)
             if new_name:
                 decision.secret_name = new_name
+        unusable = sorted({decision.secret_name for decision in decisions if not SECRET_NAME.match(decision.secret_name)})
+        if unusable:
+            say(f"  these cannot be vault names (UPPER_CASE identifiers starting with a letter); rename them: {', '.join(unusable)}")
+            continue
         return
 
 
@@ -329,6 +348,9 @@ def review_presets(presets: dict[str, dict[str, Any]], files: list[ParsedFile], 
 def build_plan(files: list[ParsedFile], decisions: list[SecretDecision], presets: dict[str, dict[str, Any]]) -> ImportPlan:
     plan = ImportPlan(presets=presets)
     for decision in decisions:
+        if decision.assignment.problem:
+            location = f"{decision.file.path}:{decision.assignment.line_index + 1}"
+            raise ClientError(f"{location}: {decision.assignment.name} {decision.assignment.problem}; move it by hand or mark it config, then import again", 2)
         existing = plan.secrets.get(decision.secret_name)
         if existing is not None and existing != decision.assignment.value:
             raise ClientError(f"two different values would both be stored as {decision.secret_name}; rename one of them", 2)

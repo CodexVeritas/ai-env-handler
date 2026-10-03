@@ -84,3 +84,11 @@ async def test_keep_background_leaves_processes_alone(control: Path, harness: Ha
     for pid in found.stdout.split():
         subprocess.run(["kill", pid])
     assert any("run_end" in line and "lingering_terminated=0" in line for line in harness.echoed)
+
+
+async def test_signal_killed_command_exits_like_a_shell(control: Path, harness: Harness) -> None:
+    suicide = "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"
+    task = asyncio.create_task(run_cli(control, "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", suicide))
+    await approve_next(harness)
+    code, _, err = await asyncio.wait_for(task, timeout=20)
+    assert code == 128 + 15, err

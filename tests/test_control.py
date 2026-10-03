@@ -2,6 +2,7 @@ import asyncio
 import os
 from pathlib import Path
 
+from envh.server.control import ControlServer
 from tests.conftest import Client, Harness, approve_next
 
 
@@ -142,3 +143,22 @@ async def test_preset_with_override_mismatch_is_rejected(control: Path, harness:
         await client.send(op="session_start", preset="minibench", minutes=5, **{"with": ["OPENAI_API_KEY=OPENAI_API_KEY"]})
         assert (await client.recv())["pending"] is True
         assert harness.broker.state.pending()[0].mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
+
+
+async def test_non_string_reason_is_refused_before_any_request_exists(control: Path, harness: Harness) -> None:
+    async with Client(control) as client:
+        await client.send(op="session_start", **{"with": ["OPENAI_API_KEY"]}, minutes=5, reason=["x"])
+        reply = await client.recv()
+        assert reply["ok"] is False and "reason must be a string" in reply["error"]
+    assert harness.broker.state.pending() == []
+
+
+async def test_close_hangs_up_on_waiting_clients(harness: Harness, tmp_path: Path) -> None:
+    server = ControlServer(harness.broker, tmp_path / "closing.sock")
+    await server.start()
+    async with Client(tmp_path / "closing.sock") as client:
+        await client.send(op="run", **{"with": ["OPENAI_API_KEY"]})
+        assert (await client.recv())["pending"] is True
+        await asyncio.wait_for(server.close(), timeout=5)
+        assert client.reader is not None and await client.reader.readline() == b""
+    assert harness.broker.state.pending() == []

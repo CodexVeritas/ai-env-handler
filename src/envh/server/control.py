@@ -26,6 +26,7 @@ class ControlServer:
         self.socket_path = socket_path
         self.socket_mode = socket_mode
         self._server: asyncio.AbstractServer | None = None
+        self._open_writers: set[asyncio.StreamWriter] = set()
 
     async def start(self) -> None:
         if len(str(self.socket_path).encode()) > MAX_SOCKET_PATH:
@@ -36,12 +37,16 @@ class ControlServer:
         os.chmod(self.socket_path, self.socket_mode)
 
     async def close(self) -> None:
+        """Stop listening and hang up on every client, since wait_closed() waits for connections that only end when the client leaves."""
         if self._server is not None:
             self._server.close()
+            for writer in list(self._open_writers):
+                writer.close()
             await self._server.wait_closed()
         self.socket_path.unlink(missing_ok=True)
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._open_writers.add(writer)
         connection = Connection(self.broker, reader, writer)
         try:
             await connection.serve()
@@ -53,6 +58,7 @@ class ControlServer:
             self.broker.audit.event("error", where="control", detail=traceback.format_exc(limit=5))
             await connection.send({"ok": False, "error": "internal error in the broker; see its console"})
         finally:
+            self._open_writers.discard(writer)
             writer.close()
             try:
                 await writer.wait_closed()
@@ -120,6 +126,21 @@ class Connection:
     def _command(message: dict[str, Any]) -> tuple[str, ...]:
         return tuple(str(part) for part in message.get("command") or ())
 
+    @staticmethod
+    def _reason(message: dict[str, Any]) -> str | None:
+        reason = message.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            raise RequestError(f"reason must be a string, got {type(reason).__name__}")
+        return reason
+
+    async def _decided_or_withdrawn(self, request: Request) -> bool:
+        """Wait for the decision; if the client goes away first, withdraw the request and return False."""
+        if await self._wait_decision(request):
+            return True
+        self.broker.state.withdraw(request)
+        self.broker.audit.event("withdrawn", id=request.id)
+        return False
+
     async def _wait_decision(self, request: Request) -> bool:
         """Wait until the request is decided or the client goes away. Returns True if decided."""
         decision = asyncio.ensure_future(asyncio.shield(request.decision))
@@ -151,7 +172,7 @@ class Connection:
             mapping=mapping,
             preset=preset,
             minutes=int(message.get("minutes") or 0),
-            reason=message.get("reason"),
+            reason=self._reason(message),
             command=self._command(message),
             provenance=self.provenance,
         )
@@ -181,7 +202,7 @@ class Connection:
         await self.send({"ok": True, "session_id": session.id})
 
     async def op_run(self, message: dict[str, Any]) -> None:
-        reason = message.get("reason")
+        reason = self._reason(message)
         command = self._command(message)
         session_id = message.get("session")
         if session_id:
@@ -192,9 +213,7 @@ class Connection:
         mapping, preset = self._mapping(message)
         request = self.broker.request_run(mapping, preset, reason, command, self.provenance)
         await self.send({"ok": True, "request_id": request.id, "pending": True})
-        if not await self._wait_decision(request):
-            self.broker.state.withdraw(request)
-            self.broker.audit.event("withdrawn", id=request.id)
+        if not await self._decided_or_withdrawn(request):
             return
         if request.decision.result().outcome != "approved":
             await self._reply_decision(request)
@@ -243,11 +262,9 @@ class Connection:
         await self.send({"ok": True, "presets": sorted(raw)})
 
     async def op_preset_propose(self, message: dict[str, Any]) -> None:
-        request = self.broker.request_preset(str(message.get("yaml") or ""), message.get("reason"), self.provenance)
+        request = self.broker.request_preset(str(message.get("yaml") or ""), self._reason(message), self.provenance)
         await self.send({"ok": True, "request_id": request.id, "pending": True, "presets": request.summary["presets"]})
-        if not await self._wait_decision(request):
-            self.broker.state.withdraw(request)
-            self.broker.audit.event("withdrawn", id=request.id)
+        if not await self._decided_or_withdrawn(request):
             return
         await self._reply_decision(request)
 
@@ -256,11 +273,9 @@ class Connection:
         presets = message.get("presets") or {}
         if not isinstance(secrets, dict) or not isinstance(presets, dict):
             raise RequestError("import expects 'secrets' and 'presets' objects")
-        request = self.broker.request_import(secrets, presets, message.get("reason"), self.provenance)
+        request = self.broker.request_import(secrets, presets, self._reason(message), self.provenance)
         await self.send({"ok": True, "request_id": request.id, "pending": True})
-        if not await self._wait_decision(request):
-            self.broker.state.withdraw(request)
-            self.broker.audit.event("withdrawn", id=request.id)
+        if not await self._decided_or_withdrawn(request):
             return
         if request.decision.result().outcome == "approved":
             request.result = {"added": request.summary["added"], "changed": request.summary["changed"], "presets": request.summary["presets"]}

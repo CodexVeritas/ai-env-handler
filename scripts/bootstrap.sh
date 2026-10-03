@@ -32,8 +32,8 @@ else
     prefix=/opt/envh
     echo "creating /opt/envh with Python 3.12"
 fi
-"$uv_bin" venv "$prefix" --python 3.12 --quiet
-"$uv_bin" pip install --python "$prefix/bin/python" --quiet "$staging"
+echo "installing envh with the dependency versions pinned in uv.lock"
+UV_PROJECT_ENVIRONMENT="$prefix" "$uv_bin" sync --project "$staging" --frozen --no-dev --no-editable --python 3.12 --quiet
 if [ "$dry_run" -eq 0 ]; then
     chown -R root:root /opt/envh
     chmod -R go-w /opt/envh
