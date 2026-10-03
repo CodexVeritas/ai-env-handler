@@ -194,6 +194,7 @@ class Connection:
         run = self.broker.state.start_run(mapping, session_id, reason, command, self.provenance)
         self.broker.audit.event("run_start", run=run.id, vars=sorted(mapping), session=session_id, pid=self.provenance.pid, command=" ".join(command))
         exit_code: int | None = None
+        lingering_terminated: int | None = None
         try:
             await self.send({"ok": True, "run_id": run.id, "env": self.broker.env_for(mapping)})
             while True:
@@ -206,10 +207,16 @@ class Connection:
                     continue
                 if isinstance(note, dict) and note.get("op") == "run_done":
                     exit_code = note.get("exit_code")
+                    lingering_terminated = note.get("lingering_terminated")
                     break
         finally:
             self.broker.state.end_run(run.id)
-            self.broker.audit.event("run_end", run=run.id, exit_code=exit_code if exit_code is not None else "client gone")
+            self.broker.audit.event(
+                "run_end",
+                run=run.id,
+                exit_code=exit_code if exit_code is not None else "client gone",
+                lingering_terminated=lingering_terminated if lingering_terminated is not None else "unknown",
+            )
 
     async def op_list(self, message: dict[str, Any]) -> None:
         await self.send({"ok": True, **self.broker.list_payload()})

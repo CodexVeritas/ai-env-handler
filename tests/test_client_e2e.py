@@ -66,3 +66,27 @@ def test_client_and_importer_are_stdlib_only() -> None:
     program = "import sys; sys.modules.update({name: None for name in ('yaml', 'pyrage', 'envh.server')}); import envh.client, envh.importer, envh.scanner; print('ok')"
     result = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(ROOT / "src")})
     assert result.stdout.strip() == "ok", result.stderr
+
+
+async def test_background_processes_are_terminated_after_the_run(control: Path, harness: Harness) -> None:
+    sleeper = "import subprocess, sys; subprocess.Popen(['sleep', '1234.5'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); print('started')"
+    task = asyncio.create_task(run_cli(control, "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", sleeper))
+    await approve_next(harness)
+    code, out, err = await asyncio.wait_for(task, timeout=20)
+    assert code == 0 and out.strip() == "started", err
+    assert "terminated 1 process" in err
+    assert subprocess.run(["pgrep", "-f", "sleep 1234.5"], capture_output=True).returncode == 1
+    assert any("run_end" in line and "lingering_terminated=1" in line for line in harness.echoed)
+
+
+async def test_keep_background_leaves_processes_alone(control: Path, harness: Harness) -> None:
+    sleeper = "import subprocess; subprocess.Popen(['sleep', '2345.6'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); print('started')"
+    task = asyncio.create_task(run_cli(control, "run", "--keep-background", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", sleeper))
+    await approve_next(harness)
+    code, out, err = await asyncio.wait_for(task, timeout=20)
+    assert code == 0 and "terminated" not in err
+    found = subprocess.run(["pgrep", "-f", "sleep 2345.6"], capture_output=True, text=True)
+    assert found.returncode == 0
+    for pid in found.stdout.split():
+        subprocess.run(["kill", pid])
+    assert any("run_end" in line and "lingering_terminated=0" in line for line in harness.echoed)

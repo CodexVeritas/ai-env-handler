@@ -23,6 +23,11 @@ envh run --session 3f9c... --reason "fetch" \
 
 ## How a request flows, and where the boundaries are
 
+![How an envh request flows: a session approval and a run, with the two trust zones](docs/request-flow.svg)
+
+<details>
+<summary>Diagram source (Mermaid), for editing</summary>
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -63,11 +68,14 @@ sequenceDiagram
     Broker->>Vault: append run_end to the audit log
 ```
 
+</details>
+
 What each line means for you:
 
-- **Step 1 and 13 are commands you (or an agent) type in an ordinary terminal.** The `envh` command is just a client; it holds no secrets and has no special rights.
-- **Steps 5 to 8 happen in a different window**: the console that `sudo envh-console` opened. It is where every approval happens, and it is the only place.
-- **Step 12 and 17 are what the client prints back.** Values are never printed; they go straight into the environment of the script you named.
+- **Steps 1 and 9 are commands you (or an agent) type in an ordinary terminal.** The `envh` command is just a client; it holds no secrets and has no special rights.
+- **Steps 3 to 6 happen in a different window**: the console that `sudo envh-console` opened. It is where every approval happens, and it is the only place.
+- **Steps 8 and 12 are what the client does on your side.** It prints the session id; it never prints a value. Values go straight into the environment of the script you named, and nowhere else: not into your shell, not into a file.
+- **After step 13 the values are gone.** They lived only in the environment of the script and of processes it started. When the script exits, `envh run` terminates any of those processes still running (it tags the run and finds them by that tag), so nothing that received the values survives the run; the audit log records how many were stopped. Pass `--keep-background` if a run is meant to leave a daemon behind, and treat that daemon as holding the values. What envh cannot undo is a copy the script itself made, for example into a log file.
 
 The boundaries, in words:
 
@@ -76,7 +84,7 @@ The boundaries, in words:
 | **Red box vs green box** | Linux user separation. The vault, policy files and audit log are owned by `envh` with mode 0600; the broker is a different user, non-dumpable, with no secrets in its environment. | You, your scripts, and any agent running as you cannot read a secret, a policy or the log, and cannot change what is allowed. |
 | **The socket** | A Unix socket in `/run/envh`, a directory only `envh` can write. | Anyone running as you can *ask*. Asking never grants anything; it only puts a prompt on the console. |
 | **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal device chowned to `envh`, approval by a random code shown only there. | No process running as you can inject the keystroke that approves. A printed fake prompt fails because its code will not match. |
-| **Not a boundary** | | After step 18 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, a same-user process with display access can type and read the screen; see Habits. |
+| **Not a boundary** | | During step 12 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, a same-user process with display access can type and read the screen; see Habits. |
 
 ## What it protects, and what it does not
 
@@ -199,7 +207,7 @@ envh session end <id>
 - `envh run` without a session prompts on the console for that one run.
 - `--with` narrows a run to some of the session's variables, or maps variables ad hoc: `--with OPENAI_API_KEY,OPENROUTER_API_KEY=MINIBENCH_OPENROUTER_KEY`.
 - `--reason` is optional but the console shows its absence loudly. Write what you would want to read before approving.
-- A running command is never killed when its session expires; expiry only stops new approvals.
+- A running command is never killed when its session expires; expiry only stops new approvals. When the command itself exits, any process it left running is terminated so the values do not outlive the run (`--keep-background` to opt out).
 - `envh status` shows pending requests, active runs and live sessions as JSON.
 
 Exit codes: 3 broker not running, 4 denied, 5 request error (unknown preset, variable not in session), otherwise the command's own exit code.
@@ -270,7 +278,7 @@ Agents can draft presets: they write a YAML file, run `envh preset validate draf
 
 ## What envh does not do
 
-- **It does not hide a value from the command that receives it.** Values are visible to that process, everything it imports, and every other process running as you for the duration of the run. envh cannot revoke a value once delivered, and a session expiring does not stop a running command.
+- **It does not hide a value from the command that receives it.** Values are visible to that process, everything it imports, and every other process running as you for the duration of the run. envh cannot revoke a value once delivered, cannot undo a copy the command made (a log line, a file, a cache), and a session expiring does not stop a running command. It does end the run cleanly: processes the command left behind are terminated when it exits.
 - **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent, which is a separate project. On the host, your agent's own permission rules and classifier are the only control over what else it reads.
 - **A session id is a bearer capability.** Anything running as you that obtains it, for example from a process environment, can use it until it expires. Keep sessions short and specific.
 - **Reasons and provenance are claims.** The `--reason` text and the pid and command line shown in prompts come from the requester and help you decide; they are not verified.

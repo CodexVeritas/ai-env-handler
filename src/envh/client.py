@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,8 @@ from envh.platform import socket_path as default_socket_path
 from envh.transport import EXIT_USAGE, ClientError, Connection, waiting_notice
 
 SESSION_ENV_VAR = "ENVH_SESSION"
+RUN_MARKER_VAR = "ENVH_RUN_MARKER"
+LINGER_GRACE_SECONDS = 2.0
 
 def parse_with(values: list[str] | None) -> list[str]:
     items: list[str] = []
@@ -46,9 +50,13 @@ def cmd_run(args: argparse.Namespace, sock: Path) -> int:
             reply = conn.recv_ok()
         env = reply["env"]
         print(f"envh: run #{reply['run_id']} with {', '.join(sorted(env))}", file=sys.stderr, flush=True)
-        exit_code = spawn(command, env)
+        marker = secrets.token_hex(16)
+        exit_code = spawn(command, {**env, RUN_MARKER_VAR: marker})
+        lingering = [] if args.keep_background else terminate_lingering(marker)
+        if lingering:
+            print(f"envh: terminated {len(lingering)} process(es) the run left behind that still held the values: pids {', '.join(map(str, lingering))}", file=sys.stderr)
         try:
-            conn.send(op="run_done", exit_code=exit_code)
+            conn.send(op="run_done", exit_code=exit_code, lingering_terminated=len(lingering))
         except OSError:
             print("envh: the broker went away during the run; the run is recorded as ended by disconnect", file=sys.stderr)
     return exit_code
@@ -70,6 +78,42 @@ def spawn(command: list[str], extra_env: dict[str, str]) -> int:
     for signum in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, forward)
     return child.wait()
+
+
+def processes_with_marker(marker: str) -> list[int]:
+    needle = f"{RUN_MARKER_VAR}={marker}".encode()
+    found: list[int] = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == os.getpid():
+            continue
+        try:
+            environment = Path(f"/proc/{entry}/environ").read_bytes()
+        except OSError:
+            continue
+        if needle in environment.split(b"\0"):
+            found.append(int(entry))
+    return found
+
+
+def terminate_lingering(marker: str) -> list[int]:
+    """Stop every process from this run that is still alive after the command exited, so nothing keeps the values."""
+    lingering = processes_with_marker(marker)
+    if not lingering:
+        return []
+    for pid in lingering:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + LINGER_GRACE_SECONDS
+    while time.monotonic() < deadline and processes_with_marker(marker):
+        time.sleep(0.05)
+    for pid in processes_with_marker(marker):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    return lingering
 
 
 def cmd_session_start(args: argparse.Namespace, sock: Path) -> int:
@@ -191,6 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--preset")
     run.add_argument("--with", dest="with_", action="append", metavar="VAR[=SECRET],...")
     run.add_argument("--reason", help="why you need these secrets; shown to the approver")
+    run.add_argument("--keep-background", action="store_true", help="do not terminate processes the command leaves running (they keep the values)")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=cmd_run)
 
