@@ -1,3 +1,5 @@
+import getpass
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -11,14 +13,12 @@ from envh.core.config import (
     dump_presets,
     load_config,
     parse_config,
+    parse_config_for_broker,
     parse_presets,
 )
 
 
 def test_template_parses_with_defaults() -> None:
-    import getpass
-    import os
-
     defaults, policies, users, uids = parse_config(render_config_template(getpass.getuser()))
     assert users == (getpass.getuser(),) and uids == frozenset({os.getuid()})
     assert defaults.approval == "session"
@@ -112,8 +112,6 @@ def test_load_requires_users(tmp_path: Path) -> None:
 
 
 def test_policy_resolution(tmp_path: Path) -> None:
-    import getpass
-
     (tmp_path / "config.yaml").write_text(f"users: [{getpass.getuser()}]\ndefaults: {{approval: session, max_session: 1h}}\nsecrets: {{DB: {{approval: per-run}}}}\n")
     (tmp_path / "presets.yaml").write_text("presets: {p: {env: {DATABASE_URL: DB, KEY: {secret: KEY, approval: per-run}}}}\n")
     config = load_config(tmp_path, {"DB", "KEY"})
@@ -134,3 +132,18 @@ def test_dump_presets_round_trip() -> None:
     presets, _ = parse_presets(dump_presets(raw), {"A"})
     assert presets["p"].max_session == timedelta(hours=2)
     assert parse_presets(PRESETS_TEMPLATE, set()) == ({}, {})
+
+
+@pytest.mark.parametrize("text", ["presets: {bad: [", "defaults: {approval: session"])
+def test_yaml_syntax_errors_are_config_errors(text: str) -> None:
+    with pytest.raises(ConfigError, match="not valid YAML"):
+        if text.startswith("presets"):
+            parse_presets(text, None)
+        else:
+            parse_config(text)
+
+
+def test_parse_config_for_broker_requires_users() -> None:
+    with pytest.raises(ConfigError, match="users is empty"):
+        parse_config_for_broker("defaults: {approval: session}\n")
+    assert parse_config_for_broker(render_config_template(getpass.getuser()))[3] == frozenset({os.getuid()})

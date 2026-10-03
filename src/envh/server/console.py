@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
-from envh.common import fingerprint
+from envh.common import fingerprint, printable
 from envh.core.broker import Broker, RequestError
-from envh.core.config import CONFIG_FILE, PRESETS_FILE, SECRET_NAME, ConfigError, parse_config, parse_presets
+from envh.core.config import CONFIG_FILE, PRESETS_FILE, SECRET_NAME, ConfigError, parse_config_for_broker, parse_presets
 from envh.core.durations import format_duration
 from envh.core.state import Request, StateError
 from envh.core.vault import VaultError, write_private_file
@@ -57,7 +57,7 @@ def parse_line(text: str) -> ParsedLine:
 
 
 def render_request(request: Request, now: datetime) -> list[str]:
-    reason = f'"{request.reason}"' if request.reason else "(no reason given)   <-- ask why before approving"
+    reason = f'"{printable(request.reason)}"' if request.reason else "(no reason given)   <-- ask why before approving"
     header = f"{BELL}[{now:%H:%M:%S}] {request.kind.upper()} REQUEST #{request.id}   code {request.code}   pid {request.provenance.pid}  uid {request.provenance.uid}"
     lines = [header, f"   from:     {login_name(request.provenance.uid)}", f"   reason:   {reason}"]
     if request.kind == "session":
@@ -74,20 +74,20 @@ def render_request(request: Request, now: datetime) -> list[str]:
         lines.extend(f"   {var:<28} <- {secret}   HANDOUT: value visible to the process" for var, secret in sorted(request.mapping.items()))
     elif request.kind == "preset":
         lines.append(f"   presets:  {', '.join(request.summary.get('presets', []))}")
-        lines.extend("   " + diff_line for diff_line in request.summary.get("diff", "").rstrip().splitlines())
+        lines.extend("   " + printable(diff_line) for diff_line in request.summary.get("diff", "").rstrip().splitlines())
     elif request.kind == "import":
         fingerprints = request.summary.get("fingerprints", {})
         for label in ("added", "changed", "unchanged"):
             names = request.summary.get(label) or []
             for name in names:
-                lines.append(f"   {label:<9} {name:<32} {fingerprints.get(name, '')}")
+                lines.append(f"   {label:<9} {name:<32} {printable(fingerprints.get(name, ''))}")
         presets = request.summary.get("presets") or []
         if presets:
             lines.append(f"   presets:  {', '.join(presets)}")
-            lines.extend("   " + diff_line for diff_line in request.summary.get("diff", "").rstrip().splitlines())
+            lines.extend("   " + printable(diff_line) for diff_line in request.summary.get("diff", "").rstrip().splitlines())
     if request.command:
-        lines.append(f"   claims:   {' '.join(request.command)}")
-    lines.append(f"   provenance: {request.provenance.cmdline}")
+        lines.append(f"   claims:   {printable(' '.join(request.command))}")
+    lines.append(f"   provenance: {printable(request.provenance.cmdline)}")
     lines.append(f"   type {request.code} to approve, n{request.code} to deny")
     return lines
 
@@ -174,10 +174,10 @@ class Console:
             self._show_presets()
         elif command == "sessions":
             for session in self.broker.state.live_sessions():
-                self.say(f"   {session.id}  {login_name(session.provenance.uid):<12} {session.preset or '(ad hoc)':<24} expires {session.expires_at:%H:%M:%S}  vars {', '.join(sorted(session.mapping))}  reason {session.reason or '-'}")
+                self.say(f"   {session.id}  {login_name(session.provenance.uid):<12} {session.preset or '(ad hoc)':<24} expires {session.expires_at:%H:%M:%S}  vars {', '.join(sorted(session.mapping))}  reason {printable(session.reason or '-')}")
         elif command == "runs":
             for run in self.broker.state.active_runs():
-                self.say(f"   run #{run.id} pid {run.provenance.pid} vars {', '.join(sorted(run.mapping))}  {' '.join(run.command)}")
+                self.say(f"   run #{run.id} pid {run.provenance.pid} vars {', '.join(sorted(run.mapping))}  {printable(' '.join(run.command))}")
         elif command == "pending":
             for request in self.broker.state.pending():
                 self.show_request(request)
@@ -214,8 +214,8 @@ class Console:
             return
         self.broker.vault.set(name, value)
         self.broker.vault.save()
-        self.broker.reload()
         self.broker.audit.event("admin_add", secret=name)
+        self.broker.reload()
 
     async def _remove(self, name: str) -> None:
         if name not in self.broker.vault:
@@ -263,7 +263,7 @@ class Console:
                     return
                 try:
                     if which == "config":
-                        parse_config(new_text)
+                        parse_config_for_broker(new_text)
                     else:
                         parse_presets(new_text, set(self.broker.vault.names()))
                 except ConfigError as error:
@@ -279,8 +279,8 @@ class Console:
                     self.say("discarded; the file is unchanged")
                     return
                 write_private_file(path, new_text.encode())
-                self.broker.reload()
                 self.broker.audit.event("config_edited", file=path.name, editor=editor)
+                self.broker.reload()
                 return
         finally:
             scratch.unlink(missing_ok=True)

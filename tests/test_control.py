@@ -131,3 +131,14 @@ async def test_import_and_propose_over_socket(control: Path, harness: Harness) -
         await approve_next(harness)
         assert (await client.recv())["ok"] is True
     assert "q" in harness.broker.config.presets
+
+
+async def test_preset_with_override_mismatch_is_rejected(control: Path, harness: Harness) -> None:
+    async with Client(control) as client:
+        await client.send(op="session_start", preset="team", minutes=5, **{"with": ["OPENAI_API_KEY=TEAM_OPENROUTER_KEY"]})
+        reply = await client.recv()
+        assert reply["ok"] is False and "maps to OPENAI_API_KEY in preset team" in reply["error"]
+    async with Client(control) as client:
+        await client.send(op="session_start", preset="team", minutes=5, **{"with": ["OPENAI_API_KEY=OPENAI_API_KEY"]})
+        assert (await client.recv())["pending"] is True
+        assert harness.broker.state.pending()[0].mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}

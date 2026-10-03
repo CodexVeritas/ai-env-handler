@@ -119,3 +119,27 @@ def test_list_payload_and_fingerprint(harness: Harness) -> None:
     assert "sk-openai" not in str(payload)
     assert fingerprint("sk-proj-abcdefghijkl").startswith("sk-p…")
     assert fingerprint("short") == f"s…{fingerprint('short').split('…')[1]}"
+
+
+async def test_approval_refuses_a_stale_presets_snapshot(harness: Harness) -> None:
+    broker = harness.broker
+    shown: list[int] = []
+    broker.request_listeners.append(lambda request: shown.append(request.id))
+    first = broker.request_preset("presets: {alpha: {env: {OPENAI_API_KEY: OPENAI_API_KEY}}}", "a", harness.provenance())
+    second = broker.request_preset("presets: {beta: {env: {OPENAI_API_KEY: OPENAI_API_KEY}}}", "b", harness.provenance())
+    broker.approve(first)
+    with pytest.raises(RequestError, match="changed since"):
+        broker.approve(second)
+    assert second.pending and shown.count(second.id) == 2
+    assert "alpha" in second.summary["merged"] and "-  alpha:" not in second.summary["diff"]
+    broker.approve(second)
+    assert {"alpha", "beta"} <= set(broker.config.presets)
+
+
+async def test_approval_revalidates_against_the_current_vault(harness: Harness) -> None:
+    broker = harness.broker
+    request = broker.request_preset("presets: {gamma: {env: {X: TEAM_OPENROUTER_KEY}}}", None, harness.provenance())
+    broker.vault.remove("TEAM_OPENROUTER_KEY")
+    with pytest.raises(RequestError, match="no longer validates"):
+        broker.approve(request)
+    assert request.pending and "gamma" not in broker.config.presets

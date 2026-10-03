@@ -1,3 +1,4 @@
+import os
 import pwd
 from pathlib import Path
 
@@ -15,9 +16,7 @@ def as_uid(monkeypatch: pytest.MonkeyPatch):
     """Make the broker see connections as coming from another uid (SO_PEERCRED cannot be faked for real)."""
     state = {"uid": None}
 
-    def fake_peer_credentials(sock):
-        import os
-
+    def fake_peer_credentials(sock: object) -> PeerCredentials:
         uid = state["uid"] if state["uid"] is not None else os.getuid()
         return PeerCredentials(pid=os.getpid(), uid=uid, gid=os.getgid())
 

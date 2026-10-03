@@ -16,6 +16,7 @@ from envh.tools.importer import (
     slugify_header,
     suggest_secret_names,
     unquote,
+    write_rewrites,
 )
 
 NEWS_BOT_ENV = """GITHUB_TOKEN=gh-token-1234567890
@@ -166,3 +167,21 @@ def test_default_backup_root_follows_xdg_state_home(tmp_path: Path, monkeypatch:
     monkeypatch.delenv("XDG_STATE_HOME")
     monkeypatch.setenv("HOME", str(tmp_path))
     assert default_backup_root() == tmp_path / ".local" / "state" / "envh" / "import-backups"
+
+
+def test_write_rewrites_follows_symlinks(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    real = shared / ".env"
+    real.write_text("SLACK_TOKEN=xoxb-real-value-123\nLOG_LEVEL=info\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    link = repo / ".env"
+    link.symlink_to(real)
+    parsed = parse_env_text(link, link.read_text())
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    plan = build_plan([parsed], decisions, build_presets([parsed], decisions))
+    said: list[str] = []
+    write_rewrites(plan, said.append)
+    assert link.is_symlink() and "xoxb" not in real.read_text() and "LOG_LEVEL=info" in real.read_text()
+    assert not list(shared.glob("*.envh-tmp")) and any("symlink" in line for line in said)

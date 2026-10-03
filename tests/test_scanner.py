@@ -1,5 +1,8 @@
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from envh.tools.scanner import looks_placeholder, scan_paths, scan_text
 
@@ -68,3 +71,15 @@ def test_database_url_and_private_key() -> None:
     text = "DATABASE_URL=postgres://admin:hunter2secret@db.internal:5432/app\n-----BEGIN OPENSSH PRIVATE KEY-----\n"
     kinds = [hit.kind for hit in scan_text(Path("f"), text)]
     assert kinds == ["database-url", "private-key"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read every file")
+def test_unreadable_files_are_reported_not_skipped(tmp_path: Path) -> None:
+    locked = tmp_path / "locked.txt"
+    locked.write_text(OPENAI + "\n")
+    locked.chmod(0)
+    try:
+        hits, scanned, unreadable = scan_paths([tmp_path], 1024 * 1024)
+    finally:
+        locked.chmod(0o600)
+    assert hits == [] and scanned == 0 and unreadable == [locked]

@@ -16,6 +16,7 @@ from envh.core.config import (
     Config,
     ConfigError,
     Preset,
+    SecretPolicy,
     dump_presets,
     load_config,
     parse_presets,
@@ -74,7 +75,7 @@ class Broker:
             mapping[var] = secret
         return mapping
 
-    def policy_for_var(self, var: str, secret: str, preset: Preset | None):
+    def policy_for_var(self, var: str, secret: str, preset: Preset | None) -> SecretPolicy:
         if preset is not None and var in preset.env and preset.env[var].secret == secret:
             return self.config.effective_policy(preset.env[var])
         return self.config.policy_for(secret)
@@ -199,7 +200,7 @@ class Broker:
             mapping={},
             provenance=provenance,
             reason=reason,
-            summary={"presets": sorted(additions), "diff": diff, "merged": merged},
+            summary={"presets": sorted(additions), "additions": additions, "diff": diff, "merged": merged},
         )
         self._announce(request)
         return request
@@ -239,6 +240,7 @@ class Broker:
                 "fingerprints": {name: fingerprint(value) for name, value in secrets.items()},
                 "secrets": secrets,
                 "presets": sorted(presets),
+                "additions": presets,
                 "diff": self.presets_diff(merged),
                 "merged": merged,
             },
@@ -246,19 +248,35 @@ class Broker:
         self._announce(request)
         return request
 
+    def merged_for_approval(self, request: Request, known_secrets: set[str]) -> dict[str, Any]:
+        """The presets to write for this request, recomputed against the current files; refuses when they differ from what the approver saw."""
+        merged = self.merged_presets(request.summary["additions"])
+        if merged != request.summary["merged"]:
+            request.summary["merged"] = merged
+            request.summary["diff"] = self.presets_diff(merged)
+            for listener in self.request_listeners:
+                listener(request)
+            raise RequestError(f"presets changed since request #{request.id} was shown; it is shown again with the current diff, type its code again to approve that")
+        try:
+            parse_presets(dump_presets(merged), known_secrets)
+        except ConfigError as error:
+            raise RequestError(f"request #{request.id} no longer validates: {error}") from error
+        return merged
+
     def approve(self, request: Request, by: str = "console") -> None:
         if request.kind == "session":
             session = self.state.create_session(request)
             request.result = {"session_id": session.id, "expires_at": session.expires_at.isoformat(timespec="seconds")}
             self.audit.event("session_start", session=session.id, preset=session.preset, vars=sorted(session.mapping), expires=request.result["expires_at"], pid=request.provenance.pid)
         elif request.kind == "preset":
-            self.write_presets(request.summary["merged"])
+            self.write_presets(self.merged_for_approval(request, set(self.vault.names())))
             self.audit.event("presets_updated", presets=request.summary["presets"], by=by)
         elif request.kind == "import":
+            merged = self.merged_for_approval(request, set(self.vault.names()) | set(request.summary["secrets"]))
             for name, value in request.summary["secrets"].items():
                 self.vault.set(name, value)
             self.vault.save()
-            self.write_presets(request.summary["merged"])
+            self.write_presets(merged)
             self.audit.event("import_applied", added=request.summary["added"], changed=request.summary["changed"], presets=request.summary["presets"])
         self.state.decide(request, approved=True, by=by)
         self.audit.event("decision", id=request.id, outcome="approved", by=by)

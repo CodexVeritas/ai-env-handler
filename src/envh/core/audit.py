@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from envh.common import printable
+
 AUDIT_FILE = "audit.jsonl"
 
 
@@ -26,5 +28,5 @@ class Audit:
 
 
 def _short(value: Any) -> str:
-    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    text = printable(value if isinstance(value, str) else json.dumps(value, default=str))
     return text if len(text) <= 80 else text[:77] + "..."
