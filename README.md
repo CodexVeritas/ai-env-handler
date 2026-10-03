@@ -21,6 +21,63 @@ envh run --session 3f9c... --reason "fetch" \
      -- uv run python scripts/research.py        run_start run=4 vars=[...] pid=51301
 ```
 
+## How a request flows, and where the boundaries are
+
+```mermaid
+sequenceDiagram
+    autonumber
+    box rgb(70, 45, 45) Runs as you (uid 1000): your shell, or an agent acting as you. Nothing here can read the vault or type into the console.
+        actor You as You in your terminal<br/>(or an agent)
+        participant CLI as envh command<br/>(envh session start / envh run)
+        participant Script as your script
+    end
+    box rgb(45, 70, 45) Runs as the service user envh: files mode 0600, memory not readable by uid 1000
+        participant Broker as broker<br/>(envh serve)
+        participant Console as console window<br/>(the broker's own terminal)
+        participant Vault as vault + policy files
+    end
+    actor Approver as You at the<br/>console window
+
+    You->>CLI: type: envh session start research --minutes 60 --reason "weekly digest"
+    CLI->>Broker: request over the Unix socket /run/envh/ctl.sock
+    Note over CLI,Broker: the only door through the boundary; the kernel attaches your pid and uid (informational)
+    Broker->>Vault: check the preset, policies and caps
+    Broker->>Console: print the request with a fresh 4-digit code
+    Note over Console,Approver: only the keyboard reaches this terminal: TIOCSTI is disabled and the device is owned by envh
+    Console-->>Approver: you see: reason, preset, variables, duration, the exact command line, the code
+    Approver->>Console: type the code (or n + code to deny)
+    Console->>Broker: decision
+    Broker->>Vault: append to the audit log
+    Broker-->>CLI: session id and expiry
+    CLI-->>You: you see: "session 3f9c… approved, expires 15:02"
+
+    You->>CLI: type: envh run --session 3f9c… --reason "fetch" -- python research.py
+    CLI->>Broker: request with the session id
+    Broker->>Vault: session live? variables covered? none per-run?
+    Broker->>Vault: append run_start to the audit log
+    Broker-->>CLI: the values for those variables (once, on this connection)
+    CLI->>Script: start it with the values in its environment
+    Note over Script: from here the values are visible to this process, its imports, and other processes running as you
+    Script-->>CLI: exit code
+    CLI->>Broker: run_done
+    Broker->>Vault: append run_end to the audit log
+```
+
+What each line means for you:
+
+- **Step 1 and 13 are commands you (or an agent) type in an ordinary terminal.** The `envh` command is just a client; it holds no secrets and has no special rights.
+- **Steps 5 to 8 happen in a different window**: the console that `sudo envh-console` opened. It is where every approval happens, and it is the only place.
+- **Step 12 and 17 are what the client prints back.** Values are never printed; they go straight into the environment of the script you named.
+
+The boundaries, in words:
+
+| Boundary | What enforces it | What it means |
+|---|---|---|
+| **Red box vs green box** | Linux user separation. The vault, policy files and audit log are owned by `envh` with mode 0600; the broker is a different user, non-dumpable, with no secrets in its environment. | You, your scripts, and any agent running as you cannot read a secret, a policy or the log, and cannot change what is allowed. |
+| **The socket** | A Unix socket in `/run/envh`, a directory only `envh` can write. | Anyone running as you can *ask*. Asking never grants anything; it only puts a prompt on the console. |
+| **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal device chowned to `envh`, approval by a random code shown only there. | No process running as you can inject the keystroke that approves. A printed fake prompt fails because its code will not match. |
+| **Not a boundary** | | After step 18 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, a same-user process with display access can type and read the screen; see Habits. |
+
 ## What it protects, and what it does not
 
 **Kernel-enforced, against any process running as you (including every agent):**
