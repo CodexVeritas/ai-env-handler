@@ -23,7 +23,7 @@ def test_untrusted_side_is_stdlib_only_and_never_imports_the_trusted_side(module
     assert imports_cleanly(module, ("yaml", "pyrage", "envh.core", "envh.server", "envh.install")) == "ok"
 
 
-@pytest.mark.parametrize("module", ["envh.core.broker", "envh.core.config", "envh.core.vault", "envh.core.state", "envh.core.audit"])
+@pytest.mark.parametrize("module", ["envh.core.broker", "envh.core.config", "envh.core.vault", "envh.core.state", "envh.core.audit", "envh.core.password"])
 def test_core_never_imports_process_edges_or_the_untrusted_side(module: str) -> None:
     assert imports_cleanly(module, ("envh.server", "envh.client", "envh.tools", "envh.install")) == "ok"
 

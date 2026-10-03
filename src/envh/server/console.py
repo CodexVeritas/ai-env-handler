@@ -19,11 +19,13 @@ from envh.common import fingerprint, printable
 from envh.core.broker import Broker, RequestError
 from envh.core.config import CONFIG_FILE, PRESETS_FILE, SECRET_NAME, ConfigError, parse_config_for_broker, parse_presets
 from envh.core.durations import format_duration
+from envh.core.password import MIN_PASSWORD_LENGTH, PASSWORD_FILE, hash_password, verify_password
 from envh.core.state import Request, StateError
 from envh.core.vault import VaultError, write_private_file
 
 CODE_LINE = re.compile(r"^([n]?)(\d{4})$")
 BELL = "\a"
+WRONG_PASSWORD_PAUSE_SECONDS = 2
 HELP = """commands:
   <code>            approve the request showing that code
   n<code>           deny it
@@ -33,8 +35,10 @@ HELP = """commands:
   preset rm NAME    remove a preset
   edit config       open config.yaml in an editor; validated before it is saved
   edit presets      same for presets.yaml (optionally: edit presets vim)
+  password          change the approval password
   reload            re-read config.yaml and presets.yaml
-  help | quit"""
+  help | quit
+approving, add, rm, preset rm, edit and password all ask for the approval password (typed hidden)"""
 
 
 @dataclass(frozen=True)
@@ -88,13 +92,14 @@ def render_request(request: Request, now: datetime) -> list[str]:
     if request.command:
         lines.append(f"   claims:   {printable(' '.join(request.command))}")
     lines.append(f"   provenance: {printable(request.provenance.cmdline)}")
-    lines.append(f"   type {request.code} to approve, n{request.code} to deny")
+    lines.append(f"   type {request.code} and then the approval password to approve, n{request.code} to deny")
     return lines
 
 
 class Console:
-    def __init__(self, broker: Broker, reader: asyncio.StreamReader, say: Callable[[str], None], tty_fd: int | None) -> None:
+    def __init__(self, broker: Broker, reader: asyncio.StreamReader, say: Callable[[str], None], tty_fd: int | None, password_hash: str) -> None:
         self.broker = broker
+        self.password_hash = password_hash
         self.reader = reader
         self.say = say
         self.tty_fd = tty_fd
@@ -149,6 +154,8 @@ class Console:
                 self.say(f"no pending request with code {parsed.code}")
                 return
             if parsed.kind == "approve":
+                if not await self.check_password(f"approve #{request.id}"):
+                    return
                 self.broker.approve(request)
                 self.say(f"approved #{request.id}")
             else:
@@ -185,6 +192,8 @@ class Console:
             await self._remove_preset(args[1])
         elif command == "edit" and 1 <= len(args) <= 2 and args[0] in ("config", "presets"):
             await self._edit(args[0], args[1] if len(args) == 2 else None)
+        elif command == "password" and not args:
+            await self._change_password()
         elif command == "reload":
             self.broker.reload()
             self.say("reloaded")
@@ -203,6 +212,8 @@ class Console:
     async def _add(self, name: str) -> None:
         if not SECRET_NAME.match(name):
             raise RequestError(f"{name!r} is not a valid secret name (UPPER_CASE)")
+        if not await self.check_password(f"add {name}"):
+            return
         if name in self.broker.vault:
             if not await self.confirm(f"{name} already exists; replace its value?"):
                 return
@@ -220,6 +231,8 @@ class Console:
     async def _remove(self, name: str) -> None:
         if name not in self.broker.vault:
             raise VaultError(f"secret {name} is not in the vault")
+        if not await self.check_password(f"rm {name}"):
+            return
         users = [preset.name for preset in self.broker.config.presets.values() if any(entry.secret == name for entry in preset.env.values())]
         if users:
             self.say(f"   used by presets: {', '.join(users)} (they will fail validation until updated)")
@@ -236,6 +249,8 @@ class Console:
     async def _remove_preset(self, name: str) -> None:
         if name not in self.broker.config.presets_raw:
             raise RequestError(f"unknown preset {name!r}")
+        if not await self.check_password(f"preset rm {name}"):
+            return
         if not await self.confirm(f"remove preset {name}?"):
             return
         merged = dict(self.broker.config.presets_raw)
@@ -250,6 +265,8 @@ class Console:
             raise RequestError("no editor found; install nano or pass one: edit config vim")
         if shutil.which(editor) is None:
             raise RequestError(f"editor {editor!r} not found")
+        if not await self.check_password(f"edit {which}"):
+            return
         original = path.read_text()
         scratch = path.with_name(path.name + ".edit")
         write_private_file(scratch, original.encode())
@@ -284,6 +301,32 @@ class Console:
                 return
         finally:
             scratch.unlink(missing_ok=True)
+
+    async def check_password(self, action: str) -> bool:
+        """A wrong password is audited and pauses the console, so guessing by typing blind is slow and visible."""
+        entered = await self.read_hidden(f"approval password for {action} (hidden): ")
+        if verify_password(entered, self.password_hash):
+            return True
+        self.broker.audit.event("wrong_approval_password", action=action)
+        self.say(f"wrong approval password; {action} not done")
+        await asyncio.sleep(WRONG_PASSWORD_PAUSE_SECONDS)
+        return False
+
+    async def _change_password(self) -> None:
+        if not await self.check_password("password change"):
+            return
+        new_password = await self.read_hidden("new approval password (hidden): ")
+        if len(new_password) < MIN_PASSWORD_LENGTH:
+            self.say(f"use at least {MIN_PASSWORD_LENGTH} characters; the password is unchanged")
+            return
+        if await self.read_hidden("repeat it (hidden): ") != new_password:
+            self.say("they do not match; the password is unchanged")
+            return
+        stored = hash_password(new_password)
+        write_private_file(self.broker.data_dir / PASSWORD_FILE, stored.encode())
+        self.password_hash = stored
+        self.broker.audit.event("approval_password_changed")
+        self.say("approval password changed")
 
     async def confirm(self, prompt: str) -> bool:
         self.say(f"{prompt} [y/N] ")

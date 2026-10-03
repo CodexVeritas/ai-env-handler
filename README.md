@@ -2,23 +2,36 @@
 
 Human-approved secrets for scripts and AI coding agents, on Linux.
 
-Your API keys stop living in `.env` files. They move into a vault owned by a separate Linux user, and every use of a key is approved by you on a console that nothing running as you can type into. You approve a **session** (a set of variables, for a number of minutes, with a reason); scripts and agents then run inside it. Everything is logged.
+Your API keys stop living in `.env` files. They move into a vault owned by a separate Linux user, and every use of a key is approved by you on a console that runs as that separate user. You approve a **session** (a set of variables, for a number of minutes, with a reason); scripts and agents then run inside it. Everything is logged.
+
+**1. You, or an agent, ask for a session** in an ordinary terminal:
+
+```bash
+envh session start weekly-report --minutes 90 --reason "forecast digest: research step"
+```
+
+**2. The envh console shows the request.** It runs in its own window, as its own user:
 
 ```
-you / an agent                                   the envh console (its own terminal, owned by user `envh`)
-──────────────────────────────────────────────   ─────────────────────────────────────────────────────────
-envh session start weekly-report --minutes 90 \
-     --reason "forecast digest: research step"   SESSION REQUEST #3   code 4821   pid 51234
-                                                    reason:   "forecast digest: research step"
-                                                    preset:   weekly-report
-                                                    OPENAI_API_KEY      <- OPENAI_API_KEY
-                                                    OPENROUTER_API_KEY  <- PERSONAL_OPENROUTER_KEY
-                                                    duration: 1h (capped from 90m)
-                                                    type 4821 to approve, n4821 to deny
-                                                 4821
-session 3f9c... approved, expires 15:02:11       approved #3
-envh run --session 3f9c... --reason "fetch" \
-     -- uv run python scripts/research.py        run_start run=4 vars=[...] pid=51301
+SESSION REQUEST #3   code 4821   pid 51234
+   reason:   "forecast digest: research step"
+   preset:   weekly-report
+   OPENAI_API_KEY      <- OPENAI_API_KEY
+   OPENROUTER_API_KEY  <- PERSONAL_OPENROUTER_KEY
+   duration: 1h (capped from 90m)
+   type 4821 and then the approval password to approve, n4821 to deny
+```
+
+**3. You type `4821` on the console, then your approval password** (hidden). Back in the terminal, the request returns:
+
+```
+session 3f9c... approved, expires 15:02:11
+```
+
+**4. Scripts and agents run inside the session** without asking again until it expires. Each run is logged:
+
+```bash
+envh run --session 3f9c... --reason "fetch" -- uv run python scripts/research.py
 ```
 
 ## How a request flows, and where the boundaries are
@@ -39,7 +52,7 @@ The boundaries, in words:
 | **Red box vs green box** | Linux user separation. The vault, policy files and audit log are owned by `envh` with mode 0600; the broker is a different user, non-dumpable, with no secrets in its environment. | You, your scripts, and any agent running as you cannot read a secret, a policy or the log, and cannot change what is allowed. |
 | **The socket** | A Unix socket in `/run/envh`, a directory only `envh` can write. The broker reads the connecting process's uid from the kernel (`SO_PEERCRED`, not spoofable) and only talks to logins listed under `users:` in `config.yaml`. | Anyone running as a listed user can *ask*. Asking never grants anything; it only puts a prompt on the console. Other local accounts are refused before they can see or request anything. |
 | **Per-user sessions** | Every session and pending request is tagged with the kernel-reported uid that created it. | A session can be used, waited on, listed or ended only by the user who opened it. Two listed users on one machine cannot use each other's sessions; only the console sees everything. |
-| **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal device chowned to `envh`, approval by a random code shown only there. | No process running as you can inject the approving keystroke through the terminal itself. A printed fake prompt fails because its code will not match. Your display and input devices are a separate way in; see the next row. |
+| **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal device chowned to `envh`, approval by a random code shown only there plus the approval password. | No process running as you can inject the approving keystroke through the terminal itself. A printed fake prompt fails because its code will not match. Something that can type but cannot see your screen or record your keys cannot approve without the password. Your display and input devices are a separate way in; see the next row. |
 | **Not a boundary** | | During step 12 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, or with write access to `/dev/uinput`, a same-user process can read the code and type it; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). |
 
 ## What it protects, and what it does not
@@ -53,6 +66,8 @@ The boundaries, in words:
 - The code is root-owned under `/opt/envh`; the only client is `/usr/local/bin/envh`.
 
 **What a key use means:** the approved command receives the real value in its environment. It is visible to that process, to everything it imports, and to every other process running as you while it runs. A malicious dependency no longer gets every key on disk whenever it likes; it gets the values of the one approved run it is part of, and you see that run in the log.
+
+**While you are not at the console, nothing is approved or changed.** Approving a request, and `add`, `rm`, `preset rm` and `edit` on the console, all ask for the approval password you chose at install, typed hidden. envh keeps only a scrypt hash of it, readable only by `envh`. A wrong password is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with a passphrase that is stored nowhere. The exception is a session you already approved: it keeps working until it expires. On X11, a program running as you can record the password as you type it; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console).
 
 See [What envh does not do](#what-envh-does-not-do) before relying on it.
 
@@ -79,7 +94,7 @@ What the bootstrap does: copies the repository to a staging directory, creates `
 3. installs `/usr/local/sbin/envh-console`, the root helper that starts the broker;
 4. installs a desktop launcher named "envh console" if a desktop terminal is found;
 5. optionally writes `/etc/sudoers.d/envh-no-credential-cache` (`--disable-sudo-cache`);
-6. runs `envh init` as the service user: it writes `users: [<your login>]` into the policy, you choose the vault passphrase, and you get a **console phrase**.
+6. runs `envh init` as the service user: it writes `users: [<your login>]` into the policy, you choose the vault passphrase and the **approval password** (stored only as a hash), and you get a **console phrase**.
 
 Write the console phrase down. The real console prints it before asking for your passphrase. If a window asks for the passphrase without showing it, close it: something is impersonating envh.
 
@@ -211,7 +226,7 @@ presets:
 
 The same variable can point at different secrets in different presets; that replaces commenting lines in and out. Unknown fields, bad durations, caps over 24h and secrets missing from the vault are rejected, never warned about.
 
-Console commands: `<code>` approve, `n<code>` deny, `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `pending`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `reload`, `help`, `quit`.
+Console commands: `<code>` approve (then the approval password), `n<code>` deny, `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `pending`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `password` (change the approval password), `reload`, `help`, `quit`. Approving, `add`, `rm`, `preset rm`, `edit` and `password` all ask for the approval password.
 
 ## Using it with Claude Code
 
@@ -231,6 +246,7 @@ Agents can draft presets: they write a YAML file, run `envh preset validate draf
 - Start the console in its own window. Never inside an agent's terminal pane.
 - Keep `NOPASSWD` out of sudoers and stay out of the `docker` group.
 - Read the whole prompt before typing a code: the reason, the variables, the duration, the command line.
+- Type the approval password only into the console. If you typed it on an X11 desktop while something untrusted was running, change it with `password` from a text console.
 - Do not paste secrets into chats, commits, logs or command lines.
 - Treat `/var/lib/envh` as secret material if you ever copy or back it up. Back up `vault.age` only to encrypted media; recovering it needs only the standard `age` tool: `age -d vault.age`.
 - Approve only where nothing running as you can see or type. On X11, or with `/dev/uinput` writable by you, a desktop terminal window does not qualify; see the next section.
@@ -240,12 +256,13 @@ Agents can draft presets: they write a YAML file, run `envh preset validate draf
 The console is only as safe as the screen you read it on and the keyboard you type into it. On an ordinary desktop, three things let a program running as you reach both. An agent that gets past the Claude Code hook, or never meets it, can use them.
 
 - **An X11 session** (`echo $XDG_SESSION_TYPE` prints `x11`). Every program running as you can read any window, record every key you type, and type into any window. It can read the approval code off the console and type it. It can record the vault passphrase, and your sudo password, as you enter them. With your sudo password it has root, and root beats envh.
-- **Write access to `/dev/uinput`.** It lets a program create a virtual keyboard that types into whatever has focus: X11, Wayland and text consoles alike. Some udev rules give it to the logged-in user, for example Steam's `60-steam-input.rules`; `getfacl /dev/uinput` then shows a `user:<you>` line. To remove it, override the rule with a file of the same name in `/etc/udev/rules.d` without the uinput line, then reboot. The console does not yet limit wrong codes, so a program that types blindly can try all 10,000.
+- **Write access to `/dev/uinput`.** It lets a program create a virtual keyboard that types into whatever has focus: X11, Wayland and text consoles alike. Some udev rules give it to the logged-in user, for example Steam's `60-steam-input.rules`; `getfacl /dev/uinput` then shows a `user:<you>` line. To remove it, override the rule with a file of the same name in `/etc/udev/rules.d` without the uinput line, then reboot. Typing blind, it cannot see the code or the password; the approval password, with its pause after each wrong attempt, is what stops it from guessing.
 - **Running the console inside tmux or screen started as you.** Anything running as you can send keys to it.
 
 What does not fix it:
 
-- **A password or one-time codes on the console.** A password you type is recorded the first time you use it. A one-time code (backup codes, an authenticator app) cannot be replayed. But a program that can draw over and type into your windows can show you a fake request, or change the request as you type, so your code approves its request.
+- **The approval password, on X11.** It stops anything that can type but cannot see or record, such as a virtual keyboard on Wayland or a text console. On X11, a program running as you can record it the first time you type it, and approve on its own after that. If that may have happened, change it with `password` from a text console.
+- **One-time codes** (backup codes, an authenticator app). A recorded code cannot be replayed. But a program that can draw over and type into your windows can show you a fake request, or change the request as you type, so your code approves its request.
 - **The Claude Code hook.** It sees only the command text, so a few lines of Python that talk to the display get past it, and so does a script file. It also covers only Claude Code's Bash tool, not MCP servers, other agents, or a package inside a script you run.
 
 What does:

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from envh.platform import PlatformError, service_user_home
 from envh.core.config import CONFIG_FILE, PRESETS_FILE, PRESETS_TEMPLATE, render_config_template
+from envh.core.password import MIN_PASSWORD_LENGTH, PASSWORD_FILE, hash_password
 from envh.core.vault import VAULT_FILE, Vault, write_private_file
 
 PHRASE_FILE = "console-phrase"
@@ -28,11 +29,11 @@ def default_data_dir() -> Path:
         return Path.home() / ".envh"
 
 
-def prompt_new_passphrase() -> str:
+def prompt_new_secret(label: str) -> str:
     while True:
-        first = getpass.getpass("choose a vault passphrase: ")
-        if len(first) < 8:
-            print("use at least 8 characters")
+        first = getpass.getpass(f"choose {label}: ")
+        if len(first) < MIN_PASSWORD_LENGTH:
+            print(f"use at least {MIN_PASSWORD_LENGTH} characters")
             continue
         second = getpass.getpass("repeat it: ")
         if first == second:
@@ -64,8 +65,15 @@ def run_init(data_dir: Path, user: str) -> None:
     if vault_path.exists():
         print(f"vault already exists at {vault_path}; leaving it alone")
     else:
-        Vault.create(vault_path, prompt_new_passphrase())
+        Vault.create(vault_path, prompt_new_secret("a vault passphrase"))
         print(f"created empty vault {vault_path}")
+    password_path = data_dir / PASSWORD_FILE
+    if password_path.exists():
+        print(f"approval password already set ({password_path}); leaving it alone")
+    else:
+        print("The approval password is what you type on the console to approve a request or change secrets and policy.")
+        write_private_file(password_path, hash_password(prompt_new_secret("an approval password")).encode())
+        print(f"wrote {password_path} (a scrypt hash, not the password)")
     if not phrase_path.exists():
         phrase = " ".join(secrets.choice(WORDS) for _ in range(3))
         write_private_file(phrase_path, (phrase + "\n").encode())
