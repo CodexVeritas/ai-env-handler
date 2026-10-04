@@ -8,17 +8,13 @@ from tests.conftest import FakeClock
 PROVENANCE = Provenance(pid=1, uid=1000, cmdline="x")
 
 
-async def test_codes_unique_and_decisions() -> None:
+async def test_decisions_are_final() -> None:
     clock = FakeClock()
     table = StateTable(clock)
-    requests = [table.new_request("run", {"A": "A"}, PROVENANCE, "why") for _ in range(20)]
-    assert len({request.code for request in requests}) == 20
-    assert all(len(request.code) == 4 and request.code.isdigit() for request in requests)
-    first = requests[0]
-    assert table.find_by_code(first.code) is first
+    first = table.new_request("run", {"A": "A"}, PROVENANCE, "why")
     table.decide(first, approved=True, by="console")
     assert first.decision.result().outcome == "approved"
-    assert table.find_by_code(first.code) is None
+    assert first not in table.pending()
     with pytest.raises(StateError):
         table.decide(first, approved=False, by="console")
 

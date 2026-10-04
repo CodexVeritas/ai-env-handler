@@ -13,15 +13,12 @@ import pytest
 from envh.core.audit import Audit
 from envh.core.broker import Broker
 from envh.core.config import load_config, render_config_template
-from envh.core.password import hash_password
 from envh.server.control import ControlServer
 from envh.core.state import Provenance, StateTable
 from envh.core.vault import Vault
 
 PASSPHRASE = "test-passphrase"
-APPROVAL_PASSWORD = "test-approval-password"
-APPROVAL_PASSWORD_HASH = hash_password(APPROVAL_PASSWORD)
-PASSWORD_LINE = f"{APPROVAL_PASSWORD}\n".encode()
+PASSPHRASE_LINE = f"{PASSPHRASE}\n".encode()
 
 
 class FakeClock:

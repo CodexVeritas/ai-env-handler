@@ -5,6 +5,7 @@ import pytest
 
 from envh.client.transport import ClientError
 from envh.tools.importer import (
+    apply_renames,
     backup_originals,
     build_plan,
     build_presets,
@@ -74,28 +75,29 @@ def test_names_presets_and_rewrite() -> None:
     decisions = suggest_secret_names([parsed], flags_for(parsed))
     by_line = {d.assignment.line_index: d.secret_name for d in decisions}
     assert by_line == {
-        0: "GITHUB_TOKEN",
-        2: "DATABASE_URL",
-        5: "TEAM_OPENROUTER_API_KEY",
-        6: "TEAM_ASKNEWS_API_KEY",
-        9: "PERSONAL_OPENROUTER_API_KEY",
-        10: "PERSONAL_ASKNEWS_API_KEY",
+        0: "NEWS_BOT_GITHUB_TOKEN",
+        2: "NEWS_BOT_DATABASE_URL",
+        5: "NEWS_BOT_TEAM_OPENROUTER_API_KEY",
+        6: "NEWS_BOT_TEAM_ASKNEWS_API_KEY",
+        9: "NEWS_BOT_PERSONAL_OPENROUTER_API_KEY",
+        10: "NEWS_BOT_PERSONAL_ASKNEWS_API_KEY",
     }
     presets = build_presets([parsed], decisions)
+    base = {"GITHUB_TOKEN": "NEWS_BOT_GITHUB_TOKEN", "DATABASE_URL": "NEWS_BOT_DATABASE_URL"}
     assert presets == {
-        "news-bot-team": {"env": {"GITHUB_TOKEN": "GITHUB_TOKEN", "DATABASE_URL": "DATABASE_URL", "OPENROUTER_API_KEY": "TEAM_OPENROUTER_API_KEY", "ASKNEWS_API_KEY": "TEAM_ASKNEWS_API_KEY"}},
-        "news-bot-personal": {"env": {"GITHUB_TOKEN": "GITHUB_TOKEN", "DATABASE_URL": "DATABASE_URL", "OPENROUTER_API_KEY": "PERSONAL_OPENROUTER_API_KEY", "ASKNEWS_API_KEY": "PERSONAL_ASKNEWS_API_KEY"}},
+        "news-bot-team": {"env": {**base, "OPENROUTER_API_KEY": "NEWS_BOT_TEAM_OPENROUTER_API_KEY", "ASKNEWS_API_KEY": "NEWS_BOT_TEAM_ASKNEWS_API_KEY"}},
+        "news-bot-personal": {"env": {**base, "OPENROUTER_API_KEY": "NEWS_BOT_PERSONAL_OPENROUTER_API_KEY", "ASKNEWS_API_KEY": "NEWS_BOT_PERSONAL_ASKNEWS_API_KEY"}},
     }
     rewritten = rewrite_text(parsed, decisions, presets)
     assert "LOG_LEVEL=info" in rewritten
     assert "# Team Mode" in rewritten and "# Personal Mode" in rewritten
     assert "sk-or" not in rewritten and "gh-token" not in rewritten and "pw@localhost" not in rewritten
-    assert "# OPENROUTER_API_KEY -> envh secret TEAM_OPENROUTER_API_KEY (presets: news-bot-team)" in rewritten
-    assert "# OPENROUTER_API_KEY -> envh secret PERSONAL_OPENROUTER_API_KEY (presets: news-bot-personal)" in rewritten
+    assert "# OPENROUTER_API_KEY -> envh secret NEWS_BOT_TEAM_OPENROUTER_API_KEY (presets: news-bot-team)" in rewritten
+    assert "# OPENROUTER_API_KEY -> envh secret NEWS_BOT_PERSONAL_OPENROUTER_API_KEY (presets: news-bot-personal)" in rewritten
     assert rewritten.endswith("\n")
     plan = build_plan([parsed], decisions, presets)
     assert set(plan.secrets) == set(by_line.values())
-    assert plan.secrets["PERSONAL_ASKNEWS_API_KEY"] == "an-personal-1111111"
+    assert plan.secrets["NEWS_BOT_PERSONAL_ASKNEWS_API_KEY"] == "an-personal-1111111"
 
 
 def test_cross_repo_conflicts_and_dedupe() -> None:
@@ -105,14 +107,19 @@ def test_cross_repo_conflicts_and_dedupe() -> None:
     decisions = suggest_secret_names([first, second], flags)
     names = [(d.file.repo, d.assignment.name, d.secret_name) for d in decisions]
     assert names == [
-        ("alpha", "OPENAI_API_KEY", "OPENAI_API_KEY"),
-        ("alpha", "SLACK_TOKEN", "SLACK_TOKEN"),
-        ("beta", "OPENAI_API_KEY", "OPENAI_API_KEY"),
+        ("alpha", "OPENAI_API_KEY", "ALPHA_OPENAI_API_KEY"),
+        ("alpha", "SLACK_TOKEN", "ALPHA_SLACK_TOKEN"),
+        ("beta", "OPENAI_API_KEY", "ALPHA_OPENAI_API_KEY"),
         ("beta", "SLACK_TOKEN", "BETA_SLACK_TOKEN"),
     ]
     presets = build_presets([first, second], decisions)
-    assert presets["alpha"]["env"] == {"OPENAI_API_KEY": "OPENAI_API_KEY", "SLACK_TOKEN": "SLACK_TOKEN"}
-    assert presets["beta"]["env"] == {"OPENAI_API_KEY": "OPENAI_API_KEY", "SLACK_TOKEN": "BETA_SLACK_TOKEN"}
+    assert presets["alpha"]["env"] == {"OPENAI_API_KEY": "ALPHA_OPENAI_API_KEY", "SLACK_TOKEN": "ALPHA_SLACK_TOKEN"}
+    assert presets["beta"]["env"] == {"OPENAI_API_KEY": "ALPHA_OPENAI_API_KEY", "SLACK_TOKEN": "BETA_SLACK_TOKEN"}
+
+
+def test_a_project_folder_that_cannot_prefix_a_name_is_left_out() -> None:
+    parsed = parse_env_text(Path("/code/2024-bot/.env"), "OPENAI_API_KEY=sk-1\n")
+    assert suggest_secret_names([parsed], flags_for(parsed))[0].secret_name == "OPENAI_API_KEY"
 
 
 def test_discover(tmp_path: Path) -> None:
@@ -134,7 +141,7 @@ def test_generic_comments_do_not_become_groups() -> None:
     parsed = parse_env_text(Path("/code/x/.env"), "# Settings for the bot\nOPENAI_API_KEY=sk-1\n# nothing follows this comment\n")
     assert parsed.groups == ["Settings for the bot"]
     decisions = suggest_secret_names([parsed], flags_for(parsed))
-    assert decisions[0].secret_name == "SETTINGS_FOR_THE_BOT_OPENAI_API_KEY"
+    assert decisions[0].secret_name == "X_SETTINGS_FOR_THE_BOT_OPENAI_API_KEY"
     assert list(build_presets([parsed], decisions)) == ["x-settings-for-the-bot"]
 
 
@@ -202,14 +209,28 @@ def test_config_lines_with_escapes_do_not_block_an_import() -> None:
     parsed = parse_env_text(Path("/code/bot/.env"), 'LOG_FORMAT="%(message)s\\t%(levelname)s"\nAPI_KEY=\'raw\\value\'\n')
     decisions = suggest_secret_names([parsed], flags_for(parsed))
     plan = build_plan([parsed], decisions, {})
-    assert plan.secrets == {"API_KEY": "raw\\value"}
+    assert plan.secrets == {"BOT_API_KEY": "raw\\value"}
 
 
 def test_review_names_insists_on_valid_vault_names() -> None:
     parsed = parse_env_text(Path("/code/bot/.env"), "_PRIVATE_TOKEN=tok-1234567890\n")
     decisions = suggest_secret_names([parsed], flags_for(parsed))
+    assert decisions[0].secret_name == "BOT_PRIVATE_TOKEN"
+    decisions[0].secret_name = "_PRIVATE_TOKEN"
     answers = iter(["", "_PRIVATE_TOKEN=private_token"])
     said: list[str] = []
     review_names(decisions, lambda prompt: next(answers), said.append)
     assert decisions[0].secret_name == "PRIVATE_TOKEN"
     assert any("cannot be vault names" in line and "_PRIVATE_TOKEN" in line for line in said)
+
+
+def test_names_the_vault_chose_reach_presets_and_files(tmp_path: Path) -> None:
+    env_path = tmp_path / "news-bot" / ".env"
+    env_path.parent.mkdir()
+    env_path.write_text("OPENAI_API_KEY=sk-newsbot-0000000000\n")
+    parsed = parse_env_text(env_path, env_path.read_text())
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    plan = build_plan([parsed], decisions, build_presets([parsed], decisions))
+    apply_renames(plan, {"NEWS_BOT_OPENAI_API_KEY": "NEWS_BOT_OPENAI_API_KEY_2"})
+    assert plan.presets["news-bot"]["env"] == {"OPENAI_API_KEY": "NEWS_BOT_OPENAI_API_KEY_2"}
+    assert plan.rewrites[env_path] == "# OPENAI_API_KEY -> envh secret NEWS_BOT_OPENAI_API_KEY_2 (presets: news-bot)\n"

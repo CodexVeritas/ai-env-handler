@@ -63,6 +63,8 @@ class ImportPlan:
     secrets: dict[str, str] = field(default_factory=dict)
     fingerprints: dict[str, str] = field(default_factory=dict)
     presets: dict[str, dict[str, Any]] = field(default_factory=dict)
+    files: list[ParsedFile] = field(default_factory=list)
+    decisions: list[SecretDecision] = field(default_factory=list)
     rewrites: dict[Path, str] = field(default_factory=dict)
     skipped_files: list[Path] = field(default_factory=list)
 
@@ -171,6 +173,17 @@ def secret_prefix(slug: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", slug.upper()).strip("_")
 
 
+def default_secret_name(parsed: ParsedFile, assignment: Assignment) -> str:
+    """<PROJECT>_<GROUP>_<NAME>, where the project is the folder holding the .env; parts that would make it invalid are dropped."""
+    group = secret_prefix(assignment.group_slug) if assignment.group_slug else ""
+    name = assignment.name.upper().strip("_")
+    for parts in ((secret_prefix(parsed.repo), group, name), (group, name)):
+        candidate = "_".join(part for part in parts if part)
+        if SECRET_NAME.match(candidate):
+            return candidate
+    return name
+
+
 def suggest_secret_names(files: list[ParsedFile], secret_flags: dict[tuple[Path, int], bool]) -> list[SecretDecision]:
     decisions: list[SecretDecision] = []
     by_value: dict[str, str] = {}
@@ -182,16 +195,10 @@ def suggest_secret_names(files: list[ParsedFile], secret_flags: dict[tuple[Path,
             if assignment.value in by_value:
                 decisions.append(SecretDecision(assignment, parsed, by_value[assignment.value]))
                 continue
-            base = assignment.name.upper()
-            if assignment.group_slug:
-                candidate = f"{secret_prefix(assignment.group_slug)}_{base}"
-            else:
-                candidate = base
-            if candidate in taken and taken[candidate] != assignment.value:
-                candidate = f"{secret_prefix(parsed.repo)}_{candidate}"
+            base = candidate = default_secret_name(parsed, assignment)
             suffix = 2
             while candidate in taken and taken[candidate] != assignment.value:
-                candidate = f"{candidate}_{suffix}"
+                candidate = f"{base}_{suffix}"
                 suffix += 1
             taken[candidate] = assignment.value
             by_value[assignment.value] = candidate
@@ -347,7 +354,7 @@ def review_presets(presets: dict[str, dict[str, Any]], files: list[ParsedFile], 
 
 
 def build_plan(files: list[ParsedFile], decisions: list[SecretDecision], presets: dict[str, dict[str, Any]]) -> ImportPlan:
-    plan = ImportPlan(presets=presets)
+    plan = ImportPlan(presets=presets, files=files, decisions=decisions)
     for decision in decisions:
         if decision.assignment.problem:
             location = f"{decision.file.path}:{decision.assignment.line_index + 1}"
@@ -395,6 +402,8 @@ def show_plan(plan: ImportPlan, files: list[ParsedFile], backup_root: Path, say:
     by_path = {parsed.path: parsed for parsed in files}
     for path, new_text in plan.rewrites.items():
         say(unified_diff(by_path[path], new_text).rstrip() or f"    {path}: no change")
+    say("  keys already in the vault: the same value is reused under its stored name; a name the vault uses for a")
+    say("  different value gets a number (_2) instead, so nothing stored is overwritten. The console shows the final names.")
     if plan.rewrites:
         say(f"  backup: before rewriting, each original file is copied to a new folder under {backup_root}")
 
@@ -405,6 +414,17 @@ def confirm_rewrites(plan: ImportPlan, ask: Ask) -> None:
         if answer in ("n", "no"):
             plan.skipped_files.append(path)
             del plan.rewrites[path]
+
+
+def apply_renames(plan: ImportPlan, renames: dict[str, str]) -> None:
+    """Point the presets and the files still to be rewritten at the names the vault chose."""
+    for decision in plan.decisions:
+        decision.secret_name = renames.get(decision.secret_name, decision.secret_name)
+    for preset in plan.presets.values():
+        preset["env"] = {var: renames.get(secret, secret) for var, secret in preset["env"].items()}
+    for parsed in plan.files:
+        if parsed.path in plan.rewrites:
+            plan.rewrites[parsed.path] = rewrite_text(parsed, plan.decisions, plan.presets)
 
 
 def write_rewrites(plan: ImportPlan, say: Callable[[str], None]) -> None:
@@ -426,7 +446,11 @@ def apply_plan(plan: ImportPlan, sock: Path, backup_root: Path, say: Callable[[s
         reply = conn.recv_ok()
         waiting_notice(reply["request_id"], None)
         reply = conn.recv_ok()
-    say(f"  stored: {len(reply.get('added', []))} new, {len(reply.get('changed', []))} changed; presets: {', '.join(reply.get('presets', [])) or '(none)'}")
+    renames = reply.get("renames") or {}
+    say(f"  stored: {len(reply.get('added', []))} new; presets: {', '.join(reply.get('presets', [])) or '(none)'}")
+    for sent, final in sorted(renames.items()):
+        say(f"  {sent} is in the vault as {final}")
+    apply_renames(plan, renames)
     backup_dir = None
     if plan.rewrites:
         backup_dir = backup_originals(list(plan.rewrites), backup_root, datetime.now().strftime("%Y%m%d-%H%M%S"))

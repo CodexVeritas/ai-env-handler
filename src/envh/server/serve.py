@@ -15,7 +15,6 @@ from envh.platform import socket_path as default_socket_path
 from envh.core.audit import AUDIT_FILE, Audit
 from envh.core.broker import Broker
 from envh.core.config import ConfigError, load_config
-from envh.core.password import PasswordError, load_password_hash
 from envh.server.console import Console
 from envh.server.control import ControlServer
 from envh.server.hardening import HardeningError, acquire_instance_lock, assert_no_tiocsti, assert_terminal_is_ours, harden_process
@@ -35,10 +34,15 @@ def local_now() -> datetime:
     return datetime.now().astimezone()
 
 
-def unlock_vault(data_dir: Path) -> Vault:
-    phrase_path = data_dir / PHRASE_FILE
-    if phrase_path.exists():
-        say(f"console phrase: {phrase_path.read_text().strip()}")
+def read_phrase(data_dir: Path) -> str:
+    try:
+        return (data_dir / PHRASE_FILE).read_text().strip()
+    except FileNotFoundError as error:
+        raise SystemExit(f"{data_dir / PHRASE_FILE} is missing; rerun the setup wizard") from error
+
+
+def unlock_vault(data_dir: Path, phrase: str) -> Vault:
+    say(f"console phrase: {phrase}")
     for attempt in range(3):
         try:
             return Vault.open(data_dir / VAULT_FILE, getpass.getpass("vault passphrase: "))
@@ -49,11 +53,8 @@ def unlock_vault(data_dir: Path) -> Vault:
 
 async def run_broker(data_dir: Path, socket_path: Path) -> None:
     loop = asyncio.get_running_loop()
-    try:
-        password_hash = load_password_hash(data_dir)
-    except PasswordError as error:
-        raise SystemExit(f"{error}; set one with: sudo -u envh -H envh init")
-    vault = unlock_vault(data_dir)
+    phrase = read_phrase(data_dir)
+    vault = unlock_vault(data_dir, phrase)
     say(f"vault unlocked: {len(vault.names())} secrets")
     try:
         config = load_config(data_dir, set(vault.names()))
@@ -70,7 +71,7 @@ async def run_broker(data_dir: Path, socket_path: Path) -> None:
     tty_fd = os.open(os.ttyname(sys.stdin.fileno()), os.O_RDONLY | os.O_NOCTTY)
     reader = asyncio.StreamReader()
     await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(tty_fd, "rb", buffering=0))
-    console = Console(broker, reader, say, tty_fd, password_hash)
+    console = Console(broker, reader, say, tty_fd, phrase)
     for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         loop.add_signal_handler(signum, console.quit_requested.set)
     audit.event("broker_start", pid=os.getpid(), socket=str(socket_path))

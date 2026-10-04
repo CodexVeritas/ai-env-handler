@@ -124,8 +124,13 @@ async def test_import_and_propose_over_socket(control: Path, harness: Harness) -
         assert (await client.recv())["pending"] is True
         await approve_next(harness)
         reply = await client.recv()
-        assert reply["added"] == ["NEW_KEY"] and reply["presets"] == ["p"]
+        assert reply["added"] == ["NEW_KEY"] and reply["presets"] == ["p"] and reply["renames"] == {}
     assert "NEW_KEY" in harness.broker.vault
+    async with Client(control) as client:
+        await client.send(op="import", secrets={"NEW_KEY": "other", "SAME_AS_OPENAI": "sk-openai"}, presets={}, reason="second")
+        assert (await client.recv())["pending"] is True
+        await approve_next(harness)
+        assert (await client.recv())["renames"] == {"NEW_KEY": "NEW_KEY_2", "SAME_AS_OPENAI": "OPENAI_API_KEY"}
     async with Client(control) as client:
         await client.send(op="preset_propose", yaml="presets: {q: {env: {Y: NEW_KEY}}}", reason="draft")
         assert (await client.recv())["presets"] == ["q"]

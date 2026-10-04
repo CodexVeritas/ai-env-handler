@@ -6,7 +6,6 @@ import asyncio
 import difflib
 import os
 import pwd
-import re
 import shutil
 import subprocess
 import termios
@@ -19,50 +18,47 @@ from envh.common import fingerprint, printable
 from envh.core.broker import Broker, RequestError
 from envh.core.config import CONFIG_FILE, PRESETS_FILE, SECRET_NAME, ConfigError, parse_config_for_broker, parse_presets
 from envh.core.durations import format_duration
-from envh.core.password import MIN_PASSWORD_LENGTH, PASSWORD_FILE, hash_password, verify_password
 from envh.core.state import Request, StateError
-from envh.core.vault import VaultError, write_private_file
+from envh.core.vault import MIN_PASSPHRASE_LENGTH, VaultError, write_private_file
 
-CODE_LINE = re.compile(r"^([n]?)(\d{4})$")
 BELL = "\a"
-WRONG_PASSWORD_PAUSE_SECONDS = 2
-HELP = """commands:
-  <code>            approve the request showing that code
-  n<code>           deny it
+WRONG_PASSPHRASE_PAUSE_SECONDS = 2
+HELP = """A request shows up on its own; type the vault passphrase to approve it, or n to deny it.
+commands:
   add SECRET        store a new secret (value typed hidden)
   rm SECRET         remove a secret
-  secrets | presets | sessions | runs | pending
+  secrets | presets | sessions | runs
   preset rm NAME    remove a preset
   edit config       open config.yaml in an editor; validated before it is saved
   edit presets      same for presets.yaml (optionally: edit presets vim)
-  password          change the approval password
+  passphrase        change the vault passphrase
   reload            re-read config.yaml and presets.yaml
   help | quit
-approving, add, rm, preset rm, edit and password all ask for the approval password (typed hidden)"""
+add, rm, preset rm, edit and passphrase ask for the vault passphrase too (typed hidden)"""
 
 
 @dataclass(frozen=True)
 class ParsedLine:
     kind: str
-    code: str = ""
     command: str = ""
     args: tuple[str, ...] = ()
 
 
 def parse_line(text: str) -> ParsedLine:
-    stripped = text.strip()
-    if not stripped:
+    parts = text.strip().split()
+    if not parts:
         return ParsedLine(kind="empty")
-    match = CODE_LINE.match(stripped)
-    if match:
-        return ParsedLine(kind="deny" if match.group(1) else "approve", code=match.group(2))
-    parts = stripped.split()
     return ParsedLine(kind="command", command=parts[0].lower(), args=tuple(parts[1:]))
+
+
+def approval_prompt(request: Request, phrase: str) -> str:
+    """The console phrase is shown with every prompt, so a passphrase prompt without it is recognizably not envh."""
+    return f"   [{phrase}] vault passphrase to approve #{request.id} (hidden), or n to deny:"
 
 
 def render_request(request: Request, now: datetime) -> list[str]:
     reason = f'"{printable(request.reason)}"' if request.reason else "(no reason given)   <-- ask why before approving"
-    header = f"{BELL}[{now:%H:%M:%S}] {request.kind.upper()} REQUEST #{request.id}   code {request.code}   pid {request.provenance.pid}  uid {request.provenance.uid}"
+    header = f"{BELL}[{now:%H:%M:%S}] {request.kind.upper()} REQUEST #{request.id}   pid {request.provenance.pid}  uid {request.provenance.uid}"
     lines = [header, f"   from:     {login_name(request.provenance.uid)}", f"   reason:   {reason}"]
     if request.kind == "session":
         lines.append(f"   preset:   {request.preset or '(ad hoc)'}")
@@ -80,11 +76,18 @@ def render_request(request: Request, now: datetime) -> list[str]:
         lines.append(f"   presets:  {', '.join(request.summary.get('presets', []))}")
         lines.extend("   " + printable(diff_line) for diff_line in request.summary.get("diff", "").rstrip().splitlines())
     elif request.kind == "import":
-        fingerprints = request.summary.get("fingerprints", {})
-        for label in ("added", "changed", "unchanged"):
-            names = request.summary.get(label) or []
-            for name in names:
-                lines.append(f"   {label:<9} {name:<32} {printable(fingerprints.get(name, ''))}")
+        reused = request.summary.get("reused") or {}
+        renamed = request.summary.get("renamed") or {}
+        for name, fingerprint_text in sorted(request.summary.get("fingerprints", {}).items()):
+            shown = printable(fingerprint_text)
+            if name in reused:
+                lines.append(f"   reused    {name:<32} {shown}  same value already stored as {reused[name]}")
+            elif name in renamed:
+                lines.append(f"   renamed   {name:<32} {shown}  stored as {renamed[name]}: the vault's {name} holds a different value")
+            elif name in (request.summary.get("unchanged") or []):
+                lines.append(f"   unchanged {name:<32} {shown}")
+            else:
+                lines.append(f"   added     {name:<32} {shown}")
         presets = request.summary.get("presets") or []
         if presets:
             lines.append(f"   presets:  {', '.join(presets)}")
@@ -92,77 +95,124 @@ def render_request(request: Request, now: datetime) -> list[str]:
     if request.command:
         lines.append(f"   claims:   {printable(' '.join(request.command))}")
     lines.append(f"   provenance: {printable(request.provenance.cmdline)}")
-    lines.append(f"   type {request.code} and then the approval password to approve, n{request.code} to deny")
     return lines
 
 
 class Console:
-    def __init__(self, broker: Broker, reader: asyncio.StreamReader, say: Callable[[str], None], tty_fd: int | None, password_hash: str) -> None:
+    """Shows one request at a time and reads the answer with echo off, so a typed passphrase never appears on screen.
+
+    Input typed while a request is shown is only ever an answer to that request. If the request is withdrawn while the
+    human may be typing, the next line is discarded unread instead of being taken as a command or as an answer to the
+    next request.
+    """
+
+    def __init__(self, broker: Broker, reader: asyncio.StreamReader, say: Callable[[str], None], tty_fd: int | None, phrase: str) -> None:
         self.broker = broker
-        self.password_hash = password_hash
+        self.phrase = phrase
         self.reader = reader
         self.say = say
         self.tty_fd = tty_fd
         self.quit_requested = asyncio.Event()
+        self.current: Request | None = None
+        self._discard_next_line = False
         self._busy = False
         self._queued: list[Request] = []
         broker.request_listeners.append(self.on_request)
 
     def on_request(self, request: Request) -> None:
-        if self._busy:
+        if request is self.current:
+            self.show_request(request)
+        elif self._busy or self.current is not None or self._discard_next_line:
             self._queued.append(request)
         else:
-            self.show_request(request)
+            self._present(request)
 
     def show_request(self, request: Request) -> None:
         for line in render_request(request, self.broker.state.now()):
             self.say(line)
+        self.say(approval_prompt(request, self.phrase))
 
-    def _flush_queued(self) -> None:
-        queued, self._queued = self._queued, []
-        for request in queued:
+    def _present(self, request: Request) -> None:
+        self.current = request
+        request.decision.add_done_callback(lambda decision: self._on_decided(request, decision))
+        self.show_request(request)
+        self.set_echo(False)
+
+    def _on_decided(self, request: Request, decision: asyncio.Future) -> None:
+        if request is not self.current or decision.cancelled() or decision.result().outcome != "withdrawn":
+            return
+        self.current = None
+        self._discard_next_line = True
+        self.say(f"#{request.id} was withdrawn: the program that asked went away. Press Enter to go on.")
+
+    def _advance(self) -> None:
+        if self._busy or self.current is not None or self._discard_next_line:
+            return
+        while self._queued:
+            request = self._queued.pop(0)
             if request.pending:
-                self.show_request(request)
+                self._present(request)
+                return
+        self.set_echo(True)
+
+    def set_echo(self, enabled: bool) -> None:
+        if self.tty_fd is None:
+            return
+        attributes = termios.tcgetattr(self.tty_fd)
+        attributes[3] = attributes[3] | termios.ECHO if enabled else attributes[3] & ~termios.ECHO
+        termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, attributes)
 
     async def run(self) -> None:
-        self.say("console ready; type help for commands")
-        while not self.quit_requested.is_set():
-            line = await self.reader.readline()
-            if not line:
-                self.say("console input closed; shutting down")
-                self.quit_requested.set()
-                break
-            self._busy = True
-            try:
-                await self.handle_line(line.decode(errors="replace"))
-            except (RequestError, StateError, ConfigError, VaultError) as error:
-                self.say(f"error: {error}")
-            except Exception:
-                self.say("unexpected error in the console (the broker keeps running):")
-                self.say(traceback.format_exc())
-            finally:
-                self._busy = False
-                self._flush_queued()
+        self.say("console ready; requests appear here on their own. Type help for commands")
+        try:
+            while not self.quit_requested.is_set():
+                line = await self.reader.readline()
+                if not line:
+                    self.say("console input closed; shutting down")
+                    self.quit_requested.set()
+                    break
+                self._busy = True
+                try:
+                    await self.handle_line(line.decode(errors="replace"))
+                except (RequestError, StateError, ConfigError, VaultError) as error:
+                    self.say(f"error: {error}")
+                except Exception:
+                    self.say("unexpected error in the console (the broker keeps running):")
+                    self.say(traceback.format_exc())
+                finally:
+                    self._busy = False
+                    self._advance()
+        finally:
+            self.set_echo(True)
 
     async def handle_line(self, text: str) -> None:
+        if self._discard_next_line:
+            self._discard_next_line = False
+            self.say("input discarded")
+            return
+        if self.current is not None:
+            await self._answer(self.current, text.rstrip("\n"))
+            return
         parsed = parse_line(text)
-        if parsed.kind == "empty":
-            return
-        if parsed.kind in ("approve", "deny"):
-            request = self.broker.state.find_by_code(parsed.code)
-            if request is None:
-                self.say(f"no pending request with code {parsed.code}")
-                return
-            if parsed.kind == "approve":
-                if not await self.check_password(f"approve #{request.id}"):
-                    return
-                self.broker.approve(request)
-                self.say(f"approved #{request.id}")
-            else:
-                self.broker.deny(request)
-                self.say(f"denied #{request.id}")
-            return
-        await self._command(parsed)
+        if parsed.kind == "command":
+            await self._command(parsed)
+
+    async def _answer(self, request: Request, entered: str) -> None:
+        if entered.strip().lower() in ("n", "no"):
+            self.broker.deny(request)
+            self.current = None
+            self.say(f"denied #{request.id}")
+        elif not entered.strip():
+            self.say(approval_prompt(request, self.phrase))
+        elif self.broker.vault.matches_passphrase(entered):
+            self.broker.approve(request)
+            self.current = None
+            self.say(f"approved #{request.id}")
+        else:
+            await self._wrong_passphrase(f"approve #{request.id}")
+            if request is self.current:
+                self.say(f"#{request.id} is still waiting")
+                self.say(approval_prompt(request, self.phrase))
 
     async def _command(self, parsed: ParsedLine) -> None:
         command, args = parsed.command, parsed.args
@@ -185,15 +235,12 @@ class Console:
         elif command == "runs":
             for run in self.broker.state.active_runs():
                 self.say(f"   run #{run.id} pid {run.provenance.pid} vars {', '.join(sorted(run.mapping))}  {printable(' '.join(run.command))}")
-        elif command == "pending":
-            for request in self.broker.state.pending():
-                self.show_request(request)
         elif command == "preset" and len(args) == 2 and args[0] == "rm":
             await self._remove_preset(args[1])
         elif command == "edit" and 1 <= len(args) <= 2 and args[0] in ("config", "presets"):
             await self._edit(args[0], args[1] if len(args) == 2 else None)
-        elif command == "password" and not args:
-            await self._change_password()
+        elif command == "passphrase" and not args:
+            await self._change_passphrase()
         elif command == "reload":
             self.broker.reload()
             self.say("reloaded")
@@ -212,7 +259,7 @@ class Console:
     async def _add(self, name: str) -> None:
         if not SECRET_NAME.match(name):
             raise RequestError(f"{name!r} is not a valid secret name (UPPER_CASE)")
-        if not await self.check_password(f"add {name}"):
+        if not await self.check_passphrase(f"add {name}"):
             return
         if name in self.broker.vault:
             if not await self.confirm(f"{name} already exists; replace its value?"):
@@ -234,7 +281,7 @@ class Console:
         users = [preset.name for preset in self.broker.config.presets.values() if any(entry.secret == name for entry in preset.env.values())]
         if users:
             raise RequestError(f"{name} is used by presets {', '.join(users)}; change or remove them first (edit presets, preset rm NAME), since presets naming a missing secret stop the broker from starting")
-        if not await self.check_password(f"rm {name}"):
+        if not await self.check_passphrase(f"rm {name}"):
             return
         if not await self.confirm(f"remove {name}?"):
             return
@@ -246,7 +293,7 @@ class Console:
     async def _remove_preset(self, name: str) -> None:
         if name not in self.broker.config.presets_raw:
             raise RequestError(f"unknown preset {name!r}")
-        if not await self.check_password(f"preset rm {name}"):
+        if not await self.check_passphrase(f"preset rm {name}"):
             return
         if not await self.confirm(f"remove preset {name}?"):
             return
@@ -262,7 +309,7 @@ class Console:
             raise RequestError("no editor found; install nano or pass one: edit config vim")
         if shutil.which(editor) is None:
             raise RequestError(f"editor {editor!r} not found")
-        if not await self.check_password(f"edit {which}"):
+        if not await self.check_passphrase(f"edit {which}"):
             return
         original = path.read_text()
         scratch = path.with_name(path.name + ".edit")
@@ -299,31 +346,32 @@ class Console:
         finally:
             scratch.unlink(missing_ok=True)
 
-    async def check_password(self, action: str) -> bool:
-        """A wrong password is audited and pauses the console, so guessing by typing blind is slow and visible."""
-        entered = await self.read_hidden(f"approval password for {action} (hidden): ")
-        if verify_password(entered, self.password_hash):
+    async def check_passphrase(self, action: str) -> bool:
+        entered = await self.read_hidden(f"vault passphrase for {action} (hidden): ")
+        if self.broker.vault.matches_passphrase(entered):
             return True
-        self.broker.audit.event("wrong_approval_password", action=action)
-        self.say(f"wrong approval password; {action} not done")
-        await asyncio.sleep(WRONG_PASSWORD_PAUSE_SECONDS)
+        await self._wrong_passphrase(action)
         return False
 
-    async def _change_password(self) -> None:
-        if not await self.check_password("password change"):
+    async def _wrong_passphrase(self, action: str) -> None:
+        """A wrong passphrase is audited and pauses the console, so guessing by typing blind is slow and visible."""
+        self.broker.audit.event("wrong_passphrase", action=action)
+        self.say(f"wrong passphrase; {action} not done")
+        await asyncio.sleep(WRONG_PASSPHRASE_PAUSE_SECONDS)
+
+    async def _change_passphrase(self) -> None:
+        if not await self.check_passphrase("passphrase change"):
             return
-        new_password = await self.read_hidden("new approval password (hidden): ")
-        if len(new_password) < MIN_PASSWORD_LENGTH:
-            self.say(f"use at least {MIN_PASSWORD_LENGTH} characters; the password is unchanged")
+        new_passphrase = await self.read_hidden("new vault passphrase (hidden): ")
+        if len(new_passphrase) < MIN_PASSPHRASE_LENGTH:
+            self.say(f"use at least {MIN_PASSPHRASE_LENGTH} characters; the passphrase is unchanged")
             return
-        if await self.read_hidden("repeat it (hidden): ") != new_password:
-            self.say("they do not match; the password is unchanged")
+        if await self.read_hidden("repeat it (hidden): ") != new_passphrase:
+            self.say("they do not match; the passphrase is unchanged")
             return
-        stored = hash_password(new_password)
-        write_private_file(self.broker.data_dir / PASSWORD_FILE, stored.encode())
-        self.password_hash = stored
-        self.broker.audit.event("approval_password_changed")
-        self.say("approval password changed")
+        self.broker.vault.change_passphrase(new_passphrase)
+        self.broker.audit.event("vault_passphrase_changed")
+        self.say("vault passphrase changed; the vault is re-encrypted with it")
 
     async def confirm(self, prompt: str) -> bool:
         self.say(f"{prompt} [y/N] ")
