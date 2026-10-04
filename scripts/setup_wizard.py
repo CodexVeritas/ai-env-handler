@@ -335,11 +335,11 @@ def stage_build_files(destination: Path) -> None:
         shutil.copy2(REPO / name, destination / name)
 
 
-def system_checks(source: Path, invoking_user: str) -> tuple[list[str], list[str]]:
+def system_problems(source: Path, invoking_user: str) -> list[str]:
     """Run envh's preflight checks from the staged root-owned source, before anything is built or changed."""
     sys.path.insert(0, str(source))
     platform = importlib.import_module("envh.platform")
-    return platform.preflight_problems(invoking_user), platform.preflight_warnings()
+    return platform.preflight_problems(invoking_user)
 
 
 def run_with_spinner(text: str, command: list[str], environment: dict[str, str]) -> None:
@@ -408,12 +408,10 @@ def install_as_root(argv: list[str]) -> int:
         staging = Path(scratch) / "source"
         stage_build_files(staging)
         detail(f"Copied the source to a root-only folder: {staging}")
-        problems, warnings = system_checks(staging / "src", invoking_user)
-        for warning in warnings:
-            warn(warning)
-        for problem in problems:
-            warn(problem)
+        problems = system_problems(staging / "src", invoking_user)
         if problems and not args.ignore_preflight:
+            for problem in problems:
+                warn(problem)
             return PREFLIGHT_EXIT
         if not problems:
             ok("System checks passed")
@@ -428,7 +426,8 @@ def install_as_root(argv: list[str]) -> int:
     link_envh_bin(INSTALL_PREFIX / "env" / "bin" / "envh")
     detail(f"Linked {ENVH_BIN}")
     ok("envh built")
-    return subprocess.run([str(ENVH_BIN), "install", *(["--verbose"] if verbose else [])]).returncode
+    install_flags = [flag for flag, wanted in (("--verbose", verbose), ("--ignore-preflight", args.ignore_preflight)) if wanted]
+    return subprocess.run([str(ENVH_BIN), "install", *install_flags]).returncode
 
 
 def step_console() -> Outcome:

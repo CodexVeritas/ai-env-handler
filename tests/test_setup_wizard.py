@@ -140,5 +140,4 @@ def test_root_runs_the_wizard_with_the_system_python_and_sudo_by_absolute_path()
 def test_the_system_checks_load_from_the_staged_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "path", list(sys.path))
     wizard.stage_build_files(tmp_path / "staging")
-    problems, warnings = wizard.system_checks(tmp_path / "staging" / "src", "nobody")
-    assert isinstance(problems, list) and isinstance(warnings, list)
+    assert isinstance(wizard.system_problems(tmp_path / "staging" / "src", "nobody"), list)

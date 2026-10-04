@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from envh.platform import SERVICE_USER
+from envh.platform import SERVICE_USER, preflight_problems, preflight_warnings
 from envh.server.init_cmd import run_init
 
 HELPER_PATH = Path("/usr/local/sbin/envh-console")
@@ -98,9 +98,19 @@ def write_root_file(path: Path, content: str, mode: int, dry_run: bool) -> None:
 
 
 def install(args: argparse.Namespace) -> int:
-    """Quiet by default: the setup wizard reports progress. --verbose and --dry-run list each change."""
+    """Quiet by default: the setup wizard reports progress. --verbose and --dry-run list each change.
+
+    The system checks run here too, although the wizard runs them before building: this is the privileged entry point,
+    so it refuses on a problem unless --ignore-preflight says each one was checked."""
     require_root(args.dry_run)
     invoking_user = os.environ.get("SUDO_USER")
+    for warning in preflight_warnings():
+        say("  ! " + warning)
+    problems = preflight_problems(invoking_user)
+    if problems and not args.ignore_preflight:
+        for problem in problems:
+            say("  ! " + problem.replace("\n", "\n    "))
+        raise InstallError("fix the problems above, or pass --ignore-preflight once you have checked each one")
     if not ENVH_BIN.exists() and not args.dry_run:
         raise InstallError(f"{ENVH_BIN} is missing; run scripts/setup_wizard.py instead of `envh install` directly")
 
@@ -164,6 +174,7 @@ def main(command: str, argv: list[str]) -> int:
     parser.add_argument("--dry-run", action="store_true", help="print every action without doing it")
     if command == "install":
         parser.add_argument("--verbose", action="store_true", help="list each change")
+        parser.add_argument("--ignore-preflight", action="store_true", help="install even though the system checks found problems")
     else:
         parser.add_argument("--purge", action="store_true", help="also delete the service user and the vault")
     args = parser.parse_args(argv)
