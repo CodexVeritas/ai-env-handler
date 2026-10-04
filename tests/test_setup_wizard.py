@@ -151,6 +151,22 @@ def test_a_changed_skill_is_offered_as_an_update(tmp_path: Path) -> None:
     assert change.outdated == "skill"
 
 
+def test_an_update_replaces_the_skill_and_hook_and_leaves_an_edited_claude_md_alone(tmp_path: Path) -> None:
+    for change in wizard.claude_code_changes(tmp_path):
+        change.apply()
+    edited = "# Mine\n\n## Secrets\n- Ask me before using envh.\n"
+    (tmp_path / "CLAUDE.md").write_text(edited)
+    assert wizard.claude_code_changes(tmp_path) == []
+    (tmp_path / "skills" / "envh" / "SKILL.md").write_text("old\n")
+    (tmp_path / "hooks" / "envh_ask.py").write_text("old\n")
+    changes = wizard.claude_code_changes(tmp_path)
+    assert [change.outdated for change in changes] == ["skill", "hook"]
+    for change in changes:
+        change.apply()
+    assert (tmp_path / "hooks" / "envh_ask.py").read_text() == (ROOT / "claude" / "hooks" / "envh_ask.py").read_text()
+    assert (tmp_path / "CLAUDE.md").read_text() == edited
+
+
 @pytest.mark.parametrize(("changes_for", "tool"), [(wizard.claude_code_changes, "Claude Code"), (wizard.cursor_changes, "Cursor")])
 def test_an_out_of_date_skill_and_hook_are_named_and_declining_keeps_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], changes_for: Callable, tool: str

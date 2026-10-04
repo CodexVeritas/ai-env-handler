@@ -591,13 +591,16 @@ def hook_config_changes(
 
 
 def claude_code_changes(claude_home: Path) -> list[Change]:
-    """Each change the Claude Code step would make; empty when everything is in place."""
-    changes = skill_and_hook_changes(claude_home)
+    """Each change the Claude Code step would make; empty when everything is in place.
+
+    CLAUDE.md gets its lines only while settings.json has no envh hook, that is on the first connection. After that the
+    lines are the user's to edit, so updates replace the skill and hook and never touch CLAUDE.md."""
     hook_command = f"python3 {shlex.quote(str(claude_home / 'hooks' / HOOK_FILE_NAME))}"
-    changes += hook_config_changes(claude_home / "settings.json", hook_command, with_envh_hook, envh_hook_commands)
+    settings_changes = hook_config_changes(claude_home / "settings.json", hook_command, with_envh_hook, envh_hook_commands)
+    changes = skill_and_hook_changes(claude_home) + settings_changes
     claude_md = claude_home / "CLAUDE.md"
     current = claude_md.read_text() if claude_md.exists() else ""
-    if CLAUDE_MD_MARKER not in current:
+    if settings_changes and CLAUDE_MD_MARKER not in current:
         snippet = (CLAUDE_SOURCE / "CLAUDE.snippet.md").read_text()
         changes.append(Change(f"Add 3 lines to {tilde(claude_md)}", lambda: write_atomically(claude_md, claude_md_with_snippet(current, snippet))))
     return changes
