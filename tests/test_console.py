@@ -345,3 +345,21 @@ async def test_a_new_request_rings_the_bell_unless_notify_is_off(harness: Harnes
     _, _, quiet_said = new_console(harness)
     run_request(harness)
     assert quiet_said and not any("\a" in line for line in quiet_said)
+
+
+async def test_the_console_rings_again_while_a_request_waits(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(console_module, "reminder_delays", lambda: iter([0.02] * 100))
+    said: list[str] = []
+    drawn: list[str] = []
+    console = Console(harness.broker, asyncio.StreamReader(), ConsoleOutput(said.append, drawn.append), tty_fd=None, phrase=PHRASE)
+    run_request(harness)
+    await asyncio.sleep(0.15)
+    assert drawn.count("\a") >= 3
+    await console.handle_line("n\n")
+    rings = drawn.count("\a")
+    await asyncio.sleep(0.1)
+    assert drawn.count("\a") == rings
+    harness.broker.config.notify = False
+    run_request(harness)
+    await asyncio.sleep(0.1)
+    assert drawn.count("\a") == rings

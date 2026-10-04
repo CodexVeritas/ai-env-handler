@@ -180,7 +180,7 @@ class Connection:
         if request is None or request.kind != "session" or request.provenance.uid != self.provenance.uid:
             raise RequestError("unknown session request id")
         request.abandon_at = None
-        await self.send({"ok": True, "request_id": request.id, "pending": request.pending})
+        await self.send({"ok": True, "request_id": request.id, "pending": request.pending, "notify": self.broker.config.notify})
         await self._attend(request)
 
     async def _attend(self, request: Request) -> None:

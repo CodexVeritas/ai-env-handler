@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
-from envh.common import fingerprint, printable
+from envh.common import fingerprint, printable, reminder_delays
 from envh.core.broker import Broker, RequestError
 from envh.core.config import CONFIG_FILE, PRESETS_FILE, SECRET_NAME, ConfigError, parse_config_for_broker, parse_presets
 from envh.core.durations import format_duration
@@ -157,6 +157,7 @@ class Console:
         self._discard_next_line = False
         self._busy = False
         self._queued: list[Request] = []
+        self._reminders: set[asyncio.Task[None]] = set()
         broker.request_listeners.append(self.on_request)
 
     def on_request(self, request: Request) -> None:
@@ -180,6 +181,18 @@ class Console:
         request.decision.add_done_callback(lambda decision: self._on_decided(request, decision))
         self.show_request(request)
         self.set_echo(False)
+        reminder = asyncio.get_running_loop().create_task(self._remind(request))
+        self._reminders.add(reminder)
+        reminder.add_done_callback(self._reminders.discard)
+
+    async def _remind(self, request: Request) -> None:
+        """Ring the bell again, with growing gaps, while this request is on screen unanswered."""
+        for delay in reminder_delays():
+            await asyncio.sleep(delay)
+            if self.current is not request or not request.pending:
+                return
+            if self.broker.config.notify:
+                self.output.draw(BELL)
 
     def _on_decided(self, request: Request, decision: asyncio.Future) -> None:
         if request is not self.current or decision.cancelled() or decision.result().outcome != "withdrawn":

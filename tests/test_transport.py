@@ -1,45 +1,47 @@
-import subprocess
-
 import pytest
 
 from envh.client import transport
 
 
-@pytest.fixture
-def calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    recorded: list[list[str]] = []
+class FakeReminders:
+    events: list[object] = []
 
-    def fake_run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
-        recorded.append(command)
-        return subprocess.CompletedProcess(command, 0, "(uint32 7,)", "")
+    def __init__(self, request_id: int) -> None:
+        self.request_id = request_id
 
-    monkeypatch.setattr(transport.subprocess, "run", fake_run)
-    monkeypatch.setattr(transport.shutil, "which", lambda name: f"/usr/bin/{name}")
+    def start(self) -> "FakeReminders":
+        self.events.append(self.request_id)
+        return self
+
+    def stop(self) -> None:
+        self.events.append("stopped")
+
+
+def test_waiting_reminds_only_with_notify_on_and_a_desktop(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    FakeReminders.events = []
+    monkeypatch.setattr(transport, "Reminders", FakeReminders)
     monkeypatch.setenv("DISPLAY", ":0")
-    return recorded
-
-
-def test_a_waiting_request_shows_a_fixed_notification_with_a_sound(calls: list[list[str]], capsys: pytest.CaptureFixture[str]) -> None:
-    transport.waiting_notice({"request_id": 3, "notify": True}, None)
-    [command] = calls
-    assert command[:3] == ["/usr/bin/gdbus", "call", "--session"]
-    assert command.index("--") < command.index("-1"), "a negative timeout must come after --, or gdbus reads it as an option"
-    assert "envh needs your passphrase" in command and "Approve or deny request #3 in the envh console." in command
-    assert "'sound-name': <'window-attention'>" in command[-2]
-    assert "waiting for approval" in capsys.readouterr().err
-
-
-def test_no_notification_when_notify_is_off_or_there_is_no_desktop(calls: list[list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    transport.waiting_notice({"request_id": 3, "notify": False}, None)
-    transport.waiting_notice({"request_id": 3}, None)
+    with transport.waiting_notice({"request_id": 3, "notify": True}, None):
+        assert FakeReminders.events == [3]
+    assert FakeReminders.events == [3, "stopped"]
+    with transport.waiting_notice({"request_id": 4, "notify": False}, None):
+        pass
+    with transport.waiting_notice({"request_id": 5}, None):
+        pass
     monkeypatch.delenv("DISPLAY")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-    transport.waiting_notice({"request_id": 3, "notify": True}, None)
-    assert calls == []
+    with transport.waiting_notice({"request_id": 6, "notify": True}, "envh session wait 6"):
+        pass
+    assert FakeReminders.events == [3, "stopped"]
+    err = capsys.readouterr().err
+    assert "waiting for approval in the envh console (request #3)" in err and "resume with: envh session wait 6" in err
 
 
-def test_a_missing_notifier_is_reported_in_one_line(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_reminders_stop_even_when_the_wait_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeReminders.events = []
+    monkeypatch.setattr(transport, "Reminders", FakeReminders)
     monkeypatch.setenv("DISPLAY", ":0")
-    monkeypatch.setattr(transport.shutil, "which", lambda name: None)
-    transport.notify_desktop(3)
-    assert "gdbus is missing" in capsys.readouterr().err
+    with pytest.raises(transport.ClientError):
+        with transport.waiting_notice({"request_id": 7, "notify": True}, None):
+            raise transport.ClientError("the broker closed the connection")
+    assert FakeReminders.events == [7, "stopped"]

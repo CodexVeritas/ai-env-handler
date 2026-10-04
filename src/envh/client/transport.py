@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import socket
-import subprocess
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+from envh.client.attention import Reminders, desktop_session
 
 EXIT_USAGE = 2
 EXIT_NO_BROKER = 3
 EXIT_DENIED = 4
 EXIT_REQUEST_ERROR = 5
-NOTIFY_METHOD = ("--dest", "org.freedesktop.Notifications", "--object-path", "/org/freedesktop/Notifications", "--method", "org.freedesktop.Notifications.Notify")
-NOTIFY_HINTS = "{'sound-name': <'window-attention'>, 'urgency': <byte 1>}"
 
 
 class ClientError(Exception):
@@ -69,31 +68,17 @@ class Connection:
         self.close()
 
 
-def waiting_notice(reply: dict[str, Any], resume_hint: str | None) -> None:
+@contextmanager
+def waiting_notice(reply: dict[str, Any], resume_hint: str | None) -> Iterator[None]:
+    """Say the request waits for the console, and while it does, remind the human on the desktop when the broker's
+    notify setting is on. Without a desktop session only the console's bell reminds them."""
     request_id = reply["request_id"]
     print(f"envh: waiting for approval in the envh console (request #{request_id})", file=sys.stderr, flush=True)
     if resume_hint:
         print(f"envh: if this times out, resume with: {resume_hint}", file=sys.stderr, flush=True)
-    if reply.get("notify"):
-        notify_desktop(request_id)
-
-
-def notify_desktop(request_id: int) -> None:
-    """Show a desktop notification with a sound, so the human looks at the console. The text is fixed: nothing the
-    requester wrote reaches it. Without a graphical session it does nothing; a failure is reported in one line."""
-    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        return
-    gdbus = shutil.which("gdbus")
-    if gdbus is None:
-        print("envh: notify is on, but gdbus is missing (package libglib2.0-bin), so no desktop notification was shown", file=sys.stderr)
-        return
-    body = f"Approve or deny request #{request_id} in the envh console."
-    command = [gdbus, "call", "--session", *NOTIFY_METHOD, "--", "envh", "0", "dialog-password", "envh needs your passphrase", body, "[]", NOTIFY_HINTS, "-1"]
+    reminders = Reminders(request_id).start() if reply.get("notify") and desktop_session() else None
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        print(f"envh: could not show a desktop notification: {error}", file=sys.stderr)
-        return
-    if result.returncode != 0:
-        detail = result.stderr.strip().splitlines()[0] if result.stderr.strip() else f"exit code {result.returncode}"
-        print(f"envh: could not show a desktop notification: {detail}", file=sys.stderr)
+        yield
+    finally:
+        if reminders is not None:
+            reminders.stop()
