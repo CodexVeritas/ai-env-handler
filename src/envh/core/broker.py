@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import difflib
+import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -26,7 +27,7 @@ from envh.core.config import (
 )
 from envh.core.durations import MAX_SESSION, format_duration
 from envh.core.state import Provenance, Request, Session, StateTable
-from envh.core.vault import Vault, write_private_file
+from envh.core.vault import Vault, stage_private_file, write_private_file
 
 
 class RequestError(ValueError):
@@ -350,7 +351,11 @@ class Broker:
 
     def rename_secret(self, old: str, new: str) -> None:
         """Rename a stored secret everywhere envh refers to it: the vault, its policy in config.yaml, presets, live
-        sessions and waiting requests. Every check runs before anything is written."""
+        sessions and waiting requests.
+
+        Every check runs and the new policy and preset files are written to disk before the vault is saved; they are
+        moved into place right after. A failed write therefore changes nothing, and the secret never sits under a name
+        its policy does not cover, which would quietly give it the default policy."""
         if old not in self.vault:
             raise RequestError(f"{old} is not in the vault")
         if not SECRET_NAME.match(new):
@@ -358,16 +363,23 @@ class Broker:
         if new in self.vault:
             raise RequestError(f"{new} is already taken")
         config_path = self.data_dir / CONFIG_FILE
+        presets_path = self.data_dir / PRESETS_FILE
         renamed_config = renamed_in_config(config_path.read_text(), old, new) if old in self.config.secret_policies else None
         presets = renamed_presets(self.config.presets_raw, {old: new})
         parse_presets(dump_presets(presets), (set(self.vault.names()) - {old}) | {new})
-        self.vault.set(new, self.vault.get(old))
-        self.vault.remove(old)
-        self.vault.save()
-        if renamed_config is not None:
-            write_private_file(config_path, renamed_config.encode())
-        if presets != self.config.presets_raw:
-            write_private_file(self.data_dir / PRESETS_FILE, dump_presets(presets).encode())
+        staged: list[tuple[Path, Path]] = []
+        try:
+            if renamed_config is not None:
+                staged.append((stage_private_file(config_path, renamed_config.encode()), config_path))
+            if presets != self.config.presets_raw:
+                staged.append((stage_private_file(presets_path, dump_presets(presets).encode()), presets_path))
+            self.vault.rename(old, new)
+        except BaseException:
+            for temp_path, _ in staged:
+                temp_path.unlink(missing_ok=True)
+            raise
+        for temp_path, path in staged:
+            os.replace(temp_path, path)
         self.state.rename_secret(old, new)
         self.audit.event("secret_renamed", old=old, new=new)
         self.reload()

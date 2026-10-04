@@ -229,3 +229,17 @@ def test_rename_refuses_without_changing_anything(harness: Harness, old: str, ne
         harness.broker.rename_secret(old, new)
     assert {name: harness.broker.vault.get(name) for name in harness.broker.vault.names()} == before
     assert (harness.data_dir / "presets.yaml").read_text() == presets_before
+
+
+def test_a_rename_that_cannot_save_the_vault_changes_nothing(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    files_before = {path.name: path.read_text() for path in harness.data_dir.glob("*.yaml")}
+
+    def disk_full() -> None:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(harness.broker.vault, "save", disk_full)
+    with pytest.raises(OSError, match="No space left"):
+        harness.broker.rename_secret("OPENAI_API_KEY", "PERSONAL_OPENAI_KEY")
+    assert "OPENAI_API_KEY" in harness.broker.vault and "PERSONAL_OPENAI_KEY" not in harness.broker.vault
+    assert {path.name: path.read_text() for path in harness.data_dir.glob("*.yaml")} == files_before
+    assert not list(harness.data_dir.glob("*.tmp"))
