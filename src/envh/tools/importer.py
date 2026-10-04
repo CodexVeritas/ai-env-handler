@@ -486,8 +486,8 @@ def apply_plan(plan: ImportPlan, sock: Path, backup_root: Path, say: Callable[[s
     with Connection(sock) as conn:
         conn.send(op="import", secrets=plan.secrets, presets=plan.presets, reason="envh import wizard")
         reply = conn.recv_ok()
-        waiting_notice(reply["request_id"], None)
-        reply = conn.recv_ok()
+        with waiting_notice(reply, None):
+            reply = conn.recv_ok()
     renames = reply.get("renames") or {}
     say(f"  stored: {len(reply.get('added', []))} new; presets: {', '.join(reply.get('presets', [])) or '(none)'}")
     for sent, final in sorted(renames.items()):

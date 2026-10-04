@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
-from envh.common import fingerprint, printable
+from envh.common import fingerprint, printable, reminder_delays
 from envh.core.broker import Broker, RequestError, require_secret_name
 from envh.core.config import CONFIG_FILE, PRESETS_FILE, ConfigError, parse_config_for_broker, parse_presets
 from envh.core.durations import format_duration
@@ -73,7 +73,7 @@ def presets_line(names: tuple[str, ...]) -> str:
 
 def render_request(request: Request, now: datetime) -> list[str]:
     reason = f'"{printable(request.reason)}"' if request.reason else "(no reason given)   <-- ask why before approving"
-    header = f"{BELL}[{now:%H:%M:%S}] {request.kind.upper()} REQUEST #{request.id}   pid {request.provenance.pid}  uid {request.provenance.uid}"
+    header = f"[{now:%H:%M:%S}] {request.kind.upper()} REQUEST #{request.id}   pid {request.provenance.pid}  uid {request.provenance.uid}"
     lines = [header, f"   from:     {login_name(request.provenance.uid)}", f"   reason:   {reason}"]
     if request.kind == "session":
         lines.append(presets_line(request.presets))
@@ -171,6 +171,7 @@ class Console:
         self._discard_next_line = False
         self._busy = False
         self._queued: list[Request] = []
+        self._reminders: set[asyncio.Task[None]] = set()
         self._typeahead = b""
         broker.request_listeners.append(self.on_request)
 
@@ -183,7 +184,10 @@ class Console:
             self._present(request)
 
     def show_request(self, request: Request) -> None:
-        for line in render_request(request, self.broker.state.now()):
+        lines = render_request(request, self.broker.state.now())
+        if self.broker.config.notify:
+            lines[0] = BELL + lines[0]
+        for line in lines:
             self.say(line)
         self.say(approval_prompt(request, self.phrase))
 
@@ -192,6 +196,18 @@ class Console:
         request.decision.add_done_callback(lambda decision: self._on_decided(request, decision))
         self.show_request(request)
         self.set_echo(False)
+        reminder = asyncio.get_running_loop().create_task(self._remind(request))
+        self._reminders.add(reminder)
+        reminder.add_done_callback(self._reminders.discard)
+
+    async def _remind(self, request: Request) -> None:
+        """Ring the bell again, with growing gaps, while this request is on screen unanswered."""
+        for delay in reminder_delays():
+            await asyncio.sleep(delay)
+            if self.current is not request or not request.pending:
+                return
+            if self.broker.config.notify:
+                self.output.draw(BELL)
 
     def _on_decided(self, request: Request, decision: asyncio.Future) -> None:
         if request is not self.current or decision.cancelled() or decision.result().outcome != "withdrawn":
@@ -323,7 +339,7 @@ class Console:
             waiting = sum(1 for request in self._queued if request.pending)
             frame = render_keys(view, self.phrase, waiting, self._screen_size())
             if frame != last_frame:
-                self.output.draw(frame + (BELL if waiting > last_waiting else ""))
+                self.output.draw(frame + (BELL if waiting > last_waiting and self.broker.config.notify else ""))
             last_frame, last_waiting = frame, waiting
 
         with self.output.holding(), self._full_screen():
