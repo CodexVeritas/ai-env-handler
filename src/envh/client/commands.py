@@ -23,7 +23,7 @@ RUN_MARKER_VAR = "ENVH_RUN_MARKER"
 LINGER_GRACE_SECONDS = 2.0
 
 
-def parse_with(values: list[str] | None) -> list[str]:
+def parse_list(values: list[str] | None) -> list[str]:
     items: list[str] = []
     for value in values or []:
         items.extend(part.strip() for part in value.split(",") if part.strip())
@@ -38,7 +38,7 @@ def cmd_run(args: argparse.Namespace, sock: Path) -> int:
         command = command[1:]
     session_id = args.session or os.environ.get(SESSION_ENV_VAR)
     with Connection(sock) as conn:
-        conn.send(op="run", session=session_id, preset=args.preset, reason=args.reason, command=command, **{"with": parse_with(args.with_)})
+        conn.send(op="run", session=session_id, presets=parse_list(args.presets), reason=args.reason, command=command, **{"with": parse_list(args.with_)})
         reply = conn.recv_ok()
         if reply.get("pending"):
             waiting_notice(reply["request_id"], None)
@@ -116,11 +116,11 @@ def cmd_session_start(args: argparse.Namespace, sock: Path) -> int:
     with Connection(sock) as conn:
         conn.send(
             op="session_start",
-            preset=args.preset,
+            presets=parse_list(args.presets),
             minutes=args.minutes,
             reason=args.reason,
             command=sys.argv,
-            **{"with": parse_with(args.with_)},
+            **{"with": parse_list(args.with_)},
         )
         reply = conn.recv_ok()
         if reply.get("excluded_per_run"):
@@ -181,7 +181,7 @@ def cmd_list(args: argparse.Namespace, sock: Path) -> int:
         print("  (none)")
     print("LIVE SESSIONS")
     for session in payload["sessions"]:
-        print(f"  {session['id']}  {session['preset'] or '(ad hoc)':<24} expires {session['expires_at']}  vars {', '.join(session['vars'])}  reason: {session['reason'] or '-'}")
+        print(f"  {session['id']}  {', '.join(session['presets']) or '(ad hoc)':<24} expires {session['expires_at']}  vars {', '.join(session['vars'])}  reason: {session['reason'] or '-'}")
     if not payload["sessions"]:
         print("  (none)")
     return 0
@@ -228,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="run a command with secrets in its environment")
     run.add_argument("--session", help=f"session id (default: ${SESSION_ENV_VAR})")
-    run.add_argument("--preset")
+    run.add_argument("--preset", dest="presets", action="append", metavar="PRESET[,PRESET...]", help="repeat or use commas to combine presets")
     run.add_argument("--with", dest="with_", action="append", metavar="VAR[=SECRET],...")
     run.add_argument("--reason", help="why you need these secrets; shown to the approver")
     run.add_argument("--keep-background", action="store_true", help="do not terminate processes the command leaves running (they keep the values)")
@@ -238,7 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     session = commands.add_parser("session", help="start, wait for, or end a session")
     session_commands = session.add_subparsers(dest="session_command", required=True)
     start = session_commands.add_parser("start")
-    start.add_argument("preset", nargs="?")
+    start.add_argument("presets", nargs="*", metavar="PRESET", help="one or more presets; their variables are combined")
     start.add_argument("--with", dest="with_", action="append", metavar="VAR[=SECRET],...")
     start.add_argument("--minutes", type=int, required=True)
     start.add_argument("--reason")

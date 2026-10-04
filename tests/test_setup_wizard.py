@@ -1,7 +1,9 @@
 import importlib.util
 import json
+import shlex
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,7 @@ wizard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(wizard)
 
 HOOK_COMMAND = "python3 /home/alice/.claude/hooks/envh_ask.py"
+CURSOR_HOOK_COMMAND = "python3 /home/alice/.cursor/hooks/envh_ask.py"
 
 
 def answer_inputs(monkeypatch: pytest.MonkeyPatch, *answers: str) -> None:
@@ -52,19 +55,43 @@ def test_an_envh_hook_installed_from_any_path_is_detected() -> None:
 def test_settings_hook_text_keeps_other_settings_and_is_none_once_present(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text('{"model": "opus", "note": "café"}\n')
-    new_text = wizard.settings_with_hook(settings_path, HOOK_COMMAND)
+    new_text = wizard.config_with_hook(settings_path, HOOK_COMMAND, wizard.with_envh_hook, wizard.envh_hook_commands)
     saved = json.loads(new_text)
     assert saved["note"] == "café"
     assert wizard.envh_hook_commands(saved) == [HOOK_COMMAND]
     settings_path.write_text(new_text)
-    assert wizard.settings_with_hook(settings_path, HOOK_COMMAND) is None
+    assert wizard.config_with_hook(settings_path, HOOK_COMMAND, wizard.with_envh_hook, wizard.envh_hook_commands) is None
 
 
 def test_invalid_settings_json_stops_with_a_message(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text("{not json")
     with pytest.raises(SystemExit, match="Fix the file"):
-        wizard.settings_with_hook(settings_path, HOOK_COMMAND)
+        wizard.config_with_hook(settings_path, HOOK_COMMAND, wizard.with_envh_hook, wizard.envh_hook_commands)
+
+
+def test_cursor_hook_entry_matches_the_documented_snippet() -> None:
+    snippet = json.loads((ROOT / "cursor" / "hooks.snippet.json").read_text())
+    del snippet["_comment"]
+    snippet["hooks"]["beforeShellExecution"][0]["command"] = CURSOR_HOOK_COMMAND
+    assert wizard.with_cursor_hook({}, CURSOR_HOOK_COMMAND) == snippet
+
+
+def test_cursor_hook_is_appended_and_the_rest_of_hooks_json_is_kept() -> None:
+    existing_hook = {"command": "./hooks/audit.sh"}
+    config = {"version": 1, "hooks": {"beforeShellExecution": [existing_hook], "stop": [{"command": "./hooks/done.sh"}]}}
+    merged = wizard.with_cursor_hook(config, CURSOR_HOOK_COMMAND)
+    assert merged["hooks"]["stop"] == config["hooks"]["stop"]
+    assert merged["hooks"]["beforeShellExecution"][0] == existing_hook
+    assert wizard.cursor_hook_commands(merged) == [CURSOR_HOOK_COMMAND]
+    assert wizard.cursor_hook_commands(config) == []
+    assert len(config["hooks"]["beforeShellExecution"]) == 1
+
+
+@pytest.mark.parametrize("config", [[], {"hooks": []}, {"hooks": {"beforeShellExecution": {}}}])
+def test_unexpected_cursor_hooks_shapes_are_refused(config: object) -> None:
+    with pytest.raises(ValueError, match="hooks.json"):
+        wizard.with_cursor_hook(config, CURSOR_HOOK_COMMAND)
 
 
 @pytest.mark.parametrize(
@@ -82,8 +109,8 @@ def test_claude_code_changes_apply_once_back_up_settings_and_keep_its_mode(tmp_p
     (tmp_path / "CLAUDE.md").write_text("# Mine\n")
     changes = wizard.claude_code_changes(tmp_path)
     assert len(changes) == 4
-    for _, apply in changes:
-        apply()
+    for change in changes:
+        change.apply()
     assert (tmp_path / "skills" / "envh" / "SKILL.md").read_text() == (ROOT / "claude" / "skills" / "envh" / "SKILL.md").read_text()
     assert wizard.envh_hook_commands(json.loads(settings_path.read_text())) == [f"python3 {tmp_path / 'hooks' / 'envh_ask.py'}"]
     assert settings_path.stat().st_mode & 0o777 == 0o600
@@ -92,12 +119,73 @@ def test_claude_code_changes_apply_once_back_up_settings_and_keep_its_mode(tmp_p
     assert wizard.claude_code_changes(tmp_path) == []
 
 
+def test_cursor_changes_apply_once_and_back_up_hooks_json(tmp_path: Path) -> None:
+    hooks_path = tmp_path / "hooks.json"
+    hooks_path.write_text('{"version": 1, "hooks": {}}\n')
+    changes = wizard.cursor_changes(tmp_path)
+    assert len(changes) == 3
+    for change in changes:
+        change.apply()
+    assert (tmp_path / "skills" / "envh" / "SKILL.md").read_text() == (ROOT / "claude" / "skills" / "envh" / "SKILL.md").read_text()
+    assert (tmp_path / "hooks" / "envh_ask.py").read_text() == (ROOT / "claude" / "hooks" / "envh_ask.py").read_text()
+    assert wizard.cursor_hook_commands(json.loads(hooks_path.read_text())) == [f"python3 {tmp_path / 'hooks' / 'envh_ask.py'}"]
+    assert [backup.read_text() for backup in tmp_path.glob("hooks.json.before-envh-*")] == ['{"version": 1, "hooks": {}}\n']
+    assert wizard.cursor_changes(tmp_path) == []
+
+
+def test_a_home_folder_with_a_space_gets_a_quoted_hook_command(tmp_path: Path) -> None:
+    cursor_home = tmp_path / "ann lee" / ".cursor"
+    cursor_home.mkdir(parents=True)
+    for change in wizard.cursor_changes(cursor_home):
+        change.apply()
+    [command] = wizard.cursor_hook_commands(json.loads((cursor_home / "hooks.json").read_text()))
+    assert shlex.split(command) == ["python3", str(cursor_home / "hooks" / "envh_ask.py")]
+
+
 def test_a_changed_skill_is_offered_as_an_update(tmp_path: Path) -> None:
-    for _, apply in wizard.claude_code_changes(tmp_path):
-        apply()
+    for change in wizard.claude_code_changes(tmp_path):
+        change.apply()
     (tmp_path / "skills" / "envh" / "SKILL.md").write_text("old\n")
-    [(description, _)] = wizard.claude_code_changes(tmp_path)
-    assert description.startswith("Update the envh skill")
+    [change] = wizard.claude_code_changes(tmp_path)
+    assert change.description.startswith("Update the envh skill")
+    assert change.outdated == "skill"
+
+
+@pytest.mark.parametrize(("changes_for", "tool"), [(wizard.claude_code_changes, "Claude Code"), (wizard.cursor_changes, "Cursor")])
+def test_an_out_of_date_skill_and_hook_are_named_and_declining_keeps_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], changes_for: Callable, tool: str
+) -> None:
+    for change in changes_for(tmp_path):
+        change.apply()
+    (tmp_path / "skills" / "envh" / "SKILL.md").write_text("old\n")
+    (tmp_path / "hooks" / "envh_ask.py").write_text("old\n")
+    answer_inputs(monkeypatch, "n")
+    assert wizard.step_connect(tool, tmp_path, changes_for) == wizard.Outcome(False, "out of date")
+    assert f"Your envh skill and hook for {tool} are out of date." in capsys.readouterr().out
+    assert (tmp_path / "skills" / "envh" / "SKILL.md").read_text() == "old\n"
+
+
+def test_updating_reports_updated_and_a_rerun_is_up_to_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    for change in wizard.cursor_changes(tmp_path):
+        change.apply()
+    (tmp_path / "hooks" / "envh_ask.py").write_text("old\n")
+    answer_inputs(monkeypatch, "")
+    assert wizard.step_connect("Cursor", tmp_path, wizard.cursor_changes) == wizard.Outcome(True, "updated")
+    assert "Your envh hook for Cursor is out of date." in capsys.readouterr().out
+    assert wizard.step_connect("Cursor", tmp_path, wizard.cursor_changes) == wizard.Outcome(True, "up to date")
+
+
+def test_a_first_connection_asks_to_connect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    prompts: list[str] = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts.append(prompt) or "n")
+    assert wizard.step_connect("Cursor", tmp_path, wizard.cursor_changes) == wizard.Outcome(False, "skipped")
+    assert len(prompts) == 1 and "Connect Cursor?" in prompts[0]
+    assert "out of date" not in capsys.readouterr().out
+
+
+def test_a_tool_that_is_not_set_up_is_skipped(tmp_path: Path) -> None:
+    assert wizard.step_connect("Cursor", tmp_path / "missing", wizard.cursor_changes) == wizard.Outcome(False, "skipped")
+    assert not (tmp_path / "missing").exists()
 
 
 def test_quit_answer_stops_the_wizard(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -138,6 +226,8 @@ def test_root_runs_the_wizard_with_the_system_python_and_sudo_by_absolute_path()
 
 
 def test_the_system_checks_load_from_the_staged_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(sys, "modules", dict(sys.modules))
     wizard.stage_build_files(tmp_path / "staging")
-    assert isinstance(wizard.system_problems(tmp_path / "staging" / "src", "nobody"), list)
+    staged_platform = tmp_path / "staging" / "src" / "envh" / "platform.py"
+    staged_platform.write_text(staged_platform.read_text() + "\n\ndef preflight_problems(invoking_user):\n    return ['staged copy checked ' + invoking_user]\n")
+    assert wizard.system_problems(tmp_path / "staging" / "src", "nobody") == ["staged copy checked nobody"]

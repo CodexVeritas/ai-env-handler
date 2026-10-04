@@ -1,0 +1,13 @@
+{
+  "_comment": "Merge into ~/.cursor/hooks.json (or a project's .cursor/hooks.json). The hook is claude/hooks/envh_ask.py; it reads both tools' formats. The matcher only skips commands the hook never acts on.",
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "python3 /ABSOLUTE/PATH/TO/envh_ask.py",
+        "timeout": 10,
+        "matcher": "envh|sudo|su|doas|pkexec"
+      }
+    ]
+  }
+}

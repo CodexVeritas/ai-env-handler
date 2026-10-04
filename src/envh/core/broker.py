@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import difflib
-import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +19,7 @@ from envh.core.config import (
     ConfigError,
     Preset,
     SecretPolicy,
+    config_from_text,
     dump_presets,
     load_config,
     parse_presets,
@@ -27,7 +27,7 @@ from envh.core.config import (
 )
 from envh.core.durations import MAX_SESSION, format_duration
 from envh.core.state import Provenance, Request, Session, StateTable
-from envh.core.vault import Vault, stage_private_file, write_private_file
+from envh.core.vault import Vault, move_into_place, stage_private_file, write_private_file
 
 
 class RequestError(ValueError):
@@ -49,11 +49,20 @@ def renamed_presets(presets: dict[str, Any], final_names: dict[str, str]) -> dic
     return renamed
 
 
+def require_secret_name(name: str) -> None:
+    if not SECRET_NAME.match(name):
+        raise RequestError(f"{name!r} is not a valid secret name (UPPER_CASE)")
+
+
 def first_free_name(base: str, unavailable: set[str]) -> str:
     candidate, suffix = base, 2
     while candidate in unavailable:
         candidate, suffix = f"{base}_{suffix}", suffix + 1
     return candidate
+
+
+def presets_label(presets: list[Preset]) -> str:
+    return ("preset " if len(presets) == 1 else "presets ") + ", ".join(preset.name for preset in presets)
 
 
 class Broker:
@@ -72,7 +81,7 @@ class Broker:
             kind=request.kind,
             pid=request.provenance.pid,
             reason=request.reason or "(no reason given)",
-            preset=request.preset,
+            presets=list(request.presets),
             vars=sorted(request.mapping),
         )
         self._show(request)
@@ -81,12 +90,36 @@ class Broker:
         for listener in self.request_listeners:
             listener(request)
 
-    def mapping_from_preset(self, name: str) -> tuple[dict[str, str], Preset]:
+    def preset_named(self, name: str) -> Preset:
         preset = self.config.presets.get(name)
         if preset is None:
             known = ", ".join(sorted(self.config.presets)) or "(none)"
             raise RequestError(f"unknown preset {name!r}; known presets: {known}")
-        return {var: entry.secret for var, entry in preset.env.items()}, preset
+        return preset
+
+    def mapping_from_presets(self, names: list[str], items: list[str]) -> tuple[dict[str, str], list[Preset]]:
+        """The variables of all named presets together, narrowed to items (VAR or VAR=SECRET) when any are given.
+        A variable the presets map to different secrets is refused unless an item picks one, since a run can hold only one value."""
+        presets = [self.preset_named(name) for name in dict.fromkeys(names)]
+        label = presets_label(presets)
+        choices: dict[str, dict[str, str]] = {}
+        for preset in presets:
+            for var, entry in preset.env.items():
+                choices.setdefault(var, {}).setdefault(entry.secret, preset.name)
+        wanted = {var: secret for var, _, secret in (item.partition("=") for item in items)} or dict.fromkeys(choices, "")
+        missing = sorted(set(wanted) - set(choices))
+        if missing:
+            raise RequestError(f"not in {label}: {', '.join(missing)}")
+        mapping: dict[str, str] = {}
+        for var, secret in wanted.items():
+            options = choices[var]
+            if secret and secret not in options:
+                raise RequestError(f"{var} maps to {' or '.join(options)} in {label}, not {secret}; drop the =SECRET part or request it without a preset")
+            if not secret and len(options) > 1:
+                sources = " and ".join(f"{option} in {source}" for option, source in options.items())
+                raise RequestError(f"{var} is {sources}; leave one of those presets out, or choose with --with {var}=SECRET plus the other variables you need")
+            mapping[var] = secret or next(iter(options))
+        return mapping, presets
 
     def mapping_from_with(self, items: list[str]) -> dict[str, str]:
         if not items:
@@ -97,34 +130,35 @@ class Broker:
             secret = secret or var
             if not VAR_NAME.match(var):
                 raise RequestError(f"{var!r} is not a valid environment variable name")
-            if not SECRET_NAME.match(secret):
-                raise RequestError(f"{secret!r} is not a valid secret name (UPPER_CASE)")
+            require_secret_name(secret)
             if secret not in self.vault:
                 raise RequestError(f"secret {secret} is not in the vault; see `envh list`")
             mapping[var] = secret
         return mapping
 
-    def policy_for_var(self, var: str, secret: str, preset: Preset | None) -> SecretPolicy:
-        if preset is not None and var in preset.env and preset.env[var].secret == secret:
-            return self.config.effective_policy(preset.env[var])
-        return self.config.policy_for(secret)
+    def policy_for_var(self, var: str, secret: str, presets: list[Preset]) -> SecretPolicy:
+        """When several presets supply the variable, per-run wins over session."""
+        policies = [self.config.effective_policy(preset.env[var]) for preset in presets if var in preset.env and preset.env[var].secret == secret]
+        per_run = [policy for policy in policies if policy.approval == "per-run"]
+        return (per_run or policies or [self.config.policy_for(secret)])[0]
 
-    def split_per_run(self, mapping: dict[str, str], preset: Preset | None) -> tuple[dict[str, str], dict[str, str]]:
+    def split_per_run(self, mapping: dict[str, str], presets: list[Preset]) -> tuple[dict[str, str], dict[str, str]]:
         sessionable: dict[str, str] = {}
         per_run: dict[str, str] = {}
         for var, secret in mapping.items():
-            if self.policy_for_var(var, secret, preset).approval == "per-run":
+            if self.policy_for_var(var, secret, presets).approval == "per-run":
                 per_run[var] = secret
             else:
                 sessionable[var] = secret
         return sessionable, per_run
 
-    def session_cap(self, mapping: dict[str, str], preset: Preset | None) -> timedelta:
+    def session_cap(self, mapping: dict[str, str], presets: list[Preset]) -> timedelta:
         cap = MAX_SESSION
-        if preset is not None and preset.max_session is not None:
-            cap = min(cap, preset.max_session)
+        for preset in presets:
+            if preset.max_session is not None:
+                cap = min(cap, preset.max_session)
         for var, secret in mapping.items():
-            cap = min(cap, self.policy_for_var(var, secret, preset).max_session)
+            cap = min(cap, self.policy_for_var(var, secret, presets).max_session)
         return cap
 
     def env_for(self, mapping: dict[str, str]) -> dict[str, str]:
@@ -133,7 +167,7 @@ class Broker:
     def request_session(
         self,
         mapping: dict[str, str],
-        preset: Preset | None,
+        presets: list[Preset],
         minutes: int,
         reason: str | None,
         command: tuple[str, ...],
@@ -141,18 +175,18 @@ class Broker:
     ) -> Request:
         if minutes <= 0:
             raise RequestError("--minutes must be a positive number")
-        sessionable, per_run = self.split_per_run(mapping, preset)
+        sessionable, per_run = self.split_per_run(mapping, presets)
         if not sessionable:
             raise RequestError("every requested secret is per-run; run without a session instead")
         requested = timedelta(minutes=minutes)
-        granted = min(requested, self.session_cap(sessionable, preset))
+        granted = min(requested, self.session_cap(sessionable, presets))
         request = self.state.new_request(
             kind="session",
             mapping=sessionable,
             provenance=provenance,
             reason=reason,
             command=command,
-            preset=preset.name if preset else None,
+            presets=tuple(preset.name for preset in presets),
             requested=requested,
             granted=granted,
             summary={"excluded_per_run": sorted(per_run)},
@@ -176,8 +210,8 @@ class Broker:
             if secret and secret != session.mapping[var]:
                 raise RequestError(f"{var} maps to {session.mapping[var]} in session {session_id[:8]}, not {secret}")
             mapping[var] = session.mapping[var]
-        preset = self.config.presets.get(session.preset) if session.preset else None
-        _, per_run = self.split_per_run(mapping, preset)
+        presets = [self.config.presets[name] for name in session.presets if name in self.config.presets]
+        _, per_run = self.split_per_run(mapping, presets)
         if per_run:
             raise RequestError(f"approval is now per-run for {', '.join(sorted(per_run))}; run without --session")
         return session, mapping
@@ -185,7 +219,7 @@ class Broker:
     def request_run(
         self,
         mapping: dict[str, str],
-        preset: Preset | None,
+        presets: list[Preset],
         reason: str | None,
         command: tuple[str, ...],
         provenance: Provenance,
@@ -196,7 +230,7 @@ class Broker:
             provenance=provenance,
             reason=reason,
             command=command,
-            preset=preset.name if preset else None,
+            presets=tuple(preset.name for preset in presets),
         )
         self._announce(request)
         return request
@@ -246,8 +280,7 @@ class Broker:
         if not secrets and not presets:
             raise RequestError("nothing to import")
         for name, value in secrets.items():
-            if not SECRET_NAME.match(name):
-                raise RequestError(f"{name!r} is not a valid secret name (UPPER_CASE)")
+            require_secret_name(name)
             if not isinstance(value, str) or not value:
                 raise RequestError(f"secret {name} has an empty value")
         resolution = self.import_resolution(secrets, presets)
@@ -301,14 +334,20 @@ class Broker:
             "additions": renamed_presets(presets, final_names),
         }
 
-    def confirm_import_resolution(self, request: Request) -> None:
-        """Refuses an import whose names would now differ from what the approver saw, for example after a console `add`."""
+    def refresh_import(self, request: Request) -> bool:
+        """Recompute where an import's secrets go against the current vault; True when anything changed."""
         sent = request.summary["sent"]
         current = self.import_resolution(sent["secrets"], sent["presets"])
-        if any(request.summary[key] != value for key, value in current.items()):
-            request.summary.update(current)
-            request.summary["merged"] = self.merged_presets(current["additions"])
-            request.summary["diff"] = self.presets_diff(request.summary["merged"])
+        if all(request.summary[key] == value for key, value in current.items()):
+            return False
+        request.summary.update(current)
+        request.summary["merged"] = self.merged_presets(current["additions"])
+        request.summary["diff"] = self.presets_diff(request.summary["merged"])
+        return True
+
+    def confirm_import_resolution(self, request: Request) -> None:
+        """Refuses an import whose names would now differ from what the approver saw, for example after a console `add`."""
+        if self.refresh_import(request):
             self._show(request)
             raise RequestError(f"the vault changed since request #{request.id} was shown; it is shown again with the current names, type the passphrase again to approve that")
 
@@ -330,7 +369,7 @@ class Broker:
         if request.kind == "session":
             session = self.state.create_session(request)
             request.result = {"session_id": session.id, "expires_at": session.expires_at.isoformat(timespec="seconds")}
-            self.audit.event("session_start", session=session.id, preset=session.preset, vars=sorted(session.mapping), expires=request.result["expires_at"], pid=request.provenance.pid)
+            self.audit.event("session_start", session=session.id, presets=list(session.presets), vars=sorted(session.mapping), expires=request.result["expires_at"], pid=request.provenance.pid)
         elif request.kind == "preset":
             self.write_presets(self.merged_for_approval(request, set(self.vault.names())))
             self.audit.event("presets_updated", presets=request.summary["presets"], by=by)
@@ -349,40 +388,64 @@ class Broker:
         self.state.decide(request, approved=False, by=by)
         self.audit.event("decision", id=request.id, outcome="denied", by=by)
 
-    def rename_secret(self, old: str, new: str) -> None:
-        """Rename a stored secret everywhere envh refers to it: the vault, its policy in config.yaml, presets, live
-        sessions and waiting requests.
+    def check_rename(self, old: str, new: str) -> tuple[str | None, str | None, Config]:
+        """Check that old can be renamed to new, changing nothing. Returns the new config.yaml and presets.yaml texts
+        (None for a file that stays as it is) and the config they load as.
 
-        Every check runs and the new policy and preset files are written to disk before the vault is saved; they are
-        moved into place right after. A failed write therefore changes nothing, and the secret never sits under a name
-        its policy does not cover, which would quietly give it the default policy."""
+        A name that config.yaml still has a policy for, or that a live session or waiting request points at, is refused:
+        the secret would quietly take over that policy, or that session would get its value without an approval."""
         if old not in self.vault:
             raise RequestError(f"{old} is not in the vault")
-        if not SECRET_NAME.match(new):
-            raise RequestError(f"{new!r} is not a valid secret name (UPPER_CASE)")
+        require_secret_name(new)
         if new in self.vault:
             raise RequestError(f"{new} is already taken")
-        config_path = self.data_dir / CONFIG_FILE
-        presets_path = self.data_dir / PRESETS_FILE
-        renamed_config = renamed_in_config(config_path.read_text(), old, new) if old in self.config.secret_policies else None
+        if new in self.config.secret_policies:
+            raise RequestError(f"config.yaml still has a policy for {new}; remove it with `edit config` first")
+        if new in self.state.names_in_use():
+            raise RequestError(f"a live session or waiting request still uses the name {new}; end or answer it first")
+        config_text = (self.data_dir / CONFIG_FILE).read_text()
+        renamed_config = renamed_in_config(config_text, old, new) if old in self.config.secret_policies else None
         presets = renamed_presets(self.config.presets_raw, {old: new})
-        parse_presets(dump_presets(presets), (set(self.vault.names()) - {old}) | {new})
+        presets_text = dump_presets(presets)
+        config = config_from_text(renamed_config or config_text, presets_text, (set(self.vault.names()) - {old}) | {new})
+        before, after = self.config.policy_for(old), config.policy_for(new)
+        if (before.approval, before.max_session) != (after.approval, after.max_session):
+            raise RequestError(f"the policy for {old} would change; config.yaml differs from what the console loaded, so check it and run reload")
+        return renamed_config, presets_text if presets != self.config.presets_raw else None, config
+
+    def rename_secret(self, old: str, new: str) -> None:
+        """Rename a stored secret everywhere envh refers to it: the vault, its policy in config.yaml, presets, live
+        sessions and requests.
+
+        The new policy and preset files are written and the config they load as is built before the vault is saved, so a
+        failed check or write changes nothing. Only moving the written files into place and the audit line come after."""
+        renamed_config, presets_text, config = self.check_rename(old, new)
         staged: list[tuple[Path, Path]] = []
         try:
-            if renamed_config is not None:
-                staged.append((stage_private_file(config_path, renamed_config.encode()), config_path))
-            if presets != self.config.presets_raw:
-                staged.append((stage_private_file(presets_path, dump_presets(presets).encode()), presets_path))
+            for text, path in ((renamed_config, self.data_dir / CONFIG_FILE), (presets_text, self.data_dir / PRESETS_FILE)):
+                if text is not None:
+                    staged.append((stage_private_file(path, text.encode()), path))
             self.vault.rename(old, new)
         except BaseException:
             for temp_path, _ in staged:
                 temp_path.unlink(missing_ok=True)
             raise
-        for temp_path, path in staged:
-            os.replace(temp_path, path)
+        self.config = config
         self.state.rename_secret(old, new)
+        self._follow_rename_in_waiting_requests(old, new)
+        for temp_path, path in staged:
+            move_into_place(temp_path, path)
         self.audit.event("secret_renamed", old=old, new=new)
-        self.reload()
+
+    def _follow_rename_in_waiting_requests(self, old: str, new: str) -> None:
+        """Update the secret names that waiting preset proposals and imports carry in their summaries."""
+        for request in self.state.pending():
+            if request.kind == "preset":
+                request.summary["additions"] = renamed_presets(request.summary["additions"], {old: new})
+                request.summary["merged"] = self.merged_presets(request.summary["additions"])
+                request.summary["diff"] = self.presets_diff(request.summary["merged"])
+            elif request.kind == "import":
+                self.refresh_import(request)
 
     def write_presets(self, merged: dict[str, Any]) -> None:
         write_private_file(self.data_dir / PRESETS_FILE, dump_presets(merged).encode())
@@ -410,14 +473,14 @@ class Broker:
             for var, entry in preset.env.items():
                 env.append({"var": var, "secret": entry.secret, "approval": self.config.effective_policy(entry).approval, "in_vault": entry.secret in self.vault})
             mapping = {var: entry.secret for var, entry in preset.env.items()}
-            presets.append({"name": preset.name, "max_session": format_duration(self.session_cap(mapping, preset)), "env": env})
+            presets.append({"name": preset.name, "max_session": format_duration(self.session_cap(mapping, [preset])), "env": env})
         sessions = [session for session in self.state.live_sessions() if for_uid is None or session.provenance.uid == for_uid]
         return {"secrets": secrets, "presets": presets, "sessions": [self.session_payload(session) for session in sessions]}
 
     def session_payload(self, session: Session) -> dict[str, Any]:
         return {
             "id": session.id,
-            "preset": session.preset,
+            "presets": list(session.presets),
             "vars": sorted(session.mapping),
             "expires_at": session.expires_at.isoformat(timespec="seconds"),
             "reason": session.reason,
