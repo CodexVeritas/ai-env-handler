@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from envh.client.commands import CONSOLE_COMMANDS
+from envh.server.console import HELP
 from tests.conftest import Harness, approve_next
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,3 +124,23 @@ async def test_signal_killed_command_exits_like_a_shell(control: Path, harness: 
     await approve_next(harness)
     code, _, err = await asyncio.wait_for(task, timeout=20)
     assert code == 128 + 15, err
+
+
+async def test_manage_lists_console_commands_and_sees_the_running_console(control: Path) -> None:
+    code, out, err = await run_cli(control, "manage")
+    assert code == 0, err
+    assert "add SECRET" in out and "edit presets" in out
+    assert "✓ The console is running." in out
+    assert "sudo envh-console" not in out
+
+
+async def test_manage_says_how_to_start_a_stopped_console(tmp_path: Path) -> None:
+    code, out, err = await run_cli(tmp_path / "missing.sock", "manage")
+    assert code == 0, err
+    assert "! The console isn't running." in out
+    assert "sudo envh-console" in out
+
+
+def test_manage_names_only_commands_the_console_knows() -> None:
+    for command, _purpose in CONSOLE_COMMANDS:
+        assert f"  {command}" in HELP, command
