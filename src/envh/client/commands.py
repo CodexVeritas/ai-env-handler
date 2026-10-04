@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from envh.tools.importer import run_wizard
-from envh.tools.scanner import main as scan_main
+from envh.tools.scanner import main as scan_main, skipped_folders_help
 from envh.platform import socket_path as default_socket_path
 from envh.client.transport import EXIT_USAGE, ClientError, Connection, waiting_notice
 
@@ -304,7 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     importer.add_argument("--depth", type=int, default=3)
     importer.set_defaults(func=cmd_import)
 
-    scan = commands.add_parser("scan", help="find where key-shaped strings live (paths and fingerprints, never values)")
+    scan = commands.add_parser("scan", help="find where key-shaped strings live (paths and fingerprints, never values)", epilog=skipped_folders_help())
     scan.add_argument("paths", nargs="*", help="directories or files to scan (default: your home directory)")
     scan.add_argument("--json", action="store_true")
     scan.add_argument("--max-size", type=int, default=25, help="skip files larger than this many MB (default 25)")

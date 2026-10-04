@@ -150,7 +150,15 @@ envh scan                      # your home directory
 envh scan ~/code ~/Downloads   # specific places; add --json for machine-readable output
 ```
 
-It prints the file, the line, what kind of key it looks like, the first four characters, the length and a short fingerprint, never the value. The fingerprint lets you see that the same key sits in several files. Exit code 1 means something was found. It skips binaries, vendor directories, caches, browser profiles and files over 25 MB (`--max-size`), and it looks inside `.git/config` but not git history.
+It prints the file, the line, what kind of key it looks like, the first four characters, the length and a short fingerprint, never the value. The fingerprint lets you see that the same key sits in several files. Exit code 1 means something was found. While it runs, a progress bar shows how much it has read and about how long is left.
+
+To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of installed code and caches that hold none of your keys but can hold millions of files:
+- **Installed packages and environments:** `.venv`, `venv`, `node_modules`, `site-packages`, conda, uv's Pythons, pipx, `.cargo`, `go/pkg` and the like.
+- **Caches:** `.cache`, app caches such as `Cache` and `GPUCache`, and any folder tagged with `CACHEDIR.TAG`. Hugging Face's token file in `.cache` is still read.
+- **Build output:** Next.js's `.next`.
+- **Other bulky data:** editor extensions and Claude Code plugins, Flatpak apps' own data (`~/.var/app`), browser and mail profiles, Steam, Wine and snaps.
+
+`envh scan --help` lists every skipped folder, and the report repeats the summary. It looks inside `.git/config` but not git history.
 
 What it can and cannot identify:
 
