@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""envh setup: install or update, console, .env import, stray-key scan and Claude Code, one step at a time.
+"""envh setup: install or update, console, .env import, stray-key scan, Claude Code and Cursor, one step at a time.
 
 Runs as you with the standard library only, because envh is not installed yet when it starts. Rerunning is safe:
 finished steps are detected. Each step prints one short sentence; `?` at a question shows a few more lines, and the
@@ -36,7 +36,9 @@ REPO = Path(__file__).resolve().parents[1]
 BUILD_FILES = ("pyproject.toml", "uv.lock", "README.md", "LICENSE")
 CLAUDE_SOURCE = REPO / "claude"
 CLAUDE_HOME = Path.home() / ".claude"
+CURSOR_HOME = Path.home() / ".cursor"
 HOOK_FILE_NAME = "envh_ask.py"
+CURSOR_HOOK_MATCHER = "envh|sudo|su|doas|pkexec"
 INSTALL_PREFIX = Path("/opt/envh")
 INSTALL_RECORD = INSTALL_PREFIX / "installed-from"
 ENVH_BIN = Path("/usr/local/bin/envh")
@@ -487,6 +489,24 @@ def step_scan() -> Outcome:
     return Outcome(False, f"failed (exit code {returncode})")
 
 
+class Change(NamedTuple):
+    description: str
+    apply: Callable[[], None]
+    outdated: str | None = None
+
+
+def with_hook_entry(config: Any, event: str, entry: dict[str, Any], file_name: str) -> dict[str, Any]:
+    if not isinstance(config, dict):
+        raise ValueError(f"{file_name} does not hold a JSON object")
+    if not isinstance(config.get("hooks", {}), dict):
+        raise ValueError(f"'hooks' in {file_name} is not an object")
+    if not isinstance(config.get("hooks", {}).get(event, []), list):
+        raise ValueError(f"'hooks.{event}' in {file_name} is not a list")
+    merged = copy.deepcopy(config)
+    merged.setdefault("hooks", {}).setdefault(event, []).append(entry)
+    return merged
+
+
 def envh_hook_commands(settings: dict[str, Any]) -> list[str]:
     commands: list[str] = []
     for entry in settings.get("hooks", {}).get("PreToolUse", []):
@@ -497,27 +517,34 @@ def envh_hook_commands(settings: dict[str, Any]) -> list[str]:
 
 
 def with_envh_hook(settings: Any, hook_command: str) -> dict[str, Any]:
-    if not isinstance(settings, dict):
-        raise ValueError("settings.json does not hold a JSON object")
-    if not isinstance(settings.get("hooks", {}), dict):
-        raise ValueError("'hooks' in settings.json is not an object")
-    if not isinstance(settings.get("hooks", {}).get("PreToolUse", []), list):
-        raise ValueError("'hooks.PreToolUse' in settings.json is not a list")
-    merged = copy.deepcopy(settings)
     entry = {"matcher": "Bash", "hooks": [{"type": "command", "command": hook_command, "timeout": 10}]}
-    merged.setdefault("hooks", {}).setdefault("PreToolUse", []).append(entry)
-    return merged
+    return with_hook_entry(settings, "PreToolUse", entry, "settings.json")
 
 
-def settings_with_hook(settings_path: Path, hook_command: str) -> str | None:
-    """The new settings.json text, or None when an envh hook is already there."""
-    original_text = settings_path.read_text() if settings_path.exists() else ""
+def cursor_hook_commands(config: dict[str, Any]) -> list[str]:
+    entries = config.get("hooks", {}).get("beforeShellExecution", [])
+    return [entry["command"] for entry in entries if HOOK_FILE_NAME in str(entry.get("command", ""))]
+
+
+def with_cursor_hook(config: Any, hook_command: str) -> dict[str, Any]:
+    entry = {"command": hook_command, "timeout": 10, "matcher": CURSOR_HOOK_MATCHER}
+    return {"version": 1, **with_hook_entry(config, "beforeShellExecution", entry, "hooks.json")}
+
+
+def config_with_hook(
+    config_path: Path,
+    hook_command: str,
+    with_hook: Callable[[Any, str], dict[str, Any]],
+    hook_commands: Callable[[dict[str, Any]], list[str]],
+) -> str | None:
+    """The new text of a hooks config file, or None when an envh hook is already there."""
+    original_text = config_path.read_text() if config_path.exists() else ""
     try:
-        settings = json.loads(original_text) if original_text.strip() else {}
-        merged = with_envh_hook(settings, hook_command)
-        existing = envh_hook_commands(settings)
+        config = json.loads(original_text) if original_text.strip() else {}
+        merged = with_hook(config, hook_command)
+        existing = hook_commands(config)
     except (json.JSONDecodeError, ValueError, AttributeError) as error:
-        raise SystemExit(f"✗ Can't add the hook to {settings_path}: {error}. Fix the file and rerun the wizard.") from error
+        raise SystemExit(f"✗ Can't add the hook to {config_path}: {error}. Fix the file and rerun the wizard.") from error
     return None if existing else json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -533,49 +560,89 @@ def claude_md_with_snippet(current: str, snippet: str) -> str:
     return current + ("\n" if current.endswith("\n") else "\n\n") + snippet
 
 
-def claude_code_changes(claude_home: Path) -> list[tuple[str, Callable[[], None]]]:
-    """Each change the Claude Code step would make, as (description, apply); empty when everything is in place."""
-    changes: list[tuple[str, Callable[[], None]]] = []
-    hook_destination = claude_home / "hooks" / HOOK_FILE_NAME
+def skill_and_hook_changes(tool_home: Path) -> list[Change]:
+    """Copies of the skill and the hook into tool_home; Claude Code and Cursor read them from the same subfolders."""
+    changes: list[Change] = []
     copies = [
-        (CLAUDE_SOURCE / "skills" / "envh" / "SKILL.md", claude_home / "skills" / "envh" / "SKILL.md", "the envh skill"),
-        (CLAUDE_SOURCE / "hooks" / HOOK_FILE_NAME, hook_destination, "a hook that asks you before envh requests"),
+        (CLAUDE_SOURCE / "skills" / "envh" / "SKILL.md", tool_home / "skills" / "envh" / "SKILL.md", "skill", "the envh skill"),
+        (CLAUDE_SOURCE / "hooks" / HOOK_FILE_NAME, tool_home / "hooks" / HOOK_FILE_NAME, "hook", "the hook that asks you before envh requests"),
     ]
-    for source, destination, what in copies:
+    for source, destination, part, what in copies:
         text = source.read_text()
         if destination.exists() and destination.read_text() == text:
             continue
-        verb = "Update" if destination.exists() else "Add"
-        changes.append((f"{verb} {what}: {tilde(destination)}", lambda destination=destination, text=text: write_atomically(destination, text)))
-    settings_path = claude_home / "settings.json"
-    settings_text = settings_with_hook(settings_path, f"python3 {hook_destination}")
-    if settings_text is not None:
-        changes.append((f"Turn the hook on in {tilde(settings_path)} (backed up first)", lambda: write_with_backup(settings_path, settings_text)))
+        outdated = part if destination.exists() else None
+        verb = "Update" if outdated else "Add"
+        changes.append(Change(f"{verb} {what}: {tilde(destination)}", lambda destination=destination, text=text: write_atomically(destination, text), outdated))
+    return changes
+
+
+def hook_config_changes(
+    config_path: Path,
+    hook_command: str,
+    with_hook: Callable[[Any, str], dict[str, Any]],
+    hook_commands: Callable[[dict[str, Any]], list[str]],
+) -> list[Change]:
+    config_text = config_with_hook(config_path, hook_command, with_hook, hook_commands)
+    if config_text is None:
+        return []
+    return [Change(f"Turn the hook on in {tilde(config_path)} (backed up first)", lambda: write_with_backup(config_path, config_text))]
+
+
+def claude_code_changes(claude_home: Path) -> list[Change]:
+    """Each change the Claude Code step would make; empty when everything is in place."""
+    changes = skill_and_hook_changes(claude_home)
+    hook_command = f"python3 {shlex.quote(str(claude_home / 'hooks' / HOOK_FILE_NAME))}"
+    changes += hook_config_changes(claude_home / "settings.json", hook_command, with_envh_hook, envh_hook_commands)
     claude_md = claude_home / "CLAUDE.md"
     current = claude_md.read_text() if claude_md.exists() else ""
     if CLAUDE_MD_MARKER not in current:
         snippet = (CLAUDE_SOURCE / "CLAUDE.snippet.md").read_text()
-        changes.append((f"Add 3 lines to {tilde(claude_md)}", lambda: write_atomically(claude_md, claude_md_with_snippet(current, snippet))))
+        changes.append(Change(f"Add 3 lines to {tilde(claude_md)}", lambda: write_atomically(claude_md, claude_md_with_snippet(current, snippet))))
     return changes
 
 
-def step_claude_code() -> Outcome:
-    if not CLAUDE_HOME.exists():
-        note("Skipped: Claude Code isn't set up for this user.")
+def cursor_changes(cursor_home: Path) -> list[Change]:
+    """Each change the Cursor step would make; empty when everything is in place."""
+    hook_command = f"python3 {shlex.quote(str(cursor_home / 'hooks' / HOOK_FILE_NAME))}"
+    return skill_and_hook_changes(cursor_home) + hook_config_changes(cursor_home / "hooks.json", hook_command, with_cursor_hook, cursor_hook_commands)
+
+
+def step_connect(tool: str, tool_home: Path, changes_for: Callable[[Path], list[Change]]) -> Outcome:
+    if not tool_home.exists():
+        note(f"Skipped: {tool} isn't set up for this user.")
         return Outcome(False, "skipped")
-    changes = claude_code_changes(CLAUDE_HOME)
+    changes = changes_for(tool_home)
     if not changes:
-        ok("Claude Code is already connected")
-        return Outcome(True, "already connected")
-    line("Teaches Claude Code to ask for keys through envh.")
-    more = "\n".join(description for description, _ in changes) + '\nDetails: README, "Using it with Claude Code"'
-    if not ask("Connect Claude Code?", more):
-        return Outcome(False, "skipped")
-    for description, apply in changes:
-        apply()
-        detail(description)
-    ok("Connected. New Claude Code sessions use envh.")
+        ok(f"{tool} is connected and up to date")
+        return Outcome(True, "up to date")
+    details = [change.description for change in changes]
+    outdated = [change.outdated for change in changes if change.outdated]
+    if outdated:
+        warn(f"Your envh {' and '.join(outdated)} for {tool} {'are' if len(outdated) > 1 else 'is'} out of date.")
+        question = "Update now?"
+        details.append("Copied them into a project yourself? Update those copies too.")
+    else:
+        line(f"Teaches {tool} to ask for keys through envh.")
+        question = f"Connect {tool}?"
+    if not ask(question, "\n".join([*details, f'Details: README, "Using it with {tool}"'])):
+        return Outcome(False, "out of date" if outdated else "skipped")
+    for change in changes:
+        change.apply()
+        detail(change.description)
+    if outdated:
+        ok(f"Updated. New {tool} sessions use the new version.")
+        return Outcome(True, "updated")
+    ok(f"Connected. New {tool} sessions use envh.")
     return Outcome(True, "connected")
+
+
+def step_claude_code() -> Outcome:
+    return step_connect("Claude Code", CLAUDE_HOME, claude_code_changes)
+
+
+def step_cursor() -> Outcome:
+    return step_connect("Cursor", CURSOR_HOME, cursor_changes)
 
 
 STEPS: list[tuple[str, Callable[[], Outcome]]] = [
@@ -584,6 +651,7 @@ STEPS: list[tuple[str, Callable[[], Outcome]]] = [
     ("Import keys", step_import),
     ("Find stray keys", step_scan),
     ("Connect Claude Code", step_claude_code),
+    ("Connect Cursor", step_cursor),
 ]
 
 
