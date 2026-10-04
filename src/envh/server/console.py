@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import difflib
 import os
 import pwd
@@ -10,9 +11,10 @@ import shutil
 import subprocess
 import termios
 import traceback
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
 
 from envh.common import fingerprint, printable
 from envh.core.broker import Broker, RequestError
@@ -20,11 +22,14 @@ from envh.core.config import CONFIG_FILE, PRESETS_FILE, SECRET_NAME, ConfigError
 from envh.core.durations import format_duration
 from envh.core.state import Request, StateError
 from envh.core.vault import MIN_PASSPHRASE_LENGTH, VaultError, write_private_file
+from envh.server.keys_view import ENTER_FULL_SCREEN, LEAVE_FULL_SCREEN, CheckPassphrase, KeyList, KeyRow, Leave, Rename, render_keys, split_keys
 
 BELL = "\a"
 WRONG_PASSPHRASE_PAUSE_SECONDS = 2
+KEYS_REFRESH_SECONDS = 0.5
 HELP = """A request shows up on its own; type the vault passphrase to approve it, or n to deny it.
 commands:
+  keys              see your keys; arrows move, F2 renames
   add SECRET        store a new secret (value typed hidden)
   rm SECRET         remove a secret
   secrets | presets | sessions | runs
@@ -34,7 +39,7 @@ commands:
   passphrase        change the vault passphrase
   reload            re-read config.yaml and presets.yaml
   help | quit
-add, rm, preset rm, edit and passphrase ask for the vault passphrase too (typed hidden)"""
+add, rm, preset rm, edit, passphrase and the first rename in keys ask for the vault passphrase too (typed hidden)"""
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,35 @@ def render_request(request: Request, now: datetime) -> list[str]:
     return lines
 
 
+class ConsoleOutput:
+    """The console's terminal output. While a full-screen view is open, lines are held and printed when it closes, so
+    audit events neither break the view nor get lost."""
+
+    def __init__(self, say: Callable[[str], None], write: Callable[[str], None]) -> None:
+        self._say = say
+        self._write = write
+        self._held: list[str] | None = None
+
+    def say(self, text: str) -> None:
+        if self._held is None:
+            self._say(text)
+        else:
+            self._held.append(text)
+
+    def draw(self, frame: str) -> None:
+        self._write(frame)
+
+    @contextmanager
+    def holding(self) -> Iterator[None]:
+        self._held = []
+        try:
+            yield
+        finally:
+            held, self._held = self._held, None
+            for text in held:
+                self._say(text)
+
+
 class Console:
     """Shows one request at a time and reads the answer with echo off, so a typed passphrase never appears on screen.
 
@@ -106,11 +140,12 @@ class Console:
     next request.
     """
 
-    def __init__(self, broker: Broker, reader: asyncio.StreamReader, say: Callable[[str], None], tty_fd: int | None, phrase: str) -> None:
+    def __init__(self, broker: Broker, reader: asyncio.StreamReader, output: ConsoleOutput, tty_fd: int | None, phrase: str) -> None:
         self.broker = broker
         self.phrase = phrase
         self.reader = reader
-        self.say = say
+        self.output = output
+        self.say = output.say
         self.tty_fd = tty_fd
         self.quit_requested = asyncio.Event()
         self.current: Request | None = None
@@ -163,7 +198,7 @@ class Console:
         termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, attributes)
 
     async def run(self) -> None:
-        self.say("console ready; requests appear here on their own. Type help for commands")
+        self.say("console ready; requests appear here on their own. Type keys to see your keys, help for commands")
         try:
             while not self.quit_requested.is_set():
                 line = await self.reader.readline()
@@ -218,6 +253,8 @@ class Console:
         command, args = parsed.command, parsed.args
         if command == "help":
             self.say(HELP)
+        elif command == "keys" and not args:
+            await self._keys()
         elif command == "quit":
             self.quit_requested.set()
         elif command == "add" and len(args) == 1:
@@ -247,6 +284,90 @@ class Console:
         else:
             self.say(f"unknown command: {parsed.command} {' '.join(args)}".rstrip())
             self.say(HELP)
+
+    async def _keys(self) -> None:
+        view = KeyList(self._key_rows())
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        shown = {"frame": "", "waiting": 0}
+
+        def draw() -> None:
+            waiting = sum(1 for request in self._queued if request.pending)
+            frame = render_keys(view, self.phrase, waiting, self._screen_size())
+            if frame != shown["frame"]:
+                self.output.draw(frame + (BELL if waiting > shown["waiting"] else ""))
+            shown.update(frame=frame, waiting=waiting)
+
+        with self.output.holding(), self._full_screen():
+            while True:
+                draw()
+                try:
+                    data = await asyncio.wait_for(self.reader.read(4096), KEYS_REFRESH_SECONDS)
+                except asyncio.TimeoutError:
+                    continue
+                if not data:
+                    return
+                for key in split_keys(decoder.decode(data)):
+                    action = view.handle(key)
+                    if isinstance(action, CheckPassphrase):
+                        if self.broker.vault.matches_passphrase(action.typed):
+                            action = view.passphrase_accepted()
+                        else:
+                            view.passphrase_rejected()
+                            draw()
+                            await self._wrong_passphrase("rename")
+                    if isinstance(action, Rename):
+                        view.tell("Saving…", "info")
+                        draw()
+                        self._rename(view, action)
+                    elif isinstance(action, Leave):
+                        return
+
+    def _rename(self, view: KeyList, rename: Rename) -> None:
+        try:
+            self.broker.rename_secret(rename.old, rename.new)
+        except (RequestError, ConfigError, VaultError) as error:
+            view.tell(str(error))
+            return
+        view.renamed(self._key_rows(), rename.new)
+
+    def _key_rows(self) -> list[KeyRow]:
+        config = self.broker.config
+        return [
+            KeyRow(
+                name=name,
+                used_by=tuple(sorted(preset.name for preset in config.presets.values() if any(entry.secret == name for entry in preset.env.values()))),
+                per_run=config.policy_for(name).approval == "per-run",
+            )
+            for name in self.broker.vault.names()
+        ]
+
+    def _screen_size(self) -> os.terminal_size:
+        if self.tty_fd is not None:
+            try:
+                return os.get_terminal_size(self.tty_fd)
+            except OSError:
+                pass
+        return os.terminal_size((80, 24))
+
+    @contextmanager
+    def _full_screen(self) -> Iterator[None]:
+        """Keys arrive as they are pressed, on the alternate screen, so the console's scrollback comes back unchanged.
+        Ctrl-C reaches the view as a key that leaves it, instead of stopping the broker."""
+        saved = termios.tcgetattr(self.tty_fd) if self.tty_fd is not None else None
+        if saved is not None:
+            raw = list(saved)
+            raw[3] = raw[3] & ~(termios.ECHO | termios.ICANON | termios.ISIG)
+            raw[6] = list(saved[6])
+            raw[6][termios.VMIN] = 1
+            raw[6][termios.VTIME] = 0
+            termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, raw)
+        self.output.draw(ENTER_FULL_SCREEN)
+        try:
+            yield
+        finally:
+            self.output.draw(LEAVE_FULL_SCREEN)
+            if saved is not None:
+                termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, saved)
 
     def _show_presets(self) -> None:
         for preset in self.broker.list_payload()["presets"]:

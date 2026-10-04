@@ -11,6 +11,7 @@ from typing import Any, Callable
 from envh.common import fingerprint
 from envh.core.audit import Audit
 from envh.core.config import (
+    CONFIG_FILE,
     PRESETS_FILE,
     SECRET_NAME,
     VAR_NAME,
@@ -21,6 +22,7 @@ from envh.core.config import (
     dump_presets,
     load_config,
     parse_presets,
+    renamed_in_config,
 )
 from envh.core.durations import MAX_SESSION, format_duration
 from envh.core.state import Provenance, Request, Session, StateTable
@@ -345,6 +347,30 @@ class Broker:
     def deny(self, request: Request, by: str = "console") -> None:
         self.state.decide(request, approved=False, by=by)
         self.audit.event("decision", id=request.id, outcome="denied", by=by)
+
+    def rename_secret(self, old: str, new: str) -> None:
+        """Rename a stored secret everywhere envh refers to it: the vault, its policy in config.yaml, presets, live
+        sessions and waiting requests. Every check runs before anything is written."""
+        if old not in self.vault:
+            raise RequestError(f"{old} is not in the vault")
+        if not SECRET_NAME.match(new):
+            raise RequestError(f"{new!r} is not a valid secret name (UPPER_CASE)")
+        if new in self.vault:
+            raise RequestError(f"{new} is already taken")
+        config_path = self.data_dir / CONFIG_FILE
+        renamed_config = renamed_in_config(config_path.read_text(), old, new) if old in self.config.secret_policies else None
+        presets = renamed_presets(self.config.presets_raw, {old: new})
+        parse_presets(dump_presets(presets), (set(self.vault.names()) - {old}) | {new})
+        self.vault.set(new, self.vault.get(old))
+        self.vault.remove(old)
+        self.vault.save()
+        if renamed_config is not None:
+            write_private_file(config_path, renamed_config.encode())
+        if presets != self.config.presets_raw:
+            write_private_file(self.data_dir / PRESETS_FILE, dump_presets(presets).encode())
+        self.state.rename_secret(old, new)
+        self.audit.event("secret_renamed", old=old, new=new)
+        self.reload()
 
     def write_presets(self, merged: dict[str, Any]) -> None:
         write_private_file(self.data_dir / PRESETS_FILE, dump_presets(merged).encode())

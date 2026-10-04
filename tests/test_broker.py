@@ -199,3 +199,33 @@ async def test_session_runs_refuse_secrets_that_became_per_run(harness: Harness)
         broker.resolve_run_in_session(session_id, [], uid)
     _, resolved = broker.resolve_run_in_session(session_id, ["OPENROUTER_API_KEY"], uid)
     assert resolved == {"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY"}
+
+
+async def test_rename_moves_the_secret_its_policy_presets_and_live_sessions(harness: Harness) -> None:
+    broker = harness.broker
+    mapping, preset = broker.mapping_from_preset("team")
+    request = broker.request_session(mapping, preset, 30, "work", ("x",), harness.provenance())
+    broker.approve(request)
+    waiting = broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, None, "why", ("x",), harness.provenance())
+    broker.rename_secret("OPENAI_API_KEY", "PERSONAL_OPENAI_KEY")
+    assert "OPENAI_API_KEY" not in broker.vault and broker.vault.get("PERSONAL_OPENAI_KEY") == "sk-openai"
+    assert Vault.open(harness.data_dir / "vault.age", PASSPHRASE).get("PERSONAL_OPENAI_KEY") == "sk-openai"
+    assert broker.config.policy_for("PERSONAL_OPENAI_KEY").max_session == timedelta(hours=1)
+    assert broker.config.presets["team"].env["OPENAI_API_KEY"].secret == "PERSONAL_OPENAI_KEY"
+    assert broker.config.presets["dbwork"].env["OPENAI_API_KEY"].secret == "PERSONAL_OPENAI_KEY"
+    session, run_mapping = broker.resolve_run_in_session(request.result["session_id"], [], harness.provenance().uid)
+    assert broker.env_for(run_mapping)["OPENAI_API_KEY"] == "sk-openai"
+    assert waiting.mapping == {"OPENAI_API_KEY": "PERSONAL_OPENAI_KEY"}
+    assert any("secret_renamed" in line for line in harness.echoed)
+    reloaded = load_config(harness.data_dir, set(broker.vault.names()))
+    assert "PERSONAL_OPENAI_KEY" in reloaded.secret_policies and "OPENAI_API_KEY" not in reloaded.secret_policies
+
+
+@pytest.mark.parametrize(("old", "new", "message"), [("MISSING", "NEW_NAME", "not in the vault"), ("DATABASE_URL", "bad-name", "valid secret name"), ("DATABASE_URL", "OPENAI_API_KEY", "already taken")])
+def test_rename_refuses_without_changing_anything(harness: Harness, old: str, new: str, message: str) -> None:
+    before = {name: harness.broker.vault.get(name) for name in harness.broker.vault.names()}
+    presets_before = (harness.data_dir / "presets.yaml").read_text()
+    with pytest.raises(RequestError, match=message):
+        harness.broker.rename_secret(old, new)
+    assert {name: harness.broker.vault.get(name) for name in harness.broker.vault.names()} == before
+    assert (harness.data_dir / "presets.yaml").read_text() == presets_before

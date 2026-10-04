@@ -105,7 +105,7 @@ envh import --dry-run ~/code            # scan a directory (depth 3) and show th
 envh import ~/code                      # or give specific files: envh import ~/code/bot/.env
 ```
 
-Import one project now and others whenever you like; an import never overwrites what is stored. Keys are named `<PROJECT>_<NAME>`, where the project is the folder that holds the `.env` (`news-bot/.env` gives `NEWS_BOT_OPENAI_API_KEY`). A key whose value is already in the vault is reused under its stored name instead of being stored twice. If a name is already taken by a different value, the new one gets a number (`NEWS_BOT_OPENAI_API_KEY_2`). The console shows the final names before you approve, and the presets and the rewritten `.env` comments use them. To replace a stored key, use `add NAME` on the console.
+Import one project now and others whenever you like; an import never overwrites what is stored. Keys are named `<PROJECT>_<NAME>`, where the project is the folder that holds the `.env` (`news-bot/.env` gives `NEWS_BOT_OPENAI_API_KEY`). A key whose value is already in the vault is reused under its stored name instead of being stored twice. If a name is already taken by a different value, the new one gets a number (`NEWS_BOT_OPENAI_API_KEY_2`). The console shows the final names before you approve, and the presets and the rewritten `.env` comments use them. To rename a key later, see [See and rename your keys](#see-and-rename-your-keys); to replace a stored value, use `add NAME` on the console.
 
 The wizard walks through six steps and writes nothing until the last one:
 
@@ -153,6 +153,14 @@ What it can and cannot identify:
 - **Not scanned:** git object history (`git log -p -S<prefix>` inside a repo), binary databases such as browser profiles and VS Code state, encrypted stores such as the Claude desktop app's local environment, and mounted drives outside the paths given.
 
 The scan stays separate from the import wizard on purpose: the wizard moves values out of files you chose, the scan is a read-only audit of everything else. The wizard prints a reminder to run it.
+
+## See and rename your keys
+
+Type `keys` in the console. Arrow keys move through your keys, each shown with the presets that use it. **F2** (or Enter) renames the selected key: type the new name, press Enter. The first rename asks for your vault passphrase; later renames in the same visit do not. Esc goes back, and any request that arrived meanwhile is shown then.
+
+A rename follows the key everywhere envh refers to it: the vault, its policy in `config.yaml` (your comments stay), presets, live sessions and waiting requests. Two things keep the old name: the `# VAR -> envh secret NAME` comments in `.env` files you imported, and any command or script that names the key itself (`--with VAR=OLD_NAME`).
+
+Asking once per visit costs a little: until you press Esc, something that can type into the console window could rename more keys without the passphrase (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)). It cannot read or change a value that way.
 
 ## Daily use
 
@@ -320,7 +328,7 @@ Layout, in review order. The directory tree states the trust boundaries and a te
 | Package | Side of the boundary | Contents |
 |---|---|---|
 | `src/envh/core/` | trusted logic, no sockets or terminals | `config.py` policy files, `durations.py`, `vault.py` (age encryption), `state.py` (requests, sessions, runs), `broker.py` (decisions and their side effects), `audit.py` |
-| `src/envh/server/` | the trusted process, runs as user `envh` | `control.py` (Unix-socket protocol, peer uid), `console.py` (prompts, codes, admin commands), `hardening.py`, `serve.py` (startup), `init_cmd.py` |
+| `src/envh/server/` | the trusted process, runs as user `envh` | `control.py` (Unix-socket protocol, peer uid), `console.py` (prompts, admin commands), `keys_view.py` (the `keys` screen), `hardening.py`, `serve.py` (startup), `init_cmd.py` |
 | `src/envh/client/` | the untrusted side, runs as you or an agent, standard library only | `transport.py` (socket client), `commands.py` (`envh run`, `session`, `list`, …) |
 | `src/envh/tools/` | set-aside utilities, standard library only | `importer.py` (the `.env` wizard), `scanner.py` (`envh scan`); deleting the package removes two subcommands and nothing else |
 | `src/envh/install/` | root-only system setup | `command.py` (`envh install` / `uninstall`, the console helper and launcher) |

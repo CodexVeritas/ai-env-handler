@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pwd
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -166,6 +166,25 @@ def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[st
             max_session=_parse_session_duration(fields.get("max_session", format_duration(defaults.max_session)), where),
         )
     return defaults, policies, users, allowed_uids
+
+
+def renamed_in_config(text: str, old: str, new: str) -> str:
+    """config.yaml with the policy of secret old moved to new. Only text outside comments changes, so the user's layout
+    and comments stay; refuses when the result would not parse to the same policies under the new name."""
+    token = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])")
+    renamed_lines = []
+    for line in text.splitlines(keepends=True):
+        code, hash_mark, comment = line.partition("#")
+        renamed_lines.append(token.sub(new, code) + hash_mark + comment)
+    renamed = "".join(renamed_lines)
+    defaults, policies, users, _ = parse_config(text)
+    if new in policies:
+        raise ConfigError(f"{CONFIG_FILE} already has a policy for {new}; remove it with `edit config` first")
+    expected = {new if name == old else name: replace(policy, name=new if name == old else name) for name, policy in policies.items()}
+    renamed_defaults, renamed_policies, renamed_users, _ = parse_config(renamed)
+    if (renamed_defaults, renamed_policies, renamed_users) != (defaults, expected, users):
+        raise ConfigError(f"{CONFIG_FILE}: could not move the policy of {old} to {new}; rename it there with `edit config` first")
+    return renamed
 
 
 def parse_config_for_broker(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[str, ...], frozenset[int]]:

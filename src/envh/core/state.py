@@ -188,6 +188,11 @@ class StateTable:
         self.sessions[session.id] = session
         return session
 
+    def rename_secret(self, old: str, new: str) -> None:
+        """Point live sessions and waiting requests at a secret's new name; the value they grant does not change."""
+        for holder in [*self.live_sessions(), *self.pending()]:
+            holder.mapping = {var: new if secret == old else secret for var, secret in holder.mapping.items()}
+
     def live_sessions(self) -> list[Session]:
         now = self.now()
         return [session for session in self.sessions.values() if session.live(now)]
