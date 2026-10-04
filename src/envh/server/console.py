@@ -138,7 +138,8 @@ class ConsoleOutput:
 
     def prompt(self, text: str) -> None:
         """Shows text as the prompt on the current line; "" removes it."""
-        self._write(f"{ERASE_LINE if self._prompt else ''}{text}")
+        if text or self._prompt:
+            self._write(f"{ERASE_LINE if self._prompt else ''}{text}")
         self._prompt = text
 
     def draw(self, frame: str) -> None:
