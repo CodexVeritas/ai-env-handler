@@ -76,6 +76,7 @@ Backs up each .env file first.
 Names keys after the project, like MYAPP_OPENAI_API_KEY.
 Import more projects later with: envh import <folder>"""
 SCAN_MORE = """Checks shell history, Claude Code transcripts, notebooks and other repos.
+Skips installed packages, caches and browser profiles; the report lists what it skipped.
 Shows where each copy is, never the key itself.
 Scan somewhere else with: envh scan <folder>"""
 
@@ -472,7 +473,7 @@ def step_scan() -> Outcome:
     if not ENVH_BIN.exists():
         note("Skipped: envh isn't installed.")
         return Outcome(False, "skipped")
-    line("Looks for copies of keys left outside .env files. Read-only.")
+    line("Looks for copies of keys left outside .env files. Read-only; can take a few minutes.")
     if not ask("Scan your home folder?", SCAN_MORE):
         return Outcome(False, "skipped")
     say()
