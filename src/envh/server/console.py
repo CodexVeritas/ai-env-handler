@@ -12,7 +12,7 @@ import termios
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
+from typing import Callable, TextIO
 
 from envh.common import fingerprint, printable
 from envh.core.broker import Broker, RequestError
@@ -23,18 +23,29 @@ from envh.core.vault import MIN_PASSPHRASE_LENGTH, VaultError, write_private_fil
 
 BELL = "\a"
 WRONG_PASSPHRASE_PAUSE_SECONDS = 2
-HELP = """A request shows up on its own; type the vault passphrase to approve it, or n to deny it.
-commands:
-  add SECRET        store a new secret (value typed hidden)
+COMMAND_PROMPT = "envh> "
+ERASE_LINE = "\r\x1b[K"
+HELP = """Requests appear here on their own: type the vault passphrase to approve one, or n to deny it.
+Type commands at the envh> prompt. It is hidden while a request waits.
+
+Look
+  secrets           list stored secrets and their approval rules
+  presets           list presets and the variables they set
+  sessions          list open sessions
+  runs              list commands running with secrets right now
+
+Change (each asks for the vault passphrase)
+  add SECRET        store a secret; you type the value hidden
   rm SECRET         remove a secret
-  secrets | presets | sessions | runs
   preset rm NAME    remove a preset
-  edit config       open config.yaml in an editor; validated before it is saved
-  edit presets      same for presets.yaml (optionally: edit presets vim)
+  edit config       edit config.yaml; it is checked before it is saved
+  edit presets      edit presets.yaml (pick an editor: edit presets vim)
   passphrase        change the vault passphrase
+
+Console
   reload            re-read config.yaml and presets.yaml
-  help | quit
-add, rm, preset rm, edit and passphrase ask for the vault passphrase too (typed hidden)"""
+  help, ?           show this list
+  quit              close the console; this ends every session"""
 
 
 @dataclass(frozen=True)
@@ -103,6 +114,26 @@ def render_request(request: Request, now: datetime) -> list[str]:
     return lines
 
 
+class Screen:
+    """Prints lines above a prompt kept on the last line, so log lines arriving while the console waits never bury it."""
+
+    def __init__(self, stream: TextIO) -> None:
+        self._stream = stream
+        self._prompt = ""
+
+    def say(self, text: str) -> None:
+        self._write(f"{ERASE_LINE if self._prompt else ''}{text}\n{self._prompt}")
+
+    def prompt(self, text: str) -> None:
+        """Shows text as the prompt on the current line; "" removes it."""
+        self._write(f"{ERASE_LINE if self._prompt else ''}{text}")
+        self._prompt = text
+
+    def _write(self, text: str) -> None:
+        self._stream.write(text)
+        self._stream.flush()
+
+
 class Console:
     """Shows one request at a time and reads the answer with echo off, so a typed passphrase never appears on screen.
 
@@ -111,11 +142,12 @@ class Console:
     next request.
     """
 
-    def __init__(self, broker: Broker, reader: asyncio.StreamReader, say: Callable[[str], None], tty_fd: int | None, phrase: str) -> None:
+    def __init__(self, broker: Broker, reader: asyncio.StreamReader, say: Callable[[str], None], prompt: Callable[[str], None], tty_fd: int | None, phrase: str) -> None:
         self.broker = broker
         self.phrase = phrase
         self.reader = reader
         self.say = say
+        self.prompt = prompt
         self.tty_fd = tty_fd
         self.quit_requested = asyncio.Event()
         self.current: Request | None = None
@@ -138,6 +170,7 @@ class Console:
         self.say(approval_prompt(request, self.phrase))
 
     def _present(self, request: Request) -> None:
+        self.prompt("")
         self.current = request
         request.decision.add_done_callback(lambda decision: self._on_decided(request, decision))
         self.show_request(request)
@@ -168,10 +201,13 @@ class Console:
         termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, attributes)
 
     async def run(self) -> None:
-        self.say("console ready; requests appear here on their own. Type help for commands")
+        self.say("console ready. Requests appear here on their own; type help to see commands.")
         try:
             while not self.quit_requested.is_set():
+                if self.current is None and not self._discard_next_line:
+                    self.prompt(COMMAND_PROMPT)
                 line = await self.reader.readline()
+                self.prompt("")
                 if not line:
                     self.say("console input closed; shutting down")
                     self.quit_requested.set()
@@ -188,6 +224,7 @@ class Console:
                     self._busy = False
                     self._advance()
         finally:
+            self.prompt("")
             self.set_echo(True)
 
     async def handle_line(self, text: str) -> None:
@@ -221,7 +258,7 @@ class Console:
 
     async def _command(self, parsed: ParsedLine) -> None:
         command, args = parsed.command, parsed.args
-        if command == "help":
+        if command in ("help", "?"):
             self.say(HELP)
         elif command == "quit":
             self.quit_requested.set()
@@ -235,9 +272,13 @@ class Console:
         elif command == "presets":
             self._show_presets()
         elif command == "sessions":
+            if not self.broker.state.live_sessions():
+                self.say("   no open sessions")
             for session in self.broker.state.live_sessions():
                 self.say(f"   {session.id}  {login_name(session.provenance.uid):<12} {', '.join(session.presets) or '(ad hoc)':<24} expires {session.expires_at:%H:%M:%S}  vars {', '.join(sorted(session.mapping))}  reason {printable(session.reason or '-')}")
         elif command == "runs":
+            if not self.broker.state.active_runs():
+                self.say("   no commands are running with secrets")
             for run in self.broker.state.active_runs():
                 self.say(f"   run #{run.id} pid {run.provenance.pid} vars {', '.join(sorted(run.mapping))}  {printable(' '.join(run.command))}")
         elif command == "preset" and len(args) == 2 and args[0] == "rm":
@@ -250,8 +291,7 @@ class Console:
             self.broker.reload()
             self.say("reloaded")
         else:
-            self.say(f"unknown command: {parsed.command} {' '.join(args)}".rstrip())
-            self.say(HELP)
+            self.say(f"unknown command: {' '.join((command, *args))}. Type help to see commands.")
 
     def _show_presets(self) -> None:
         for preset in self.broker.list_payload()["presets"]:
