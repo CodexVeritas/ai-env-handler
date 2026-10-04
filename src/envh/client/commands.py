@@ -21,6 +21,13 @@ from envh.client.transport import EXIT_USAGE, ClientError, Connection, waiting_n
 SESSION_ENV_VAR = "ENVH_SESSION"
 RUN_MARKER_VAR = "ENVH_RUN_MARKER"
 LINGER_GRACE_SECONDS = 2.0
+CONSOLE_COMMANDS = (
+    ("add SECRET", "add a secret, or replace its value"),
+    ("rm SECRET", "remove a secret"),
+    ("edit presets", "add, change or remove presets"),
+    ("preset rm NAME", "remove a preset"),
+    ("edit config", "change approval rules and session limits"),
+)
 
 
 def parse_list(values: list[str] | None) -> list[str]:
@@ -195,6 +202,31 @@ def cmd_status(args: argparse.Namespace, sock: Path) -> int:
     return 0
 
 
+def cmd_manage(args: argparse.Namespace, sock: Path) -> int:
+    print("Secrets and presets change only on the envh console. Type one of these there:")
+    print()
+    for command, purpose in CONSOLE_COMMANDS:
+        print(f"  {command:<18}{purpose}")
+    print()
+    print("Each asks for your vault passphrase.")
+    print("Or write presets in a file here and send them to the console: envh preset propose FILE")
+    print()
+    if console_running(sock):
+        print("✓ The console is running.")
+    else:
+        print("! The console isn't running. Start it in its own terminal window, not an AI tool's terminal:")
+        print("    sudo envh-console")
+    return 0
+
+
+def console_running(sock: Path) -> bool:
+    try:
+        Connection(sock).close()
+    except ClientError:
+        return False
+    return True
+
+
 def cmd_preset_validate(args: argparse.Namespace, sock: Path) -> int:
     with Connection(sock) as conn:
         conn.send(op="preset_validate", yaml=Path(args.file).read_text())
@@ -254,6 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("list", help="secrets, presets and live sessions").set_defaults(func=cmd_list)
     commands.add_parser("status", help="pending requests, runs, sessions").set_defaults(func=cmd_status)
+    commands.add_parser("manage", help="how to add, change or remove secrets and presets").set_defaults(func=cmd_manage)
 
     preset = commands.add_parser("preset", help="validate or propose presets")
     preset_commands = preset.add_subparsers(dest="preset_command", required=True)

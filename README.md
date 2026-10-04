@@ -164,6 +164,7 @@ The scan stays separate from the import wizard on purpose: the wizard moves valu
 
 ```bash
 envh list                                                        # secrets (names, policy), presets, live sessions
+envh manage                                                      # how to add, change or remove secrets and presets
 
 # one command, one approval
 envh run --preset news-bot-personal --reason "backfill" -- uv run python scripts/backfill.py
@@ -194,6 +195,8 @@ Both policy files are owned by the `envh` user with mode 0600. Nothing running a
 | `config.yaml` (defaults, per-secret policy) | you, on the console | `edit config` opens it in an editor; the result is validated and shown as a diff before it is saved |
 | `presets.yaml` | you, on the console | `edit presets`, `preset rm NAME`, the import wizard, or approving an agent's `envh preset propose` (shown as a diff, approved with your passphrase) |
 | the vault | you, on the console | `add`, `rm`, the import wizard |
+
+`envh manage` lists the console commands for these changes and says whether the console is running.
 
 An agent can only *propose*: `envh preset validate draft.yaml` checks a draft without changing anything, `envh preset propose draft.yaml --reason "..."` puts the diff on your console. A proposal that maps a variable to a secret the agent should not have is just a diff you deny. Root can of course edit the files directly; the console `reload` command picks that up.
 

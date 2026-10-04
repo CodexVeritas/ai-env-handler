@@ -63,6 +63,8 @@ presets:
 
 Check it with `envh preset validate draft.yaml`, then `envh preset propose draft.yaml --reason "..."`. The human sees a diff on the console and decides. You cannot edit the configuration yourself; it is owned by another user.
 
+Adding, replacing or removing a secret is the human's job on the console. If one is needed, say which and why, and point them to `envh manage`.
+
 ## How not to abuse envh
 
 The human approves on a console that shows your exact command line, the variables, the duration and your reason. Behave so that what they read is the whole truth:
