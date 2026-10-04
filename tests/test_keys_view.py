@@ -120,3 +120,17 @@ def test_the_old_name_shown_while_renaming_fits_the_screen() -> None:
     press(view, "f2")
     for line in render_keys(view, "phrase", 0, SIZE).split("\n"):
         assert len(re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", line)) <= 80
+
+
+def test_esc_then_a_passphrase_starting_with_o_still_leaves_the_view() -> None:
+    assert split_keys("\x1bOrchid\n")[:2] == ["escape", "O"]
+
+
+def test_the_rename_field_shows_the_end_of_a_long_name_where_typing_happens() -> None:
+    long_name = "NEWS_BOT_PERSONAL_OPENROUTER_API_KEY_2"
+    view = new_view([KeyRow(long_name, (), False)])
+    press(view, "f2")
+    before = render_keys(view, "phrase", 0, SIZE)
+    press(view, *"_X")
+    after = render_keys(view, "phrase", 0, SIZE)
+    assert "_KEY_2_X" in after and before != after

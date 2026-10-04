@@ -32,7 +32,7 @@ KEY_SEQUENCES = {
     "\x03": "escape",
 }
 SEQUENCES_LONGEST_FIRST = sorted(KEY_SEQUENCES, key=len, reverse=True)
-OTHER_SEQUENCE = re.compile(r"\x1b(\[\[.|\[[0-?]*[ -/]*[@-~]|O.)", re.DOTALL)
+OTHER_SEQUENCE = re.compile(r"\x1b(\[\[.|\[[0-?]*[ -/]*[@-~]|O[A-DFHP-S])", re.DOTALL)
 INCOMPLETE_SEQUENCE = re.compile(r"\x1b(\[\[?[0-?]*[ -/]*|O)?$")
 ENTER_FULL_SCREEN = "\x1b[?1049h\x1b[?25l"
 LEAVE_FULL_SCREEN = "\x1b[?25h\x1b[?1049l"
@@ -208,6 +208,11 @@ def fit(text: str, width: int) -> str:
     return text if len(text) <= width else text[: max(width - 1, 0)] + "…"
 
 
+def fit_end(text: str, width: int) -> str:
+    """Like fit, but keeps the end, where typing happens."""
+    return text if len(text) <= width else "…" + text[len(text) - max(width - 1, 0):]
+
+
 def render_keys(view: KeyList, phrase: str, waiting: int, size: os.terminal_size) -> str:
     """One frame, drawn from the top-left corner over the last one so the screen does not flicker. On a short screen the
     list gives way first, so the hints and the passphrase prompt with its phrase always show."""
@@ -221,7 +226,7 @@ def render_keys(view: KeyList, phrase: str, waiting: int, size: os.terminal_size
     if view.mode == BROWSE:
         footer.append(paint("2", "  ↑↓ move   F2 rename   Esc back"))
     elif view.mode == RENAME:
-        footer.append(paint("2", "  Type the new name   Enter save   Esc cancel"))
+        footer.append(paint("2", "  Type the new name   Ctrl-U clear   Enter save   Esc cancel"))
     else:
         footer.append(f"  [{phrase}] vault passphrase to rename (hidden): ")
     count = f"{len(view.rows)} key" + ("" if len(view.rows) == 1 else "s")
@@ -248,7 +253,7 @@ def render_row(view: KeyList, index: int, name_width: int, width: int) -> str:
     pointer = paint("36", "›") if selected else " "
     details_width = max(width - name_width - 6, 10)
     if selected and view.mode != BROWSE:
-        draft = fit(view.draft, name_width - 3)
+        draft = fit_end(view.draft, name_width - 3)
         cursor = "▏" if view.mode == RENAME else " "
         padding = " " * (name_width - len(draft) - 1)
         return f"  {pointer} {paint('1;4', draft)}{cursor}{padding}{paint('2', fit('was ' + row.name, details_width))}"

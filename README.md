@@ -86,7 +86,7 @@ The boundaries, in words:
 
 **What a key use means:** the approved command receives the real value in its environment. It is visible to that process, to everything it imports, and to every other process running as you while it runs. A malicious dependency no longer gets every key on disk whenever it likes; it gets the values of the one approved run it is part of, and you see that run in the log.
 
-**While you are not at the console, nothing is approved or changed.** Approving a request, and `add`, `rm`, `preset rm`, `edit` and `passphrase` on the console, all ask for your vault passphrase, typed hidden. A wrong passphrase is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with that passphrase, which is stored nowhere. The exception is a session you already approved: it keeps working until it expires.
+**While you are not at the console, nothing is approved or changed.** Approving a request, and `add`, `rm`, `preset rm`, `edit`, `passphrase` and the first rename in `keys` on the console, all ask for your vault passphrase, typed hidden. A wrong passphrase is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with that passphrase, which is stored nowhere. The exception is a session you already approved: it keeps working until it expires.
 
 **One passphrase, on purpose.** The vault passphrase both unlocks the vault and approves requests, so approving is one thing to type. That costs some security, and you should know what: you type the passphrase often, so on X11 a program running as you has many chances to record it; and anyone who learns it can approve at your console and also decrypt any copy of `vault.age`, such as a backup. To make a fake prompt easy to spot, every approval prompt shows your console phrase: type the passphrase only where you see it. See [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console).
 
@@ -162,7 +162,7 @@ The scan stays separate from the import wizard on purpose: the wizard moves valu
 
 ## See and rename your keys
 
-Type `keys` in the console. Arrow keys move through your keys, each shown with the presets that use it. **F2** renames the selected key: type the new name, press Enter. The first rename asks for your vault passphrase; later renames in the same visit do not. Esc goes back, and any request that arrived meanwhile is shown then. Other keys do nothing while you browse, so a passphrase typed there by mistake is dropped.
+Type `keys` in the console. Arrow keys move through your keys, each shown with the presets that use it. **F2** renames the selected key: the field starts with the current name (Ctrl-U clears it), type the new name, press Enter. The first rename asks for your vault passphrase; later renames in the same visit do not. Esc goes back, and any request that arrived meanwhile is shown then. Other keys do nothing while you browse, so a passphrase typed there by mistake is dropped.
 
 A rename follows the key everywhere envh refers to it: the vault, its policy in `config.yaml` (your comments stay), presets, live sessions and waiting requests. Two things keep the old name: the `# VAR -> envh secret NAME` comments in `.env` files you imported, and any command or script that names the key itself (`--with VAR=OLD_NAME`). A new name is refused while `config.yaml` still has a policy for it (left behind by `rm`; remove it with `edit config`), or while a live session or waiting request still uses it, since either would quietly attach to the renamed key.
 
@@ -199,9 +199,9 @@ Both policy files are owned by the `envh` user with mode 0600. Nothing running a
 
 | File | Who can change it | How |
 |---|---|---|
-| `config.yaml` (defaults, per-secret policy) | you, on the console | `edit config` opens it in an editor; the result is validated and shown as a diff before it is saved |
-| `presets.yaml` | you, on the console | `edit presets`, `preset rm NAME`, the import wizard, or approving an agent's `envh preset propose` (shown as a diff, approved with your passphrase) |
-| the vault | you, on the console | `add`, `rm`, the import wizard |
+| `config.yaml` (defaults, per-secret policy) | you, on the console | `edit config` opens it in an editor; the result is validated and shown as a diff before it is saved. A rename in `keys` moves a key's policy to its new name |
+| `presets.yaml` | you, on the console | `edit presets`, `preset rm NAME`, the import wizard, approving an agent's `envh preset propose` (shown as a diff, approved with your passphrase), or a rename in `keys` |
+| the vault | you, on the console | `add`, `rm`, the import wizard, a rename in `keys` |
 
 An agent can only *propose*: `envh preset validate draft.yaml` checks a draft without changing anything, `envh preset propose draft.yaml --reason "..."` puts the diff on your console. A proposal that maps a variable to a secret the agent should not have is just a diff you deny. Root can of course edit the files directly; the console `reload` command picks that up.
 
@@ -234,7 +234,7 @@ presets:
 
 The same variable can point at different secrets in different presets; that replaces commenting lines in and out. Unknown fields, bad durations, caps over 24h and secrets missing from the vault are rejected, never warned about.
 
-On the console, requests appear on their own, one at a time: type the vault passphrase to approve the one on screen, or `n` to deny it; others wait their turn. Commands: `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `passphrase` (change the vault passphrase; the vault is re-encrypted), `reload`, `help`, `quit`. `add`, `rm`, `preset rm`, `edit` and `passphrase` ask for the vault passphrase too.
+On the console, requests appear on their own, one at a time: type the vault passphrase to approve the one on screen, or `n` to deny it; others wait their turn. Commands: `keys` (browse and rename keys; see [See and rename your keys](#see-and-rename-your-keys)), `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `passphrase` (change the vault passphrase; the vault is re-encrypted), `reload`, `help`, `quit`. `add`, `rm`, `preset rm`, `edit`, `passphrase` and the first rename in `keys` ask for the vault passphrase too.
 
 ## Using it with Claude Code
 

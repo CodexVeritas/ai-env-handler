@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-import importlib
+import importlib.util
 import json
 import os
 import pwd
@@ -338,9 +338,14 @@ def stage_build_files(destination: Path) -> None:
 
 
 def system_problems(source: Path, invoking_user: str) -> list[str]:
-    """Run envh's preflight checks from the staged root-owned source, before anything is built or changed."""
-    sys.path.insert(0, str(source))
-    platform = importlib.import_module("envh.platform")
+    """Run envh's preflight checks from the staged root-owned source, before anything is built or changed. The module is
+    loaded from that file by path, so no copy imported earlier (for example from this user-writable folder) can stand in."""
+    spec = importlib.util.spec_from_file_location("envh_staged_platform", source / "envh" / "platform.py")
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"✗ Can't load the system checks from {source}.")
+    platform = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = platform
+    spec.loader.exec_module(platform)
     return platform.preflight_problems(invoking_user)
 
 
