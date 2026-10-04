@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pwd
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -89,6 +89,9 @@ class Config:
             return policy
         return SecretPolicy(name=policy.name, approval=preset_var.approval, max_session=policy.max_session)
 
+    def presets_using(self, secret: str) -> list[str]:
+        return sorted(preset.name for preset in self.presets.values() if any(entry.secret == secret for entry in preset.env.values()))
+
 
 def _load_yaml(text: str, where: str) -> Any:
     try:
@@ -168,6 +171,31 @@ def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[st
     return defaults, policies, users, allowed_uids
 
 
+def renamed_in_config(text: str, old: str, new: str) -> str:
+    """config.yaml with the policy of secret old moved to new. Only text outside comments changes, so the user's layout
+    and comments stay; refuses when the result would not parse to the same policies under the new name."""
+    token = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])")
+
+    def replacement(match: re.Match[str]) -> str:
+        """The new name, quoted where YAML would otherwise read it as something else (NO, ON and NULL are booleans and null)."""
+        already_quoted = match.start() > 0 and match.string[match.start() - 1] in "'\""
+        return new if already_quoted or yaml.safe_load(new) == new else f"'{new}'"
+
+    renamed_lines = []
+    for line in text.splitlines(keepends=True):
+        code, hash_mark, comment = line.partition("#")
+        renamed_lines.append(token.sub(replacement, code) + hash_mark + comment)
+    renamed = "".join(renamed_lines)
+    defaults, policies, users, _ = parse_config(text)
+    if new in policies:
+        raise ConfigError(f"{CONFIG_FILE} already has a policy for {new}; remove it with `edit config` first")
+    expected = {new if name == old else name: replace(policy, name=new if name == old else name) for name, policy in policies.items()}
+    renamed_defaults, renamed_policies, renamed_users, _ = parse_config(renamed)
+    if (renamed_defaults, renamed_policies, renamed_users) != (defaults, expected, users):
+        raise ConfigError(f"{CONFIG_FILE}: could not move the policy of {old} to {new}; rename it there with `edit config` first")
+    return renamed
+
+
 def parse_config_for_broker(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[str, ...], frozenset[int]]:
     """parse_config plus the rule the broker needs to start: at least one allowed user."""
     defaults, policies, users, allowed_uids = parse_config(text)
@@ -229,7 +257,11 @@ def load_config(data_dir: Path, known_secrets: set[str] | None) -> Config:
     presets_path = data_dir / PRESETS_FILE
     if not config_path.exists():
         raise ConfigError(f"{config_path} does not exist; run `envh init`")
-    defaults, policies, users, allowed_uids = parse_config_for_broker(config_path.read_text())
     presets_text = presets_path.read_text() if presets_path.exists() else PRESETS_TEMPLATE
+    return config_from_text(config_path.read_text(), presets_text, known_secrets)
+
+
+def config_from_text(config_text: str, presets_text: str, known_secrets: set[str] | None) -> Config:
+    defaults, policies, users, allowed_uids = parse_config_for_broker(config_text)
     presets, raw = parse_presets(presets_text, known_secrets)
     return Config(defaults=defaults, secret_policies=policies, presets=presets, presets_raw=raw, users=users, allowed_uids=allowed_uids)

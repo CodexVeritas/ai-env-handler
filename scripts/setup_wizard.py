@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-import importlib
+import importlib.util
 import json
 import os
 import pwd
@@ -337,11 +337,16 @@ def stage_build_files(destination: Path) -> None:
         shutil.copy2(REPO / name, destination / name)
 
 
-def system_checks(source: Path, invoking_user: str) -> tuple[list[str], list[str]]:
-    """Run envh's preflight checks from the staged root-owned source, before anything is built or changed."""
-    sys.path.insert(0, str(source))
-    platform = importlib.import_module("envh.platform")
-    return platform.preflight_problems(invoking_user), platform.preflight_warnings()
+def system_problems(source: Path, invoking_user: str) -> list[str]:
+    """Run envh's preflight checks from the staged root-owned source, before anything is built or changed. The module is
+    loaded from that file by path, so no copy imported earlier (for example from this user-writable folder) can stand in."""
+    spec = importlib.util.spec_from_file_location("envh_staged_platform", source / "envh" / "platform.py")
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"✗ Can't load the system checks from {source}.")
+    platform = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = platform
+    spec.loader.exec_module(platform)
+    return platform.preflight_problems(invoking_user)
 
 
 def run_with_spinner(text: str, command: list[str], environment: dict[str, str]) -> None:
@@ -410,14 +415,12 @@ def install_as_root(argv: list[str]) -> int:
         staging = Path(scratch) / "source"
         stage_build_files(staging)
         detail(f"Copied the source to a root-only folder: {staging}")
-        problems, warnings = system_checks(staging / "src", invoking_user)
-        for warning in warnings:
-            warn(warning)
-        for problem in problems:
-            warn(problem)
-        if problems and not args.ignore_preflight:
-            return PREFLIGHT_EXIT
-        if not problems:
+        if not args.ignore_preflight:
+            problems = system_problems(staging / "src", invoking_user)
+            for problem in problems:
+                warn(problem)
+            if problems:
+                return PREFLIGHT_EXIT
             ok("System checks passed")
         build_environment(uv, staging, INSTALL_PREFIX)
     detail(f"Built {INSTALL_PREFIX / 'env'} with {uv}: Python 3.12 and the versions pinned in uv.lock")
@@ -430,7 +433,7 @@ def install_as_root(argv: list[str]) -> int:
     link_envh_bin(INSTALL_PREFIX / "env" / "bin" / "envh")
     detail(f"Linked {ENVH_BIN}")
     ok("envh built")
-    return subprocess.run([str(ENVH_BIN), "install", *(["--verbose"] if verbose else [])]).returncode
+    return subprocess.run([str(ENVH_BIN), "install", *(["--verbose"] if verbose else []), *(["--ignore-preflight"] if args.ignore_preflight else [])]).returncode
 
 
 def step_console() -> Outcome:
@@ -694,6 +697,7 @@ def print_summary(results: list[tuple[str, Outcome]]) -> None:
         line(f"{dim('·')} {title:<20} {dim('not reached')}")
     say()
     line(dim("Rerun this any time to update envh or import more projects."))
+    line(dim("To see or rename your keys, type keys in the console."))
     say()
 
 

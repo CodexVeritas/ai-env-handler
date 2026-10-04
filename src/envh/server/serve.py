@@ -15,7 +15,7 @@ from envh.platform import socket_path as default_socket_path
 from envh.core.audit import AUDIT_FILE, Audit
 from envh.core.broker import Broker
 from envh.core.config import ConfigError, load_config
-from envh.server.console import Console
+from envh.server.console import Console, ConsoleOutput
 from envh.server.control import ControlServer
 from envh.server.hardening import HardeningError, acquire_instance_lock, assert_no_tiocsti, assert_terminal_is_ours, harden_process
 from envh.server.init_cmd import PHRASE_FILE, default_data_dir
@@ -27,6 +27,11 @@ SWEEP_INTERVAL_SECONDS = 15
 
 def say(text: str) -> None:
     print(text, flush=True)
+
+
+def write(text: str) -> None:
+    sys.stdout.write(text)
+    sys.stdout.flush()
 
 
 def local_now() -> datetime:
@@ -62,7 +67,8 @@ async def run_broker(data_dir: Path, socket_path: Path) -> None:
         raise SystemExit(f"config error: {error}")
     say(f"config loaded: {len(config.secret_policies)} secret policies, {len(config.presets)} presets")
     state = StateTable(local_now)
-    audit = Audit(data_dir / AUDIT_FILE, say, local_now)
+    output = ConsoleOutput(say, write)
+    audit = Audit(data_dir / AUDIT_FILE, output.say, local_now)
     broker = Broker(data_dir, config, vault, state, audit)
     control = ControlServer(broker, socket_path)
     await control.start()
@@ -71,7 +77,7 @@ async def run_broker(data_dir: Path, socket_path: Path) -> None:
     tty_fd = os.open(os.ttyname(sys.stdin.fileno()), os.O_RDONLY | os.O_NOCTTY)
     reader = asyncio.StreamReader()
     await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(tty_fd, "rb", buffering=0))
-    console = Console(broker, reader, say, tty_fd, phrase)
+    console = Console(broker, reader, output, tty_fd, phrase)
     for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         loop.add_signal_handler(signum, console.quit_requested.set)
     audit.event("broker_start", pid=os.getpid(), socket=str(socket_path))

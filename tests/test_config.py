@@ -15,6 +15,7 @@ from envh.core.config import (
     parse_config,
     parse_config_for_broker,
     parse_presets,
+    renamed_in_config,
 )
 
 
@@ -147,3 +148,24 @@ def test_parse_config_for_broker_requires_users() -> None:
     with pytest.raises(ConfigError, match="users is empty"):
         parse_config_for_broker("defaults: {approval: session}\n")
     assert parse_config_for_broker(render_config_template(getpass.getuser()))[3] == frozenset({os.getuid()})
+
+
+def test_renamed_in_config_moves_the_policy_and_keeps_comments() -> None:
+    text = f"users: [{getpass.getuser()}]\nsecrets:\n  # OLD_KEY is the prod key\n  OLD_KEY: {{ approval: per-run }}  # OLD_KEY note\n  OLD_KEY_2: {{ max_session: 2h }}\n"
+    renamed = renamed_in_config(text, "OLD_KEY", "NEW_KEY")
+    assert renamed == text.replace("  OLD_KEY: {", "  NEW_KEY: {")
+    _, policies, _, _ = parse_config(renamed)
+    assert policies["NEW_KEY"].approval == "per-run" and "OLD_KEY_2" in policies
+
+
+def test_renamed_in_config_refuses_a_name_that_already_has_a_policy() -> None:
+    text = f"users: [{getpass.getuser()}]\nsecrets: {{OLD_KEY: {{approval: per-run}}, NEW_KEY: {{max_session: 8h}}}}\n"
+    with pytest.raises(ConfigError, match="already has a policy for NEW_KEY"):
+        renamed_in_config(text, "OLD_KEY", "NEW_KEY")
+
+
+@pytest.mark.parametrize("new", ["NO", "YES", "ON", "OFF", "TRUE", "FALSE", "NULL"])
+def test_renamed_in_config_quotes_a_name_yaml_would_read_as_a_boolean_or_null(new: str) -> None:
+    text = f"users: [{getpass.getuser()}]\nsecrets:\n  OLD_KEY: {{ approval: per-run }}\n"
+    _, policies, _, _ = parse_config(renamed_in_config(text, "OLD_KEY", new))
+    assert policies[new].approval == "per-run"

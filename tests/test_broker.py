@@ -202,6 +202,50 @@ async def test_session_runs_refuse_secrets_that_became_per_run(harness: Harness)
     assert resolved == {"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY"}
 
 
+async def test_rename_moves_the_secret_its_policy_presets_and_live_sessions(harness: Harness) -> None:
+    broker = harness.broker
+    mapping, presets = broker.mapping_from_presets(["team"], [])
+    request = broker.request_session(mapping, presets, 30, "work", ("x",), harness.provenance())
+    broker.approve(request)
+    waiting = broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, [], "why", ("x",), harness.provenance())
+    broker.rename_secret("OPENAI_API_KEY", "PERSONAL_OPENAI_KEY")
+    assert "OPENAI_API_KEY" not in broker.vault and broker.vault.get("PERSONAL_OPENAI_KEY") == "sk-openai"
+    assert Vault.open(harness.data_dir / "vault.age", PASSPHRASE).get("PERSONAL_OPENAI_KEY") == "sk-openai"
+    assert broker.config.policy_for("PERSONAL_OPENAI_KEY").max_session == timedelta(hours=1)
+    assert broker.config.presets["team"].env["OPENAI_API_KEY"].secret == "PERSONAL_OPENAI_KEY"
+    assert broker.config.presets["dbwork"].env["OPENAI_API_KEY"].secret == "PERSONAL_OPENAI_KEY"
+    session, run_mapping = broker.resolve_run_in_session(request.result["session_id"], [], harness.provenance().uid)
+    assert broker.env_for(run_mapping)["OPENAI_API_KEY"] == "sk-openai"
+    assert waiting.mapping == {"OPENAI_API_KEY": "PERSONAL_OPENAI_KEY"}
+    assert any("secret_renamed" in line for line in harness.echoed)
+    reloaded = load_config(harness.data_dir, set(broker.vault.names()))
+    assert "PERSONAL_OPENAI_KEY" in reloaded.secret_policies and "OPENAI_API_KEY" not in reloaded.secret_policies
+
+
+@pytest.mark.parametrize(("old", "new", "message"), [("MISSING", "NEW_NAME", "not in the vault"), ("DATABASE_URL", "bad-name", "valid secret name"), ("DATABASE_URL", "OPENAI_API_KEY", "already taken")])
+def test_rename_refuses_without_changing_anything(harness: Harness, old: str, new: str, message: str) -> None:
+    before = {name: harness.broker.vault.get(name) for name in harness.broker.vault.names()}
+    presets_before = (harness.data_dir / "presets.yaml").read_text()
+    with pytest.raises(RequestError, match=message):
+        harness.broker.rename_secret(old, new)
+    assert {name: harness.broker.vault.get(name) for name in harness.broker.vault.names()} == before
+    assert (harness.data_dir / "presets.yaml").read_text() == presets_before
+
+
+def test_a_rename_that_cannot_save_the_vault_changes_nothing(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    files_before = {path.name: path.read_text() for path in harness.data_dir.glob("*.yaml")}
+
+    def disk_full() -> None:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(harness.broker.vault, "save", disk_full)
+    with pytest.raises(OSError, match="No space left"):
+        harness.broker.rename_secret("OPENAI_API_KEY", "PERSONAL_OPENAI_KEY")
+    assert "OPENAI_API_KEY" in harness.broker.vault and "PERSONAL_OPENAI_KEY" not in harness.broker.vault
+    assert {path.name: path.read_text() for path in harness.data_dir.glob("*.yaml")} == files_before
+    assert not list(harness.data_dir.glob("*.tmp"))
+
+
 async def test_combined_presets_merge_variables_under_the_strictest_policy(harness: Harness) -> None:
     broker = harness.broker
     broker.write_presets({**broker.config.presets_raw, "ops": {"max_session": "30m", "env": {"DATABASE_URL": "DATABASE_URL", "OPENAI_API_KEY": "OPENAI_API_KEY"}}})
@@ -231,3 +275,48 @@ def test_combined_presets_refuse_a_variable_mapped_to_two_secrets(harness: Harne
         broker.mapping_from_presets(["team", "other"], ["OPENROUTER_API_KEY=DATABASE_URL"])
     with pytest.raises(RequestError, match="not in presets team, other: DATABASE_URL"):
         broker.mapping_from_presets(["team", "other"], ["DATABASE_URL"])
+
+
+async def test_rename_refuses_a_name_with_a_leftover_policy_or_still_in_use(harness: Harness) -> None:
+    broker = harness.broker
+    config_path = harness.data_dir / "config.yaml"
+    config_path.write_text(config_path.read_text().replace("secrets: {", "secrets: {LEFTOVER_KEY: {approval: session, max_session: 24h}, "))
+    broker.reload()
+    with pytest.raises(RequestError, match="config.yaml still has a policy for LEFTOVER_KEY"):
+        broker.rename_secret("DATABASE_URL", "LEFTOVER_KEY")
+    broker.request_run({"VAR": "TEAM_OPENROUTER_KEY"}, [], "why", ("x",), harness.provenance())
+    broker.vault.remove("TEAM_OPENROUTER_KEY")
+    with pytest.raises(RequestError, match="still uses the name TEAM_OPENROUTER_KEY"):
+        broker.rename_secret("DATABASE_URL", "TEAM_OPENROUTER_KEY")
+    assert broker.vault.get("DATABASE_URL") == "postgres://x"
+
+
+async def test_rename_follows_waiting_preset_proposals_and_approved_runs(harness: Harness) -> None:
+    broker = harness.broker
+    proposal = broker.request_preset("presets:\n  newp:\n    env:\n      KEY: OPENAI_API_KEY\n", "add newp", harness.provenance())
+    run = broker.request_run({"API": "OPENAI_API_KEY"}, [], "why", ("x",), harness.provenance())
+    broker.approve(run)
+    broker.rename_secret("OPENAI_API_KEY", "MY_OPENAI")
+    assert run.mapping == {"API": "MY_OPENAI"}
+    assert "KEY: MY_OPENAI" in proposal.summary["diff"] and ": OPENAI_API_KEY\n" not in proposal.summary["diff"]
+    broker.approve(proposal)
+    assert broker.config.presets["newp"].env["KEY"].secret == "MY_OPENAI"
+
+
+def test_rename_uses_the_config_it_checked_rather_than_rereading_the_files(harness: Harness) -> None:
+    broker = harness.broker
+    (harness.data_dir / "presets.yaml").write_text("presets: {broken: {env: {X: NOT_IN_VAULT}}}\n")
+    broker.rename_secret("OPENAI_API_KEY", "MY_OPENAI")
+    assert broker.config.policy_for("MY_OPENAI").max_session == timedelta(hours=1)
+    assert broker.config.presets["team"].env["OPENAI_API_KEY"].secret == "MY_OPENAI"
+    assert any("secret_renamed" in line for line in harness.echoed)
+
+
+def test_check_rename_changes_nothing(harness: Harness) -> None:
+    broker = harness.broker
+    files_before = {path.name: path.read_bytes() for path in harness.data_dir.iterdir()}
+    renamed_config, presets_text, config = broker.check_rename("OPENAI_API_KEY", "MY_OPENAI")
+    assert renamed_config is not None and "MY_OPENAI" in renamed_config and presets_text is not None
+    assert config.policy_for("MY_OPENAI").max_session == timedelta(hours=1)
+    assert {path.name: path.read_bytes() for path in harness.data_dir.iterdir()} == files_before
+    assert "OPENAI_API_KEY" in broker.vault and broker.config.presets["team"].env["OPENAI_API_KEY"].secret == "OPENAI_API_KEY"
