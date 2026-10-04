@@ -24,6 +24,7 @@ import posixpath
 import re
 import sys
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Any
 
 PRIVILEGED = ("sudo", "su", "doas", "pkexec")
@@ -61,6 +62,7 @@ UNREADABLE_REASON = "envh: this command's quoting could not be read, and it may 
 OPERATORS = ("<<<", "<<-", "&>>", ";;&", "&&", "||", ";;", ";&", "|&", ">>", ">|", ">&", "<&", "<>", "<<", "&>", ";", "&", "|", "<", ">", "(", ")", "\n")
 SEPARATORS = {";", "&", "&&", "||", "|", "|&", ";;", ";&", ";;&", "(", ")", "\n"}
 METACHARACTERS = set(" \t\n;&|<>()")
+QUOTING = set("'\"`\\")
 REDIRECT_FD = re.compile(r"\d+|\{\w+\}")
 
 
@@ -122,18 +124,21 @@ class Lexer:
 
     def tokens(self, until_paren: bool = False) -> list[Word | str]:
         """Words and operators up to the end of the text, or with `until_paren` up to the `)` that closes a $(...) or an
-        array. As in bash, a heredoc opened in a $(...) never reads past its `)`, so the shift in `$((1<<2))` cannot
-        swallow the next line."""
+        array. A `((...))` arithmetic command comes back as one word. As in bash, a heredoc opened in a $(...) never
+        reads past its `)`, so the shift in `$((1<<2))` cannot swallow the next line."""
         tokens: list[Word | str] = []
         depth = 0
         heredocs_before = len(self.heredocs)
         while self.pos < len(self.text):
             operator = next((candidate for candidate in OPERATORS if self.text.startswith(candidate, self.pos)), "")
+            arithmetic_end = self.arithmetic_end(tokens) if operator == "(" else -1
             if self.peek() in (" ", "\t") or self.peek(2) == "\\\n":
                 self.pos += 2 if self.peek() == "\\" else 1
             elif self.peek() == "#":
                 newline = self.text.find("\n", self.pos)
                 self.pos = len(self.text) if newline == -1 else newline
+            elif arithmetic_end != -1:
+                tokens.append(self.arithmetic_command(arithmetic_end))
             elif operator:
                 self.pos += len(operator)
                 if operator == ")" and depth == 0 and until_paren:
@@ -150,6 +155,39 @@ class Lexer:
                 if word.quoted or not REDIRECT_FD.fullmatch(word.value) or self.peek() not in ("<", ">"):
                     tokens.append(word)
         return tokens
+
+    @cached_property
+    def closing(self) -> dict[int, int]:
+        """Where each `(` in the text closes, counting every parenthesis, quoted or not."""
+        opened: list[int] = []
+        closing: dict[int, int] = {}
+        for index, character in enumerate(self.text):
+            if character == "(":
+                opened.append(index)
+            elif character == ")" and opened:
+                closing[opened.pop()] = index
+        return closing
+
+    def arithmetic_end(self, tokens: list[Word | str]) -> int:
+        """Where a `((...))` arithmetic command starting here ends, or -1 if none does. As in bash, `((` opens nested
+        subshells instead when its inner parenthesis does not close right before the outer one, and right after `<` or
+        `>` it starts a process substitution. `closing` cannot see quotes, so a `((...))` holding any is read as
+        subshells."""
+        previous = tokens[-1] if tokens else "\n"
+        if self.peek(2) != "((" or (isinstance(previous, str) and previous not in SEPARATORS):
+            return -1
+        inner_end = self.closing.get(self.pos + 1)
+        if inner_end is None or self.text[inner_end + 1 : inner_end + 2] != ")":
+            return -1
+        end = inner_end + 2
+        return end if QUOTING.isdisjoint(self.text[self.pos : end]) else -1
+
+    def arithmetic_command(self, end: int) -> Word:
+        """The `((...))` here as one word, keeping the command substitutions bash expands in it."""
+        command = Word(self.text[self.pos : end])
+        self.expanded(self.text[self.pos + 2 : end - 2], command.substitutions)
+        self.pos = end
+        return command
 
     def word(self) -> Word:
         word = Word()
@@ -210,6 +248,12 @@ class Lexer:
         self.pos += 1
         return value
 
+    def expanded(self, text: str, substitutions: list[list[Word | str]]) -> None:
+        """Collects the command substitutions in text that bash expands as if double-quoted, like a heredoc body."""
+        lexer = Lexer(text)
+        lexer.expansions(substitutions, closer="")
+        self.unclosed = self.unclosed or lexer.unclosed
+
     def backticks(self) -> list[Word | str]:
         self.pos += 1
         content = ""
@@ -260,9 +304,7 @@ class Lexer:
                 lines.append(line)
             delimiter.heredoc = "\n".join(lines)
             if not delimiter.quoted:
-                body = Lexer(delimiter.heredoc)
-                body.expansions(delimiter.substitutions, closer="")
-                self.unclosed = self.unclosed or body.unclosed
+                self.expanded(delimiter.heredoc, delimiter.substitutions)
         self.heredocs = []
 
 
