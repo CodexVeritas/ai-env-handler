@@ -14,7 +14,9 @@ from envh.tools.importer import (
     looks_secret,
     parse_env_text,
     review_names,
+    review_presets,
     rewrite_text,
+    show_plan,
     slugify_header,
     suggest_secret_names,
     unquote,
@@ -234,3 +236,38 @@ def test_names_the_vault_chose_reach_presets_and_files(tmp_path: Path) -> None:
     apply_renames(plan, {"NEWS_BOT_OPENAI_API_KEY": "NEWS_BOT_OPENAI_API_KEY_2"})
     assert plan.presets["news-bot"]["env"] == {"OPENAI_API_KEY": "NEWS_BOT_OPENAI_API_KEY_2"}
     assert plan.rewrites[env_path] == "# OPENAI_API_KEY -> envh secret NEWS_BOT_OPENAI_API_KEY_2 (presets: news-bot)\n"
+
+
+def test_the_plan_shows_the_new_lines_and_never_a_value() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    plan = build_plan([parsed], decisions, build_presets([parsed], decisions))
+    said: list[str] = []
+    show_plan(plan, [parsed], Path("/backups"), said.append)
+    output = "\n".join(said)
+    for original in ("gh-token-1234567890", "pw@localhost", "sk-or-team-000000", "an-team-000000", "sk-or-personal-1111111", "an-personal-1111111", "LOG_LEVEL=info"):
+        assert original not in output
+    assert "line 1    # GITHUB_TOKEN -> envh secret NEWS_BOT_GITHUB_TOKEN (presets: news-bot-personal, news-bot-team)" in output
+    assert "line 11   # ASKNEWS_API_KEY -> envh secret NEWS_BOT_PERSONAL_ASKNEWS_API_KEY (presets: news-bot-personal)" in output
+
+
+def test_presets_are_dropped_then_renamed_by_their_listed_names() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    answers = iter(["nope", "news-bot-personal", "news-bot-team=Bad Name", "news-bot-team=news"])
+    said: list[str] = []
+    presets = review_presets(build_presets([parsed], decisions), [parsed], lambda prompt: next(answers), said.append)
+    assert list(presets) == ["news"]
+    assert "  no preset named nope; use the names listed above" in said
+    assert "  Bad Name: preset names use lowercase letters, digits, and . _ -" in said
+    assert said[-1] == "  presets now: news"
+
+
+def test_renaming_a_preset_onto_a_taken_name_is_refused() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    answers = iter(["", "news-bot-team=news-bot-personal", ""])
+    said: list[str] = []
+    presets = review_presets(build_presets([parsed], decisions), [parsed], lambda prompt: next(answers), said.append)
+    assert list(presets) == ["news-bot-team", "news-bot-personal"]
+    assert "  news-bot-personal is already taken" in said

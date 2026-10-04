@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import difflib
 import os
 import re
 import sys
@@ -22,6 +21,7 @@ SKIP_DIRS = {"node_modules", ".venv", "venv", ".git", "__pycache__", ".tox", ".m
 SKIP_SUFFIXES = (".example", ".template", ".sample", ".dist")
 ENVH_NOTE = "-> envh secret"
 SECRET_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+PRESET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 Ask = Callable[[str], str]
 
 
@@ -251,10 +251,10 @@ def rewrite_text(parsed: ParsedFile, decisions: list[SecretDecision], presets: d
     return "\n".join(output) + ("\n" if parsed.lines else "")
 
 
-def unified_diff(parsed: ParsedFile, new_text: str) -> str:
-    before = [line + "\n" for line in parsed.lines]
-    after = new_text.splitlines(keepends=True)
-    return "".join(difflib.unified_diff(before, after, fromfile=str(parsed.path), tofile=f"{parsed.path} (after import)"))
+def changed_lines(parsed: ParsedFile, new_text: str) -> list[tuple[int, str]]:
+    """The number and new text of each line an import rewrites. Only the new text: a rewritten line never holds a value,
+    while the original may."""
+    return [(index + 1, new) for index, (old, new) in enumerate(zip(parsed.lines, new_text.splitlines())) if old != new]
 
 
 def choose_files(found: list[Path], ask: Ask, say: Callable[[str], None]) -> list[Path]:
@@ -341,16 +341,50 @@ def review_presets(presets: dict[str, dict[str, Any]], files: list[ParsedFile], 
         say(f"  {name}{marker}")
         for var, secret in preset["env"].items():
             say(f"      {var:<30} <- {secret}")
-    answer = ask("  Rename any preset? [old=new separated by commas, or Enter]: ").strip()
-    for token in answer.split(","):
-        if "=" in token:
-            old, new = (part.strip() for part in token.split("=", 1))
-            if old in presets:
-                presets[new] = presets.pop(old)
-    answer = ask("  Drop any preset? [names separated by commas, or Enter]: ").strip()
-    for name in (token.strip() for token in answer.split(",") if token.strip()):
-        presets.pop(name, None)
+    listed = list(presets)
+    drop_presets(presets, ask, say)
+    rename_presets(presets, ask, say)
+    if list(presets) != listed:
+        say(f"  presets now: {', '.join(presets) or '(none)'}")
     return presets
+
+
+def drop_presets(presets: dict[str, dict[str, Any]], ask: Ask, say: Callable[[str], None]) -> None:
+    while True:
+        answer = ask("  Drop any preset? [names as listed above, separated by commas, or Enter to keep all]: ")
+        names = [token.strip() for token in answer.split(",") if token.strip()]
+        unknown = [name for name in names if name not in presets]
+        if not unknown:
+            for name in names:
+                del presets[name]
+            return
+        say(f"  no preset named {', '.join(unknown)}; use the names listed above")
+
+
+def rename_presets(presets: dict[str, dict[str, Any]], ask: Ask, say: Callable[[str], None]) -> None:
+    while True:
+        answer = ask("  Rename any preset? [listed-name=new-name, separated by commas, or Enter]: ")
+        renames: dict[str, str] = {}
+        problems: list[str] = []
+        for token in (token.strip() for token in answer.split(",") if token.strip()):
+            old, separator, new = (part.strip() for part in token.partition("="))
+            if not separator:
+                problems.append(f"{token}: write it as listed-name=new-name")
+            elif old not in presets:
+                problems.append(f"no preset named {old}; use the names listed above")
+            elif not PRESET_NAME.match(new):
+                problems.append(f"{new}: preset names use lowercase letters, digits, and . _ -")
+            elif new in presets or new in renames.values():
+                problems.append(f"{new} is already taken")
+            else:
+                renames[old] = new
+        if not problems:
+            renamed = {renames.get(name, name): preset for name, preset in presets.items()}
+            presets.clear()
+            presets.update(renamed)
+            return
+        for problem in problems:
+            say(f"  {problem}")
 
 
 def build_plan(files: list[ParsedFile], decisions: list[SecretDecision], presets: dict[str, dict[str, Any]]) -> ImportPlan:
@@ -398,10 +432,14 @@ def show_plan(plan: ImportPlan, files: list[ParsedFile], backup_root: Path, say:
     say("  presets to create or update:")
     for name, preset in plan.presets.items():
         say(f"    {name}: " + ", ".join(f"{var}<-{secret}" for var, secret in preset["env"].items()))
-    say("  file rewrites:")
+    say("  file rewrites (the new lines only; values are never shown):")
     by_path = {parsed.path: parsed for parsed in files}
     for path, new_text in plan.rewrites.items():
-        say(unified_diff(by_path[path], new_text).rstrip() or f"    {path}: no change")
+        say(f"    {path}")
+        for number, text in changed_lines(by_path[path], new_text):
+            say(f"      line {number:<4} {text}")
+    if plan.rewrites:
+        say("    every other line stays as it is")
     say("  keys already in the vault: the same value is reused under its stored name; a name the vault uses for a")
     say("  different value gets a number (_2) instead, so nothing stored is overwritten. The console shows the final names.")
     if plan.rewrites:
