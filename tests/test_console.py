@@ -1,6 +1,7 @@
 import asyncio
 import io
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 from envh.core.state import Provenance, Request
 from envh.core.vault import Vault
 from envh.server import console as console_module
-from envh.server.console import COMMAND_PROMPT, ERASE_LINE, Console, Screen, parse_line, render_request
+from envh.server.console import COMMAND_PROMPT, ERASE_LINE, Console, ConsoleOutput, parse_line, render_request
 from tests.conftest import ME, PASSPHRASE, PASSPHRASE_LINE, Harness
 
 PHRASE = "amber basil cedar"
@@ -41,7 +42,7 @@ async def test_render_request_names_every_preset(harness: Harness) -> None:
 def new_console(harness: Harness) -> tuple[Console, asyncio.StreamReader, list[str]]:
     reader = asyncio.StreamReader()
     said: list[str] = []
-    return Console(harness.broker, reader, said.append, lambda _prompt: None, tty_fd=None, phrase=PHRASE), reader, said
+    return Console(harness.broker, reader, ConsoleOutput(said.append, said.append), tty_fd=None, phrase=PHRASE), reader, said
 
 
 def run_request(harness: Harness, reason: str | None = "why") -> Request:
@@ -205,13 +206,13 @@ async def test_unknown_editor_and_unexpected_errors_keep_console_alive(harness: 
 
 async def test_command_prompt_stays_below_log_lines_and_gives_way_to_requests(harness: Harness) -> None:
     output = io.StringIO()
-    screen = Screen(output)
+    console_output = ConsoleOutput(lambda text: output.write(text + "\n"), output.write)
     reader = asyncio.StreamReader()
-    console = Console(harness.broker, reader, screen.say, screen.prompt, tty_fd=None, phrase=PHRASE)
+    console = Console(harness.broker, reader, console_output, tty_fd=None, phrase=PHRASE)
     task = asyncio.create_task(console.run())
     await asyncio.sleep(0)
-    assert output.getvalue().endswith(f"Type help for commands\n{COMMAND_PROMPT}")
-    screen.say("[14:00:00] run_start run=1")
+    assert output.getvalue().endswith(f"help for commands\n{COMMAND_PROMPT}")
+    console_output.say("[14:00:00] run_start run=1")
     assert output.getvalue().endswith(f"{COMMAND_PROMPT}{ERASE_LINE}[14:00:00] run_start run=1\n{COMMAND_PROMPT}")
     request = run_request(harness)
     assert f"{COMMAND_PROMPT}{ERASE_LINE}\a[" in output.getvalue()
@@ -300,3 +301,103 @@ async def test_render_import_shows_reused_and_renamed_names(harness: Harness) ->
     assert "same value already stored as OPENAI_API_KEY" in text
     assert "added     FRESH_KEY" in text
     assert not any(value in text for value in secrets.values())
+
+
+async def test_keys_view_renames_with_f2_and_the_passphrase(harness: Harness) -> None:
+    console, reader, said = new_console(harness)
+    reader.feed_data(b"\x1b[B\x1bOQ\x15my-openai\n" + PASSPHRASE_LINE)
+    view = asyncio.create_task(console.handle_line("keys\n"))
+    await asyncio.sleep(0.05)
+    assert "MY_OPENAI" in harness.broker.vault and "OPENAI_API_KEY" not in harness.broker.vault
+    assert harness.broker.config.presets["team"].env["OPENAI_API_KEY"].secret == "MY_OPENAI"
+    assert "Renamed to MY_OPENAI" in said[-1]
+    reader.feed_data(b"\x1b")
+    await asyncio.wait_for(view, timeout=5)
+    assert said[-1] == console_module.LEAVE_FULL_SCREEN
+    assert not any(PASSPHRASE in text for text in said + harness.echoed)
+
+
+async def test_keys_view_wrong_passphrase_renames_nothing(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(console_module, "WRONG_PASSPHRASE_PAUSE_SECONDS", 0)
+    console, reader, said = new_console(harness)
+    reader.feed_data(b"\x1bOQX\nguess\n\x1b")
+    await asyncio.wait_for(console.handle_line("keys\n"), timeout=5)
+    assert harness.broker.vault.names() == ["DATABASE_URL", "OPENAI_API_KEY", "TEAM_OPENROUTER_KEY"]
+    assert any("wrong_passphrase" in line for line in harness.echoed)
+    assert any("Wrong passphrase" in text for text in said)
+
+
+async def test_requests_wait_while_the_keys_view_is_open_and_lines_are_held(harness: Harness) -> None:
+    console, reader, said = new_console(harness)
+    reader.feed_data(b"keys\n")
+    task = asyncio.create_task(console.run())
+    await asyncio.sleep(0.05)
+    request = run_request(harness)
+    console.say("held line")
+    assert "held line" not in said
+    await asyncio.sleep(console_module.KEYS_REFRESH_SECONDS + 0.2)
+    assert any("1 request waiting" in text for text in said)
+    reader.feed_data(b"\x1b")
+    await asyncio.sleep(console_module.ESCAPE_WAIT_SECONDS + 0.2)
+    assert said.index("held line") > said.index(console_module.LEAVE_FULL_SCREEN)
+    assert console.current is request
+    reader.feed_data(b"n\nquit\n")
+    await asyncio.wait_for(task, timeout=5)
+    assert request.decision.result().outcome == "denied"
+
+
+async def test_a_rename_that_fails_after_saving_says_so_and_shows_the_new_name(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    console, reader, said = new_console(harness)
+
+    def renames_then_fails(old: str, new: str) -> None:
+        harness.broker.vault.rename(old, new)
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(harness.broker, "rename_secret", renames_then_fails)
+    reader.feed_data(b"\x1b[B\x1bOQ\x15my_openai\n" + PASSPHRASE_LINE)
+    view = asyncio.create_task(console.handle_line("keys\n"))
+    await asyncio.sleep(0.2)
+    assert "Renamed to MY_OPENAI, but: No space left on device" in said[-1]
+    assert "MY_OPENAI" in said[-1].split("Name")[1]
+    reader.feed_data(b"\x1b")
+    await asyncio.wait_for(view, timeout=5)
+
+
+async def test_keys_typed_after_esc_in_the_same_read_reach_the_waiting_request(harness: Harness) -> None:
+    console, reader, said = new_console(harness)
+    reader.feed_data(b"keys\n")
+    task = asyncio.create_task(console.run())
+    await asyncio.sleep(0.05)
+    request = run_request(harness)
+    reader.feed_data(b"\x1bn\n")
+    await asyncio.sleep(0.2)
+    assert request.decision.result().outcome == "denied"
+    reader.feed_data(b"quit\n")
+    await asyncio.wait_for(task, timeout=5)
+
+
+async def test_an_arrow_key_split_across_reads_moves_instead_of_leaving(harness: Harness) -> None:
+    console, reader, said = new_console(harness)
+    view = asyncio.create_task(console.handle_line("keys\n"))
+    await asyncio.sleep(0.05)
+    reader.feed_data(b"\x1b")
+    await asyncio.sleep(0.01)
+    reader.feed_data(b"[B")
+    await asyncio.sleep(0.2)
+    assert not view.done()
+    assert "› OPENAI_API_KEY" in re.sub(r"\x1b\[[0-9;]*m", "", said[-1])
+    reader.feed_data(b"\x1b")
+    await asyncio.wait_for(view, timeout=5)
+
+
+def test_held_output_keeps_the_newest_lines_and_tolerates_nesting() -> None:
+    printed: list[str] = []
+    output = ConsoleOutput(printed.append, printed.append)
+    with output.holding():
+        with output.holding():
+            output.say("inner")
+        for number in range(console_module.HELD_LINES_KEPT + 5):
+            output.say(f"line {number}")
+        assert printed == []
+    assert printed[0] == "(6 earlier lines were not kept; every audit event is in audit.jsonl)"
+    assert printed[1] == "line 5" and printed[-1] == f"line {console_module.HELD_LINES_KEPT + 4}"

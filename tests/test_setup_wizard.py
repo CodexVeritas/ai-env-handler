@@ -151,6 +151,52 @@ def test_a_changed_skill_is_offered_as_an_update(tmp_path: Path) -> None:
     assert change.outdated == "skill"
 
 
+def test_an_update_replaces_the_skill_and_hook_and_leaves_an_edited_claude_md_alone(tmp_path: Path) -> None:
+    for change in wizard.claude_code_changes(tmp_path):
+        change.apply()
+    edited = "# Mine\n\n## Secrets\n- Ask me before using envh.\n"
+    (tmp_path / "CLAUDE.md").write_text(edited)
+    assert wizard.claude_code_changes(tmp_path) == []
+    (tmp_path / "skills" / "envh" / "SKILL.md").write_text("old\n")
+    (tmp_path / "hooks" / "envh_ask.py").write_text("old\n")
+    changes = wizard.claude_code_changes(tmp_path)
+    assert [change.outdated for change in changes] == ["skill", "hook"]
+    for change in changes:
+        change.apply()
+    assert (tmp_path / "hooks" / "envh_ask.py").read_text() == (ROOT / "claude" / "hooks" / "envh_ask.py").read_text()
+    assert (tmp_path / "CLAUDE.md").read_text() == edited
+
+
+def test_an_edited_claude_md_is_left_alone_with_a_warning_naming_the_lines_it_lacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(wizard, "CLAUDE_HOME", tmp_path)
+    for change in wizard.claude_code_changes(tmp_path):
+        change.apply()
+    snippet_lines = (ROOT / "claude" / "CLAUDE.snippet.md").read_text().splitlines()
+    heading = next(text for text in snippet_lines if text.startswith("#"))
+    first_bullet, *other_bullets = [text for text in snippet_lines if text.startswith("- ")]
+    edited = "## My keys\n- Use envh sessions.\n" + "".join(f"{bullet}\n" for bullet in other_bullets)
+    (tmp_path / "CLAUDE.md").write_text(edited)
+    assert wizard.step_claude_code() == wizard.Outcome(True, "up to date")
+    output = capsys.readouterr().out
+    assert "CLAUDE.md lacks these envh lines" in output
+    assert first_bullet in output
+    assert heading not in output and not any(bullet in output for bullet in other_bullets)
+    assert (tmp_path / "CLAUDE.md").read_text() == edited
+
+
+def test_a_first_connection_adds_the_claude_md_lines_without_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(wizard, "CLAUDE_HOME", tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("# Mine\n")
+    answer_inputs(monkeypatch, "")
+    assert wizard.step_claude_code() == wizard.Outcome(True, "connected")
+    assert "lacks these envh lines" not in capsys.readouterr().out
+    assert wizard.missing_claude_md_lines(tmp_path / "CLAUDE.md") == []
+
+
 @pytest.mark.parametrize(("changes_for", "tool"), [(wizard.claude_code_changes, "Claude Code"), (wizard.cursor_changes, "Cursor")])
 def test_an_out_of_date_skill_and_hook_are_named_and_declining_keeps_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], changes_for: Callable, tool: str
@@ -226,7 +272,8 @@ def test_root_runs_the_wizard_with_the_system_python_and_sudo_by_absolute_path()
 
 
 def test_the_system_checks_load_from_the_staged_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(sys, "modules", dict(sys.modules))
     wizard.stage_build_files(tmp_path / "staging")
-    problems, warnings = wizard.system_checks(tmp_path / "staging" / "src", "nobody")
-    assert isinstance(problems, list) and isinstance(warnings, list)
+    staged_platform = tmp_path / "staging" / "src" / "envh" / "platform.py"
+    staged_platform.write_text(staged_platform.read_text() + "\n\ndef preflight_problems(invoking_user):\n    return ['staged copy checked ' + invoking_user]\n")
+    assert wizard.system_problems(tmp_path / "staging" / "src", "nobody") == ["staged copy checked nobody"]

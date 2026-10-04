@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from envh.platform import SERVICE_USER
+from envh.platform import SERVICE_USER, preflight_problems, preflight_warnings
 from envh.server.init_cmd import run_init
 
 HELPER_PATH = Path("/usr/local/sbin/envh-console")
@@ -97,10 +97,35 @@ def write_root_file(path: Path, content: str, mode: int, dry_run: bool) -> None:
     os.replace(temp_path, path)
 
 
+def invoking_user_name() -> str:
+    """The account the install is for: the one that ran sudo, or the caller itself for a dry run without root. Refused
+    for a root shell, where the checks could not tell whose sudo rules and groups to examine."""
+    name = os.environ.get("SUDO_USER")
+    if name:
+        return name
+    if os.geteuid() != 0:
+        return pwd.getpwuid(os.geteuid()).pw_name
+    raise InstallError("run envh install with sudo from your own account, so the checks and the policy know whose account it is")
+
+
 def install(args: argparse.Namespace) -> int:
-    """Quiet by default: the setup wizard reports progress. --verbose and --dry-run list each change."""
+    """Quiet by default; --verbose and --dry-run list each change.
+
+    It runs the system checks itself, even when they ran before: this is the privileged entry point, so it refuses on a
+    problem unless --ignore-preflight says each one was checked."""
     require_root(args.dry_run)
-    invoking_user = os.environ.get("SUDO_USER")
+    invoking_user = invoking_user_name()
+    if args.dry_run and os.geteuid() != 0 and DATA_DIR.exists() and not os.access(DATA_DIR, os.X_OK):
+        raise InstallError(f"envh is already installed and only {SERVICE_USER} can open {DATA_DIR}; run the dry run with sudo")
+    for warning in preflight_warnings():
+        say("  ! " + warning)
+    problems = preflight_problems(invoking_user)
+    if problems and not args.ignore_preflight:
+        for problem in problems:
+            say("  ! " + problem.replace("\n", "\n    "))
+        raise InstallError("fix the problems above, or pass --ignore-preflight once you have checked each one")
+    if problems:
+        say(f"  ! Going on despite {len(problems)} system check problem{'s' if len(problems) > 1 else ''}, as --ignore-preflight asks")
     if not ENVH_BIN.exists() and not args.dry_run:
         raise InstallError(f"{ENVH_BIN} is missing; run scripts/setup_wizard.py instead of `envh install` directly")
 
@@ -126,7 +151,7 @@ def install(args: argparse.Namespace) -> int:
         report("No app launcher: no desktop terminal found")
     if args.dry_run:
         if not (DATA_DIR / "vault.age").exists():
-            report(f"The vault and policy in {DATA_DIR} (users: {invoking_user or 'root'}), after asking for a vault passphrase")
+            report(f"The vault and policy in {DATA_DIR} (users: {invoking_user}), after asking for a vault passphrase")
         return 0
     say("  ✓ envh installed")
     if (DATA_DIR / "vault.age").exists():
@@ -134,9 +159,9 @@ def install(args: argparse.Namespace) -> int:
         return 0
     if not sys.stdin.isatty():
         raise InstallError("creating the vault asks for a passphrase; run the setup wizard in a terminal")
-    run_init(DATA_DIR, invoking_user or "root")
+    run_init(DATA_DIR, invoking_user)
     run(["chown", "-R", f"{SERVICE_USER}:{SERVICE_USER}", str(DATA_DIR)], args.dry_run)
-    report(f"Policy in {DATA_DIR}: config.yaml (users: {invoking_user or 'root'}) and presets.yaml")
+    report(f"Policy in {DATA_DIR}: config.yaml (users: {invoking_user}) and presets.yaml")
     return 0
 
 
@@ -164,6 +189,7 @@ def main(command: str, argv: list[str]) -> int:
     parser.add_argument("--dry-run", action="store_true", help="print every action without doing it")
     if command == "install":
         parser.add_argument("--verbose", action="store_true", help="list each change")
+        parser.add_argument("--ignore-preflight", action="store_true", help="install even though the system checks found problems")
     else:
         parser.add_argument("--purge", action="store_true", help="also delete the service user and the vault")
     args = parser.parse_args(argv)

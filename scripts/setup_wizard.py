@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-import importlib
+import importlib.util
 import json
 import os
 import pwd
@@ -337,11 +337,16 @@ def stage_build_files(destination: Path) -> None:
         shutil.copy2(REPO / name, destination / name)
 
 
-def system_checks(source: Path, invoking_user: str) -> tuple[list[str], list[str]]:
-    """Run envh's preflight checks from the staged root-owned source, before anything is built or changed."""
-    sys.path.insert(0, str(source))
-    platform = importlib.import_module("envh.platform")
-    return platform.preflight_problems(invoking_user), platform.preflight_warnings()
+def system_problems(source: Path, invoking_user: str) -> list[str]:
+    """Run envh's preflight checks from the staged root-owned source, before anything is built or changed. The module is
+    loaded from that file by path, so no copy imported earlier (for example from this user-writable folder) can stand in."""
+    spec = importlib.util.spec_from_file_location("envh_staged_platform", source / "envh" / "platform.py")
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"✗ Can't load the system checks from {source}.")
+    platform = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = platform
+    spec.loader.exec_module(platform)
+    return platform.preflight_problems(invoking_user)
 
 
 def run_with_spinner(text: str, command: list[str], environment: dict[str, str]) -> None:
@@ -410,14 +415,12 @@ def install_as_root(argv: list[str]) -> int:
         staging = Path(scratch) / "source"
         stage_build_files(staging)
         detail(f"Copied the source to a root-only folder: {staging}")
-        problems, warnings = system_checks(staging / "src", invoking_user)
-        for warning in warnings:
-            warn(warning)
-        for problem in problems:
-            warn(problem)
-        if problems and not args.ignore_preflight:
-            return PREFLIGHT_EXIT
-        if not problems:
+        if not args.ignore_preflight:
+            problems = system_problems(staging / "src", invoking_user)
+            for problem in problems:
+                warn(problem)
+            if problems:
+                return PREFLIGHT_EXIT
             ok("System checks passed")
         build_environment(uv, staging, INSTALL_PREFIX)
     detail(f"Built {INSTALL_PREFIX / 'env'} with {uv}: Python 3.12 and the versions pinned in uv.lock")
@@ -430,7 +433,7 @@ def install_as_root(argv: list[str]) -> int:
     link_envh_bin(INSTALL_PREFIX / "env" / "bin" / "envh")
     detail(f"Linked {ENVH_BIN}")
     ok("envh built")
-    return subprocess.run([str(ENVH_BIN), "install", *(["--verbose"] if verbose else [])]).returncode
+    return subprocess.run([str(ENVH_BIN), "install", *(["--verbose"] if verbose else []), *(["--ignore-preflight"] if args.ignore_preflight else [])]).returncode
 
 
 def step_console() -> Outcome:
@@ -591,13 +594,16 @@ def hook_config_changes(
 
 
 def claude_code_changes(claude_home: Path) -> list[Change]:
-    """Each change the Claude Code step would make; empty when everything is in place."""
-    changes = skill_and_hook_changes(claude_home)
+    """Each change the Claude Code step would make; empty when everything is in place.
+
+    CLAUDE.md gets its lines only while settings.json has no envh hook, that is on the first connection. After that the
+    lines are the user's to edit, so updates replace the skill and hook and never touch CLAUDE.md."""
     hook_command = f"python3 {shlex.quote(str(claude_home / 'hooks' / HOOK_FILE_NAME))}"
-    changes += hook_config_changes(claude_home / "settings.json", hook_command, with_envh_hook, envh_hook_commands)
+    settings_changes = hook_config_changes(claude_home / "settings.json", hook_command, with_envh_hook, envh_hook_commands)
+    changes = skill_and_hook_changes(claude_home) + settings_changes
     claude_md = claude_home / "CLAUDE.md"
     current = claude_md.read_text() if claude_md.exists() else ""
-    if CLAUDE_MD_MARKER not in current:
+    if settings_changes and CLAUDE_MD_MARKER not in current:
         snippet = (CLAUDE_SOURCE / "CLAUDE.snippet.md").read_text()
         changes.append(Change(f"Add 3 lines to {tilde(claude_md)}", lambda: write_atomically(claude_md, claude_md_with_snippet(current, snippet))))
     return changes
@@ -638,8 +644,22 @@ def step_connect(tool: str, tool_home: Path, changes_for: Callable[[Path], list[
     return Outcome(True, "connected")
 
 
+def missing_claude_md_lines(claude_md: Path) -> list[str]:
+    """The snippet's lines that CLAUDE.md lacks. Headings are left out: the lines may sit under a heading of the user's own."""
+    current = claude_md.read_text() if claude_md.exists() else ""
+    present = {text.strip() for text in current.splitlines()}
+    snippet = (CLAUDE_SOURCE / "CLAUDE.snippet.md").read_text()
+    return [text for text in snippet.splitlines() if text.strip() and not text.startswith("#") and text.strip() not in present]
+
+
 def step_claude_code() -> Outcome:
-    return step_connect("Claude Code", CLAUDE_HOME, claude_code_changes)
+    outcome = step_connect("Claude Code", CLAUDE_HOME, claude_code_changes)
+    claude_md = CLAUDE_HOME / "CLAUDE.md"
+    missing = missing_claude_md_lines(claude_md) if outcome.done else []
+    if missing:
+        warn(f"{tilde(claude_md)} lacks these envh lines; add any you want:")
+        show_more("\n".join(missing))
+    return outcome
 
 
 def step_cursor() -> Outcome:
@@ -677,6 +697,7 @@ def print_summary(results: list[tuple[str, Outcome]]) -> None:
         line(f"{dim('·')} {title:<20} {dim('not reached')}")
     say()
     line(dim("Rerun this any time to update envh or import more projects."))
+    line(dim("To see or rename your keys, type keys in the console."))
     say()
 
 

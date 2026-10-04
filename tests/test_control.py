@@ -59,6 +59,19 @@ async def test_run_without_session_prompts_and_denial(control: Path, harness: Ha
     assert any("run_end" in line and "client gone" in line for line in harness.echoed)
 
 
+async def test_a_run_approved_after_renames_gets_the_key_the_approver_saw(control: Path, harness: Harness) -> None:
+    async with Client(control) as client:
+        await client.send(op="run", **{"with": ["API_KEY=OPENAI_API_KEY"]}, reason="one-off", command=["python", "y.py"])
+        assert (await client.recv())["pending"] is True
+        harness.broker.rename_secret("OPENAI_API_KEY", "PERSONAL_OPENAI_KEY")
+        harness.broker.rename_secret("DATABASE_URL", "OPENAI_API_KEY")
+        pending = harness.broker.state.pending()[0]
+        assert pending.mapping == {"API_KEY": "PERSONAL_OPENAI_KEY"}
+        harness.broker.approve(pending)
+        reply = await client.recv()
+        assert reply["env"] == {"API_KEY": "sk-openai"}
+
+
 async def test_run_withdrawn_when_client_leaves(control: Path, harness: Harness) -> None:
     async with Client(control) as client:
         await client.send(op="run", **{"with": ["OPENAI_API_KEY"]})

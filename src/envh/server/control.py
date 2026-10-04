@@ -210,7 +210,8 @@ class Connection:
         if request.decision.result().outcome != "approved":
             await self._reply_decision(request)
             return
-        await self._start_run(mapping, None, reason, command)
+        # The request's mapping, not the one asked for: a rename while it waited updated the request, which is what the approver saw.
+        await self._start_run(dict(request.mapping), None, reason, command)
 
     async def _start_run(self, mapping: dict[str, str], session_id: str | None, reason: str | None, command: tuple[str, ...]) -> None:
         run = self.broker.state.start_run(mapping, session_id, reason, command, self.provenance)

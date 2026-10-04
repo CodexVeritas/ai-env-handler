@@ -34,7 +34,8 @@ def decrypt_secrets(blob: bytes, passphrase: str) -> dict[str, str]:
     return secrets
 
 
-def write_private_file(path: Path, data: bytes) -> None:
+def stage_private_file(path: Path, data: bytes) -> Path:
+    """Write data to a mode-0600 file next to path, synced to disk, and return it for move_into_place."""
     temp_path = path.with_name(path.name + ".tmp")
     temp_path.unlink(missing_ok=True)
     descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -43,10 +44,22 @@ def write_private_file(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+    return temp_path
+
+
+def move_into_place(temp_path: Path, path: Path) -> None:
+    try:
         os.replace(temp_path, path)
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
+
+
+def write_private_file(path: Path, data: bytes) -> None:
+    move_into_place(stage_private_file(path, data), path)
 
 
 class Vault:
@@ -92,6 +105,18 @@ class Vault:
         if name not in self._secrets:
             raise VaultError(f"secret {name} is not in the vault")
         del self._secrets[name]
+
+    def rename(self, old: str, new: str) -> None:
+        """Move a secret to a new name and save; if saving fails, the vault keeps the old name in memory too."""
+        if new in self._secrets:
+            raise VaultError(f"{new} is already taken")
+        self._secrets[new] = self.get(old)
+        del self._secrets[old]
+        try:
+            self.save()
+        except BaseException:
+            self._secrets[old] = self._secrets.pop(new)
+            raise
 
     def matches_passphrase(self, candidate: str) -> bool:
         return hmac.compare_digest(candidate.encode(), self._passphrase.encode())
