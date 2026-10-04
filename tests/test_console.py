@@ -273,3 +273,13 @@ async def test_rm_refuses_a_secret_that_presets_use(harness: Harness) -> None:
     assert "TEAM_OPENROUTER_KEY" in harness.broker.vault
     assert any(line.startswith("error:") and "used by presets team" in line for line in said)
     assert not any("admin_rm" in line for line in harness.echoed)
+
+
+async def test_render_import_shows_reused_and_renamed_names(harness: Harness) -> None:
+    secrets = {"OPENAI_API_KEY": "sk-other-project", "SAME_KEY": "sk-openai", "FRESH_KEY": "fresh-value"}
+    request = harness.broker.request_import(secrets, {}, None, harness.provenance())
+    text = "\n".join(render_request(request, harness.clock()))
+    assert "stored as OPENAI_API_KEY_2: the vault's OPENAI_API_KEY holds a different value" in text
+    assert "same value already stored as OPENAI_API_KEY" in text
+    assert "added     FRESH_KEY" in text
+    assert not any(value in text for value in secrets.values())

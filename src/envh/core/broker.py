@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import difflib
 from datetime import timedelta
 from pathlib import Path
@@ -28,6 +29,28 @@ from envh.core.vault import Vault, write_private_file
 
 class RequestError(ValueError):
     """A request that cannot be granted as asked; the message is shown to the requester."""
+
+
+def renamed_presets(presets: dict[str, Any], final_names: dict[str, str]) -> dict[str, Any]:
+    """A copy of presets whose secret references follow final_names; malformed entries are left for validation to reject."""
+    renamed = copy.deepcopy(presets)
+    for preset in renamed.values():
+        env = preset.get("env") if isinstance(preset, dict) else None
+        if not isinstance(env, dict):
+            continue
+        for var, entry in env.items():
+            if isinstance(entry, str):
+                env[var] = final_names.get(entry, entry)
+            elif isinstance(entry, dict) and isinstance(entry.get("secret"), str):
+                entry["secret"] = final_names.get(entry["secret"], entry["secret"])
+    return renamed
+
+
+def first_free_name(base: str, unavailable: set[str]) -> str:
+    candidate, suffix = base, 2
+    while candidate in unavailable:
+        candidate, suffix = f"{base}_{suffix}", suffix + 1
+    return candidate
 
 
 class Broker:
@@ -224,23 +247,22 @@ class Broker:
                 raise RequestError(f"{name!r} is not a valid secret name (UPPER_CASE)")
             if not isinstance(value, str) or not value:
                 raise RequestError(f"secret {name} has an empty value")
-        known_after = set(self.vault.names()) | set(secrets)
+        resolution = self.import_resolution(secrets, presets)
         try:
-            parse_presets(dump_presets(presets), known_after)
+            parse_presets(dump_presets(resolution["additions"]), set(self.vault.names()) | set(resolution["secrets"]))
         except ConfigError as error:
             raise RequestError(str(error)) from error
-        merged = self.merged_presets(presets)
+        merged = self.merged_presets(resolution["additions"])
         request = self.state.new_request(
             kind="import",
             mapping={},
             provenance=provenance,
             reason=reason,
             summary={
-                **self.vault_changes(secrets),
+                **resolution,
+                "sent": {"secrets": secrets, "presets": presets},
                 "fingerprints": {name: fingerprint(value) for name, value in secrets.items()},
-                "secrets": secrets,
                 "presets": sorted(presets),
-                "additions": presets,
                 "diff": self.presets_diff(merged),
                 "merged": merged,
             },
@@ -248,20 +270,44 @@ class Broker:
         self._announce(request)
         return request
 
-    def vault_changes(self, secrets: dict[str, str]) -> dict[str, list[str]]:
+    def import_resolution(self, secrets: dict[str, str], presets: dict[str, Any]) -> dict[str, Any]:
+        """Where each imported secret goes, so that an import never overwrites a stored secret: a value the vault already
+        holds is reused under its stored name, and a name the vault holds with a different value gets a number (NAME_2)."""
+        stored_by_value: dict[str, str] = {}
+        for name in self.vault.names():
+            stored_by_value.setdefault(self.vault.get(name), name)
+        unavailable = set(self.vault.names()) | set(secrets)
+        final_names: dict[str, str] = {}
+        for name, value in secrets.items():
+            if name in self.vault and self.vault.get(name) == value:
+                final_names[name] = name
+            elif value in stored_by_value:
+                final_names[name] = stored_by_value[value]
+            elif name not in self.vault:
+                final_names[name] = name
+            else:
+                final_names[name] = first_free_name(name, unavailable)
+                unavailable.add(final_names[name])
+        to_store = {final_names[name]: value for name, value in secrets.items() if final_names[name] not in self.vault}
         return {
-            "added": sorted(name for name in secrets if name not in self.vault),
-            "changed": sorted(name for name in secrets if name in self.vault and self.vault.get(name) != secrets[name]),
-            "unchanged": sorted(name for name in secrets if name in self.vault and self.vault.get(name) == secrets[name]),
+            "secrets": to_store,
+            "added": sorted(to_store),
+            "unchanged": sorted(name for name, final in final_names.items() if final == name and name in self.vault),
+            "reused": {name: final for name, final in final_names.items() if final != name and final in self.vault},
+            "renamed": {name: final for name, final in final_names.items() if final != name and final not in self.vault},
+            "additions": renamed_presets(presets, final_names),
         }
 
-    def confirm_vault_changes(self, request: Request) -> None:
-        """Refuses an import whose added/changed split differs from what the approver saw, so a secret shown as added is never silently overwritten."""
-        current = self.vault_changes(request.summary["secrets"])
-        if any(request.summary[label] != names for label, names in current.items()):
+    def confirm_import_resolution(self, request: Request) -> None:
+        """Refuses an import whose names would now differ from what the approver saw, for example after a console `add`."""
+        sent = request.summary["sent"]
+        current = self.import_resolution(sent["secrets"], sent["presets"])
+        if any(request.summary[key] != value for key, value in current.items()):
             request.summary.update(current)
+            request.summary["merged"] = self.merged_presets(current["additions"])
+            request.summary["diff"] = self.presets_diff(request.summary["merged"])
             self._show(request)
-            raise RequestError(f"the vault changed since request #{request.id} was shown; it is shown again with the current changes, type the passphrase again to approve that")
+            raise RequestError(f"the vault changed since request #{request.id} was shown; it is shown again with the current names, type the passphrase again to approve that")
 
     def merged_for_approval(self, request: Request, known_secrets: set[str]) -> dict[str, Any]:
         """The presets to write for this request, recomputed against the current files; refuses when they differ from what the approver saw."""
@@ -286,13 +332,13 @@ class Broker:
             self.write_presets(self.merged_for_approval(request, set(self.vault.names())))
             self.audit.event("presets_updated", presets=request.summary["presets"], by=by)
         elif request.kind == "import":
-            self.confirm_vault_changes(request)
+            self.confirm_import_resolution(request)
             merged = self.merged_for_approval(request, set(self.vault.names()) | set(request.summary["secrets"]))
             for name, value in request.summary["secrets"].items():
                 self.vault.set(name, value)
             self.vault.save()
             self.write_presets(merged)
-            self.audit.event("import_applied", added=request.summary["added"], changed=request.summary["changed"], presets=request.summary["presets"])
+            self.audit.event("import_applied", added=request.summary["added"], reused=request.summary["reused"], renamed=request.summary["renamed"], presets=request.summary["presets"])
         self.state.decide(request, approved=True, by=by)
         self.audit.event("decision", id=request.id, outcome="approved", by=by)
 

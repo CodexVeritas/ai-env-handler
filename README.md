@@ -105,7 +105,7 @@ envh import --dry-run ~/code            # scan a directory (depth 3) and show th
 envh import ~/code                      # or give specific files: envh import ~/code/bot/.env
 ```
 
-Import one project now and others whenever you like: each import adds to the vault and the presets. If a suggested secret name is already in the vault with a different value, the console lists it as `changed` and approving replaces the stored value, so rename it in step 3 instead.
+Import one project now and others whenever you like; an import never overwrites what is stored. Keys are named `<PROJECT>_<NAME>`, where the project is the folder that holds the `.env` (`news-bot/.env` gives `NEWS_BOT_OPENAI_API_KEY`). A key whose value is already in the vault is reused under its stored name instead of being stored twice. If a name is already taken by a different value, the new one gets a number (`NEWS_BOT_OPENAI_API_KEY_2`). The console shows the final names before you approve, and the presets and the rewritten `.env` comments use them. To replace a stored key, use `add NAME` on the console.
 
 The wizard walks through six steps and writes nothing until the last one:
 
@@ -126,7 +126,7 @@ The wizard walks through six steps and writes nothing until the last one:
    ```
 
    has a base group (`GITHUB_TOKEN`, `LOG_LEVEL`) and two mode groups. Each variable is classified as secret or config by its name and value; you can flip any.
-3. **Names.** Secrets get vault names: `GITHUB_TOKEN`, `TEAM_OPENROUTER_API_KEY`, `PERSONAL_OPENROUTER_API_KEY`, and so on. Identical values anywhere share one entry; the same variable with different values in different repos gets the repo as prefix. Rename anything.
+3. **Names.** Secrets get vault names that start with the project: `NEWS_BOT_GITHUB_TOKEN`, `NEWS_BOT_TEAM_OPENROUTER_API_KEY`, `NEWS_BOT_PERSONAL_OPENROUTER_API_KEY`, and so on. Identical values share one entry, across projects and with keys already in the vault. Rename anything.
 4. **Presets.** One preset per group, named `<repo>-<group>` (`news-bot-team`, `news-bot-personal`), each containing the base variables plus the group's. A repo without groups gets one preset named after it. Rename or drop presets.
 5. **Plan.** Secrets to store (names and fingerprints only), presets in full, and a diff per file: secret lines become `# VAR -> envh secret NAME (presets: ...)`, headers and config lines stay as they are. Choose per file whether to rewrite it.
 6. **Apply.** The console shows the same summary and asks for your vault passphrase. Then each original file is backed up and the files are rewritten.

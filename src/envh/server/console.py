@@ -76,11 +76,18 @@ def render_request(request: Request, now: datetime) -> list[str]:
         lines.append(f"   presets:  {', '.join(request.summary.get('presets', []))}")
         lines.extend("   " + printable(diff_line) for diff_line in request.summary.get("diff", "").rstrip().splitlines())
     elif request.kind == "import":
-        fingerprints = request.summary.get("fingerprints", {})
-        for label in ("added", "changed", "unchanged"):
-            names = request.summary.get(label) or []
-            for name in names:
-                lines.append(f"   {label:<9} {name:<32} {printable(fingerprints.get(name, ''))}")
+        reused = request.summary.get("reused") or {}
+        renamed = request.summary.get("renamed") or {}
+        for name, fingerprint_text in sorted(request.summary.get("fingerprints", {}).items()):
+            shown = printable(fingerprint_text)
+            if name in reused:
+                lines.append(f"   reused    {name:<32} {shown}  same value already stored as {reused[name]}")
+            elif name in renamed:
+                lines.append(f"   renamed   {name:<32} {shown}  stored as {renamed[name]}: the vault's {name} holds a different value")
+            elif name in (request.summary.get("unchanged") or []):
+                lines.append(f"   unchanged {name:<32} {shown}")
+            else:
+                lines.append(f"   added     {name:<32} {shown}")
         presets = request.summary.get("presets") or []
         if presets:
             lines.append(f"   presets:  {', '.join(presets)}")

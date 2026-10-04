@@ -156,10 +156,33 @@ async def test_import_approval_refuses_when_an_added_secret_now_exists(harness: 
     with pytest.raises(RequestError, match="vault changed since"):
         broker.approve(second)
     assert second.pending and shown.count(second.id) == 2
-    assert second.summary["added"] == [] and second.summary["changed"] == ["NEW_KEY"]
-    assert broker.vault.get("NEW_KEY") == "value-one"
+    assert second.summary["added"] == ["NEW_KEY_2"] and second.summary["renamed"] == {"NEW_KEY": "NEW_KEY_2"}
     broker.approve(second)
-    assert broker.vault.get("NEW_KEY") == "value-two"
+    assert broker.vault.get("NEW_KEY") == "value-one"
+    assert broker.vault.get("NEW_KEY_2") == "value-two"
+
+
+async def test_import_reuses_stored_values_and_never_overwrites(harness: Harness) -> None:
+    broker = harness.broker
+    secrets = {"OPENAI_API_KEY": "sk-newsbot-own", "NEWS_BOT_OPENAI_KEY": "sk-openai", "FRESH_KEY": "sk-fresh"}
+    presets = {"news-bot": {"env": {"OPENAI_API_KEY": "OPENAI_API_KEY", "ALT_OPENAI": "NEWS_BOT_OPENAI_KEY", "FRESH": {"secret": "FRESH_KEY", "approval": "per-run"}}}}
+    request = broker.request_import(secrets, presets, "second project", harness.provenance())
+    assert request.summary["reused"] == {"NEWS_BOT_OPENAI_KEY": "OPENAI_API_KEY"}
+    assert request.summary["renamed"] == {"OPENAI_API_KEY": "OPENAI_API_KEY_2"}
+    assert request.summary["added"] == ["FRESH_KEY", "OPENAI_API_KEY_2"]
+    broker.approve(request)
+    assert broker.vault.get("OPENAI_API_KEY") == "sk-openai"
+    assert broker.vault.get("OPENAI_API_KEY_2") == "sk-newsbot-own"
+    assert "NEWS_BOT_OPENAI_KEY" not in broker.vault
+    env = broker.config.presets_raw["news-bot"]["env"]
+    assert env["OPENAI_API_KEY"] == "OPENAI_API_KEY_2" and env["ALT_OPENAI"] == "OPENAI_API_KEY"
+    assert env["FRESH"] == {"secret": "FRESH_KEY", "approval": "per-run"}
+
+
+async def test_import_skips_numbers_that_are_taken(harness: Harness) -> None:
+    request = harness.broker.request_import({"OPENAI_API_KEY": "sk-one", "OPENAI_API_KEY_2": "sk-two"}, {}, None, harness.provenance())
+    assert request.summary["renamed"] == {"OPENAI_API_KEY": "OPENAI_API_KEY_3"}
+    assert request.summary["added"] == ["OPENAI_API_KEY_2", "OPENAI_API_KEY_3"]
 
 
 async def test_session_runs_refuse_secrets_that_became_per_run(harness: Harness) -> None:

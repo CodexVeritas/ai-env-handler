@@ -278,5 +278,6 @@ class Connection:
         if not await self._decided_or_withdrawn(request):
             return
         if request.decision.result().outcome == "approved":
-            request.result = {"added": request.summary["added"], "changed": request.summary["changed"], "presets": request.summary["presets"]}
+            renames = {**request.summary["reused"], **request.summary["renamed"]}
+            request.result = {"added": request.summary["added"], "renames": renames, "presets": request.summary["presets"]}
         await self._reply_decision(request)
