@@ -49,35 +49,22 @@ def test_an_envh_hook_installed_from_any_path_is_detected() -> None:
     assert wizard.envh_hook_commands({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"command": "x.sh"}]}]}}) == []
 
 
-def test_settings_update_backs_up_writes_and_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_hook_text_keeps_other_settings_and_is_none_once_present(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text('{"model": "opus", "note": "café"}\n')
-    settings_path.chmod(0o600)
-    answer_inputs(monkeypatch, "y")
-    assert wizard.offer_settings_hook(settings_path, HOOK_COMMAND) == "settings hook added"
-    saved = json.loads(settings_path.read_text())
+    new_text = wizard.settings_with_hook(settings_path, HOOK_COMMAND)
+    saved = json.loads(new_text)
     assert saved["note"] == "café"
     assert wizard.envh_hook_commands(saved) == [HOOK_COMMAND]
-    assert settings_path.stat().st_mode & 0o777 == 0o600
-    backups = list(tmp_path.glob("settings.json.before-envh-*"))
-    assert [backup.read_text() for backup in backups] == ['{"model": "opus", "note": "café"}\n']
-    assert wizard.offer_settings_hook(settings_path, HOOK_COMMAND) == "settings hook already in place"
-
-
-def test_declining_the_settings_update_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings_path = tmp_path / "settings.json"
-    settings_path.write_text("{}\n")
-    answer_inputs(monkeypatch, "")
-    assert wizard.offer_settings_hook(settings_path, HOOK_COMMAND) == "settings skipped"
-    assert settings_path.read_text() == "{}\n"
-    assert list(tmp_path.iterdir()) == [settings_path]
+    settings_path.write_text(new_text)
+    assert wizard.settings_with_hook(settings_path, HOOK_COMMAND) is None
 
 
 def test_invalid_settings_json_stops_with_a_message(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text("{not json")
     with pytest.raises(SystemExit, match="Fix the file"):
-        wizard.offer_settings_hook(settings_path, HOOK_COMMAND)
+        wizard.settings_with_hook(settings_path, HOOK_COMMAND)
 
 
 @pytest.mark.parametrize(
@@ -88,26 +75,48 @@ def test_claude_md_snippet_is_appended_after_one_blank_line(current: str, expect
     assert wizard.claude_md_with_snippet(current, "snippet\n") == expected
 
 
-def test_claude_md_marker_is_in_the_snippet_so_reruns_skip_it(tmp_path: Path) -> None:
-    snippet = (ROOT / "claude" / "CLAUDE.snippet.md").read_text()
-    claude_md = tmp_path / "CLAUDE.md"
-    claude_md.write_text("# Mine\n\n" + snippet)
-    assert wizard.offer_claude_md(claude_md, snippet) == "CLAUDE.md already in place"
+def test_claude_code_changes_apply_once_back_up_settings_and_keep_its_mode(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text('{"model": "opus"}\n')
+    settings_path.chmod(0o600)
+    (tmp_path / "CLAUDE.md").write_text("# Mine\n")
+    changes = wizard.claude_code_changes(tmp_path)
+    assert len(changes) == 4
+    for _, apply in changes:
+        apply()
+    assert (tmp_path / "skills" / "envh" / "SKILL.md").read_text() == (ROOT / "claude" / "skills" / "envh" / "SKILL.md").read_text()
+    assert wizard.envh_hook_commands(json.loads(settings_path.read_text())) == [f"python3 {tmp_path / 'hooks' / 'envh_ask.py'}"]
+    assert settings_path.stat().st_mode & 0o777 == 0o600
+    assert [backup.read_text() for backup in tmp_path.glob("settings.json.before-envh-*")] == ['{"model": "opus"}\n']
+    assert wizard.CLAUDE_MD_MARKER in (tmp_path / "CLAUDE.md").read_text()
+    assert wizard.claude_code_changes(tmp_path) == []
 
 
-def test_copy_creates_then_reports_up_to_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    source = ROOT / "claude" / "skills" / "envh" / "SKILL.md"
-    destination = tmp_path / "skills" / "envh" / "SKILL.md"
-    answer_inputs(monkeypatch, "y")
-    assert wizard.offer_copy("skill", source, destination) == "skill installed"
-    assert destination.read_text() == source.read_text()
-    assert wizard.offer_copy("skill", source, destination) == "skill already in place"
+def test_a_changed_skill_is_offered_as_an_update(tmp_path: Path) -> None:
+    for _, apply in wizard.claude_code_changes(tmp_path):
+        apply()
+    (tmp_path / "skills" / "envh" / "SKILL.md").write_text("old\n")
+    [(description, _)] = wizard.claude_code_changes(tmp_path)
+    assert description.startswith("Update the envh skill")
 
 
 def test_quit_answer_stops_the_wizard(monkeypatch: pytest.MonkeyPatch) -> None:
     answer_inputs(monkeypatch, "maybe", "q")
     with pytest.raises(wizard.Quit):
-        wizard.ask_yes("Proceed?")
+        wizard.ask("Proceed?", "more")
+
+
+def test_question_mark_shows_more_then_enter_takes_the_default(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    answer_inputs(monkeypatch, "?", "")
+    assert wizard.ask("Proceed?", "the details", default=False) is False
+    assert "the details" in capsys.readouterr().out
+
+
+def test_verbose_mode_shows_more_without_asking(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(wizard, "verbose", True)
+    answer_inputs(monkeypatch, "")
+    assert wizard.ask("Proceed?", "the details") is True
+    assert "the details" in capsys.readouterr().out
 
 
 def test_only_the_build_files_are_staged_for_root(tmp_path: Path) -> None:
@@ -123,6 +132,13 @@ def test_root_half_refuses_to_run_without_sudo() -> None:
 
 
 def test_root_runs_the_wizard_with_the_system_python_and_sudo_by_absolute_path() -> None:
-    command = wizard.root_install_command("abc123 from /repo", ["--dry-run"])
+    command = wizard.root_install_command("abc123 from /repo", ["--ignore-preflight"])
     assert command[:2] == ["/usr/bin/sudo", "/usr/bin/python3"]
-    assert command[3:] == ["--install-as-root", "--source", "abc123 from /repo", "--dry-run"]
+    assert command[3:] == ["--install-as-root", "--source", "abc123 from /repo", "--ignore-preflight"]
+
+
+def test_the_system_checks_load_from_the_staged_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    wizard.stage_build_files(tmp_path / "staging")
+    problems, warnings = wizard.system_checks(tmp_path / "staging" / "src", "nobody")
+    assert isinstance(problems, list) and isinstance(warnings, list)

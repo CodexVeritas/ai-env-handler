@@ -43,7 +43,7 @@ git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
 python3 scripts/setup_wizard.py
 ```
 
-The wizard checks your system, tells you what each step will change, and asks before doing it. If something needs fixing first, it tells you how. Linux only.
+The wizard walks through five short steps and asks before each change. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
 
 Later, run it again to upgrade (after `git pull`) or to import more projects.
 
@@ -284,19 +284,24 @@ Please report privately, not in a public issue. See [SECURITY.md](SECURITY.md).
 
 ## What the install changes, upgrading, uninstalling
 
-The wizard's install step asks for sudo once. Root copies the source files from your clone to a root-only folder and builds `/opt/envh` from that copy: Python 3.12 in `/opt/envh/python`, envh in `/opt/envh/env`, and the commit it came from in `/opt/envh/installed-from`. It links `/usr/local/bin/envh` and runs `envh install`, which:
+The wizard's install step asks for sudo once, and runs `sudo -k` afterwards so the terminal forgets it. If root has no `uv` of its own, the wizard first offers to install one into `/usr/local/bin` with astral.sh's installer (a `uv` in your home folder could be swapped by anything running as you before root runs it); you can use your own instead, at that risk.
 
-1. checks the system and refuses to go on where a process running as you could become root: it needs Linux 6.2 or newer with Yama, `sudo` that asks for a password (no `NOPASSWD` rules for you), and your user outside root-granting groups such as `docker`. It prints how to fix anything it finds, and warns on X11;
-2. creates the service user `envh` with home `/var/lib/envh` (mode 0700);
-3. installs `/usr/local/sbin/envh-console`, the root helper that starts the broker;
-4. installs a desktop launcher named "envh console" if a desktop terminal is found;
-5. creates the vault and the policy in `/var/lib/envh`, owned by `envh`: it writes `users: [<your login>]` into the policy, you choose the **vault passphrase** (stored nowhere; you type it to start the console and to approve requests), and you get a **console phrase**.
+As root, it copies the source files from your clone to a root-only folder and checks the system there. It stops where a process running as you could become root: it needs Linux 6.2 or newer with Yama, `sudo` that asks for a password (no `NOPASSWD` rules for you), and your user outside root-granting groups such as `docker`. Each problem says how to fix it; you can continue anyway after checking each one yourself. It warns on X11.
+
+Then it builds `/opt/envh` from that copy: Python 3.12 in `/opt/envh/python`, envh in `/opt/envh/env`, and the commit it came from in `/opt/envh/installed-from`. It links `/usr/local/bin/envh` and runs `envh install` (`sudo envh install --dry-run` lists its changes), which:
+
+1. creates the service user `envh` with home `/var/lib/envh` (mode 0700);
+2. installs `/usr/local/sbin/envh-console`, the root helper that starts the broker;
+3. installs a desktop launcher named "envh console" if a desktop terminal is found;
+4. creates the vault and the policy in `/var/lib/envh`, owned by `envh`: it writes `users: [<your login>]` into the policy, you choose the **vault passphrase** (stored nowhere; you type it to start the console and to approve requests), and you get a **console phrase**.
 
 Nothing else on your system changes: no sudo, shell or desktop settings.
 
+The wizard refuses to run inside Claude Code, but it cannot tell when another AI tool shares its terminal. Run it in a terminal window of its own: while the install runs, a sudo password typed there is usable from that terminal.
+
 envh never runs from your clone. Your agents can edit the clone, and the console runs the code that holds your keys, so that code must live where only root can change it.
 
-**Upgrade:** `git pull` in your clone and run the wizard again. It shows the installed commit next to the clone's, lists any uncommitted changes (root installs those too), and asks before upgrading. The vault, its passphrase and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then.
+**Upgrade:** `git pull` in your clone and run the wizard again. It asks before updating (`?` shows the installed commit next to the clone's), and asks again if the clone has uncommitted changes, since root installs those too. The vault, its passphrase and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then.
 
 **Uninstall:** `sudo envh uninstall` keeps the vault; `sudo envh uninstall --purge` deletes it too.
 

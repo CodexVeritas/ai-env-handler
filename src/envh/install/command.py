@@ -1,4 +1,4 @@
-"""`envh install` / `envh uninstall`: system setup, run as root by scripts/setup_wizard.py."""
+"""`envh install` / `envh uninstall`: system setup, run as root by scripts/setup_wizard.py after its system checks."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from envh.platform import SERVICE_USER, preflight_problems, preflight_warnings
+from envh.platform import SERVICE_USER
 from envh.server.init_cmd import run_init
 
 HELPER_PATH = Path("/usr/local/sbin/envh-console")
@@ -83,13 +83,11 @@ def terminal_command() -> str | None:
 
 
 def run(command: list[str], dry_run: bool) -> None:
-    say("  $ " + " ".join(command))
     if not dry_run:
         subprocess.run(command, check=True)
 
 
 def write_root_file(path: Path, content: str, mode: int, dry_run: bool) -> None:
-    say(f"  write {path} (mode {oct(mode)})")
     if dry_run:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,43 +98,45 @@ def write_root_file(path: Path, content: str, mode: int, dry_run: bool) -> None:
 
 
 def install(args: argparse.Namespace) -> int:
+    """Quiet by default: the setup wizard reports progress. --verbose and --dry-run list each change."""
     require_root(args.dry_run)
     invoking_user = os.environ.get("SUDO_USER")
-    problems = preflight_problems(invoking_user)
-    for warning in preflight_warnings():
-        say(f"warning: {warning}")
-    if problems:
-        for problem in problems:
-            say(f"problem: {problem}")
-        if not args.ignore_preflight:
-            raise InstallError("fix the problems above (or pass --ignore-preflight if you accept them)")
     if not ENVH_BIN.exists() and not args.dry_run:
         raise InstallError(f"{ENVH_BIN} is missing; run scripts/setup_wizard.py instead of `envh install` directly")
-    say("1. service user")
+
+    def report(text: str) -> None:
+        if args.verbose or args.dry_run:
+            say(f"  · {text}")
+
+    if args.dry_run:
+        say("Dry run: nothing changes. The install would set up:")
     if user_exists(SERVICE_USER):
-        say(f"  {SERVICE_USER} already exists")
+        report(f"System user {SERVICE_USER}: already there")
     else:
+        report(f"System user {SERVICE_USER}, home {DATA_DIR} (only {SERVICE_USER} can open it)")
         run(["useradd", "--system", "--create-home", "--home-dir", str(DATA_DIR), "--shell", "/usr/sbin/nologin", SERVICE_USER], args.dry_run)
     run(["chmod", "700", str(DATA_DIR)], args.dry_run)
-    say("2. console helper")
+    report(f"{HELPER_PATH}: starts the console as {SERVICE_USER}")
     write_root_file(HELPER_PATH, HELPER_SCRIPT, 0o755, args.dry_run)
-    say("3. desktop launcher")
     command = terminal_command()
     if command and DESKTOP_PATH.parent.exists():
+        report(f'{DESKTOP_PATH}: the "envh console" app launcher')
         write_root_file(DESKTOP_PATH, DESKTOP_ENTRY.replace("TERMINAL_COMMAND", command), 0o644, args.dry_run)
     else:
-        say("  no desktop terminal found; start the console with `sudo envh-console`")
-    say("4. vault and policy")
+        report("No app launcher: no desktop terminal found")
+    if args.dry_run:
+        if not (DATA_DIR / "vault.age").exists():
+            report(f"The vault and policy in {DATA_DIR} (users: {invoking_user or 'root'}), after asking for a vault passphrase")
+        return 0
+    say("  ✓ envh installed")
     if (DATA_DIR / "vault.age").exists():
-        say(f"  {DATA_DIR / 'vault.age'} already exists; keeping the vault, its passphrase and the policy")
-    elif args.dry_run:
-        say(f"  would create the vault, config.yaml (users: [{invoking_user or 'root'}]) and presets.yaml in {DATA_DIR}, asking you for a vault passphrase")
-    elif not sys.stdin.isatty():
+        report("Kept the vault, its passphrase and the policy")
+        return 0
+    if not sys.stdin.isatty():
         raise InstallError("creating the vault asks for a passphrase; run the setup wizard in a terminal")
-    else:
-        run_init(DATA_DIR, invoking_user or "root")
-        run(["chown", "-R", f"{SERVICE_USER}:{SERVICE_USER}", str(DATA_DIR)], args.dry_run)
-    say("done. Start the console with: sudo envh-console   (or the 'envh console' launcher)")
+    run_init(DATA_DIR, invoking_user or "root")
+    run(["chown", "-R", f"{SERVICE_USER}:{SERVICE_USER}", str(DATA_DIR)], args.dry_run)
+    report(f"Policy in {DATA_DIR}: config.yaml (users: {invoking_user or 'root'}) and presets.yaml")
     return 0
 
 
@@ -163,7 +163,7 @@ def main(command: str, argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog=f"envh {command}")
     parser.add_argument("--dry-run", action="store_true", help="print every action without doing it")
     if command == "install":
-        parser.add_argument("--ignore-preflight", action="store_true")
+        parser.add_argument("--verbose", action="store_true", help="list each change")
     else:
         parser.add_argument("--purge", action="store_true", help="also delete the service user and the vault")
     args = parser.parse_args(argv)
