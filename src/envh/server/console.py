@@ -61,12 +61,17 @@ def approval_prompt(request: Request, phrase: str) -> str:
     return f"   [{phrase}] vault passphrase to approve #{request.id} (hidden), or n to deny:"
 
 
+def presets_line(names: tuple[str, ...]) -> str:
+    label = "presets:" if len(names) > 1 else "preset:"
+    return f"   {label:<10}{', '.join(names) or '(ad hoc)'}"
+
+
 def render_request(request: Request, now: datetime) -> list[str]:
     reason = f'"{printable(request.reason)}"' if request.reason else "(no reason given)   <-- ask why before approving"
     header = f"[{now:%H:%M:%S}] {request.kind.upper()} REQUEST #{request.id}   pid {request.provenance.pid}  uid {request.provenance.uid}"
     lines = [header, f"   from:     {login_name(request.provenance.uid)}", f"   reason:   {reason}"]
     if request.kind == "session":
-        lines.append(f"   preset:   {request.preset or '(ad hoc)'}")
+        lines.append(presets_line(request.presets))
         lines.extend(f"   {var:<28} <- {secret}" for var, secret in sorted(request.mapping.items()))
         excluded = request.summary.get("excluded_per_run") or []
         if excluded:
@@ -75,7 +80,7 @@ def render_request(request: Request, now: datetime) -> list[str]:
             capped = "" if request.granted == request.requested else f"  (capped from {format_duration(request.requested)})"
             lines.append(f"   duration: {format_duration(request.granted)}{capped}")
     elif request.kind == "run":
-        lines.append(f"   preset:   {request.preset or '(ad hoc)'}")
+        lines.append(presets_line(request.presets))
         lines.extend(f"   {var:<28} <- {secret}   HANDOUT: value visible to the process" for var, secret in sorted(request.mapping.items()))
     elif request.kind == "preset":
         lines.append(f"   presets:  {', '.join(request.summary.get('presets', []))}")
@@ -271,7 +276,7 @@ class Console:
             self._show_presets()
         elif command == "sessions":
             for session in self.broker.state.live_sessions():
-                self.say(f"   {session.id}  {login_name(session.provenance.uid):<12} {session.preset or '(ad hoc)':<24} expires {session.expires_at:%H:%M:%S}  vars {', '.join(sorted(session.mapping))}  reason {printable(session.reason or '-')}")
+                self.say(f"   {session.id}  {login_name(session.provenance.uid):<12} {', '.join(session.presets) or '(ad hoc)':<24} expires {session.expires_at:%H:%M:%S}  vars {', '.join(sorted(session.mapping))}  reason {printable(session.reason or '-')}")
         elif command == "runs":
             for run in self.broker.state.active_runs():
                 self.say(f"   run #{run.id} pid {run.provenance.pid} vars {', '.join(sorted(run.mapping))}  {printable(' '.join(run.command))}")

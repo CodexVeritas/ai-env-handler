@@ -198,6 +198,7 @@ envh session end <id>
 - `envh run` without a session asks the console for that one run and waits for your answer, then runs the command. It is the way to approve every request, and the only way to use secrets marked `per-run`, which sessions never cover.
 - A session is approved once; every `envh run --session` inside it is approved instantly and logged. The session lasts the minutes you asked for, capped by each secret's `max_session` and by 24 hours.
 - `export ENVH_SESSION=<id>` lets you omit `--session`. `envh session start ... --quiet` prints only the id.
+- Name several presets to combine them: `envh session start news-bot forecasting-bot ...`, or `envh run --preset news-bot,forecasting-bot`. You get all their variables; per-run beats session and the shortest `max_session` wins. If two presets map the same variable to different secrets, the request is refused: leave one preset out, or pick with `--with VAR=SECRET` (listing the other variables you need too).
 - `--with` narrows a run to some of the session's variables, or maps variables ad hoc: `--with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY`.
 - `--reason` is optional but the console shows its absence loudly. Write what you would want to read before approving.
 - A running command is never killed when its session expires; expiry only stops new approvals. When the command itself exits, any process it left running is terminated so the values do not outlive the run (`--keep-background` to opt out).

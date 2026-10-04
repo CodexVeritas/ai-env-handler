@@ -38,7 +38,7 @@ class Request:
     id: int
     kind: RequestKind
     mapping: dict[str, str]
-    preset: str | None
+    presets: tuple[str, ...]
     requested: timedelta | None
     granted: timedelta | None
     reason: str | None
@@ -64,7 +64,7 @@ class Request:
 class Session:
     id: str
     mapping: dict[str, str]
-    preset: str | None
+    presets: tuple[str, ...]
     created_at: datetime
     expires_at: datetime
     reason: str | None
@@ -110,7 +110,7 @@ class StateTable:
         provenance: Provenance,
         reason: str | None,
         command: tuple[str, ...] = (),
-        preset: str | None = None,
+        presets: tuple[str, ...] = (),
         requested: timedelta | None = None,
         granted: timedelta | None = None,
         summary: dict[str, Any] | None = None,
@@ -121,7 +121,7 @@ class StateTable:
             id=self._allocate_id(),
             kind=kind,
             mapping=dict(mapping),
-            preset=preset,
+            presets=tuple(presets),
             requested=requested,
             granted=granted,
             reason=reason,
@@ -179,7 +179,7 @@ class StateTable:
         session = Session(
             id=random_secrets.token_hex(8),
             mapping=dict(request.mapping),
-            preset=request.preset,
+            presets=request.presets,
             created_at=now,
             expires_at=now + request.granted,
             reason=request.reason,

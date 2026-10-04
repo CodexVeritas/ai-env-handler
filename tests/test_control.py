@@ -8,7 +8,7 @@ from tests.conftest import Client, Harness, approve_next
 
 async def test_session_lifecycle(control: Path, harness: Harness) -> None:
     async with Client(control) as client:
-        await client.send(op="session_start", preset="team", minutes=30, reason="research", command=["envh", "session", "start"])
+        await client.send(op="session_start", presets=["team"], minutes=30, reason="research", command=["envh", "session", "start"])
         first = await client.recv()
         assert first["pending"] is True
         request_id = first["request_id"]
@@ -49,7 +49,7 @@ async def test_run_without_session_prompts_and_denial(control: Path, harness: Ha
         reply = await client.recv()
         assert reply == {"ok": False, "request_id": pending.id, "error": "denied"}
     async with Client(control) as client:
-        await client.send(op="run", preset="team", command=["python", "y.py"])
+        await client.send(op="run", presets=["team"], command=["python", "y.py"])
         assert (await client.recv())["pending"] is True
         await approve_next(harness)
         reply = await client.recv()
@@ -154,11 +154,11 @@ async def test_import_and_propose_over_socket(control: Path, harness: Harness) -
 
 async def test_preset_with_override_mismatch_is_rejected(control: Path, harness: Harness) -> None:
     async with Client(control) as client:
-        await client.send(op="session_start", preset="team", minutes=5, **{"with": ["OPENAI_API_KEY=TEAM_OPENROUTER_KEY"]})
+        await client.send(op="session_start", presets=["team"], minutes=5, **{"with": ["OPENAI_API_KEY=TEAM_OPENROUTER_KEY"]})
         reply = await client.recv()
         assert reply["ok"] is False and "maps to OPENAI_API_KEY in preset team" in reply["error"]
     async with Client(control) as client:
-        await client.send(op="session_start", preset="team", minutes=5, **{"with": ["OPENAI_API_KEY=OPENAI_API_KEY"]})
+        await client.send(op="session_start", presets=["team"], minutes=5, **{"with": ["OPENAI_API_KEY=OPENAI_API_KEY"]})
         assert (await client.recv())["pending"] is True
         assert harness.broker.state.pending()[0].mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
 
@@ -189,5 +189,21 @@ async def test_a_waiting_request_tells_the_client_whether_to_notify(control: Pat
         harness.broker.deny(harness.broker.state.pending()[0])
     harness.broker.config.notify = False
     async with Client(control) as client:
-        await client.send(op="session_start", preset="team", minutes=5, reason="quiet")
+        await client.send(op="session_start", presets=["team"], minutes=5, reason="quiet")
         assert (await client.recv())["notify"] is False
+
+
+async def test_session_combines_several_presets(control: Path, harness: Harness) -> None:
+    async with Client(control) as client:
+        await client.send(op="session_start", presets=["team", "dbwork"], minutes=30, reason="mixed")
+        assert (await client.recv())["excluded_per_run"] == ["DATABASE_URL"]
+        await approve_next(harness)
+        assert (await client.recv())["ok"] is True
+    async with Client(control) as client:
+        await client.send(op="list")
+        session = (await client.recv())["sessions"][0]
+        assert session["presets"] == ["team", "dbwork"] and session["vars"] == ["OPENAI_API_KEY", "OPENROUTER_API_KEY"]
+    async with Client(control) as client:
+        await client.send(op="session_start", presets="team", minutes=5)
+        reply = await client.recv()
+        assert reply["ok"] is False and "list of preset names" in reply["error"]

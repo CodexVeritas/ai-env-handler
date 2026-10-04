@@ -105,22 +105,14 @@ class Connection:
             raise RequestError(f"unknown operation {message['op']!r}")
         await handler(message)
 
-    def _mapping(self, message: dict[str, Any]) -> tuple[dict[str, str], Preset | None]:
-        preset_name = message.get("preset")
-        items = list(message.get("with") or [])
-        if preset_name:
-            mapping, preset = self.broker.mapping_from_preset(str(preset_name))
-            if items:
-                requested = {var: secret for var, _, secret in (str(item).partition("=") for item in items)}
-                missing = sorted(set(requested) - set(mapping))
-                if missing:
-                    raise RequestError(f"preset {preset.name} does not define {', '.join(missing)}")
-                for var, secret in requested.items():
-                    if secret and secret != mapping[var]:
-                        raise RequestError(f"{var} maps to {mapping[var]} in preset {preset.name}, not {secret}; drop the =SECRET part or request it without a preset")
-                mapping = {var: secret for var, secret in mapping.items() if var in requested}
-            return mapping, preset
-        return self.broker.mapping_from_with(items), None
+    def _mapping(self, message: dict[str, Any]) -> tuple[dict[str, str], list[Preset]]:
+        names = message.get("presets") or []
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            raise RequestError("presets must be a list of preset names")
+        items = [str(item) for item in message.get("with") or []]
+        if names:
+            return self.broker.mapping_from_presets(names, items)
+        return self.broker.mapping_from_with(items), []
 
     @staticmethod
     def _command(message: dict[str, Any]) -> tuple[str, ...]:
@@ -171,10 +163,10 @@ class Connection:
             await self.send({"ok": False, "request_id": request.id, "error": decision.outcome})
 
     async def op_session_start(self, message: dict[str, Any]) -> None:
-        mapping, preset = self._mapping(message)
+        mapping, presets = self._mapping(message)
         request = self.broker.request_session(
             mapping=mapping,
-            preset=preset,
+            presets=presets,
             minutes=int(message.get("minutes") or 0),
             reason=self._reason(message),
             command=self._command(message),
@@ -214,8 +206,8 @@ class Connection:
             self.broker.audit.event("run_auto_approved", session=session.id, vars=sorted(mapping), pid=self.provenance.pid, reason=reason or "(no reason given)")
             await self._start_run(mapping, session.id, reason, command)
             return
-        mapping, preset = self._mapping(message)
-        request = self.broker.request_run(mapping, preset, reason, command, self.provenance)
+        mapping, presets = self._mapping(message)
+        request = self.broker.request_run(mapping, presets, reason, command, self.provenance)
         await self.send(self._pending(request))
         if not await self._decided_or_withdrawn(request):
             return
