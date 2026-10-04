@@ -1,11 +1,11 @@
 ---
 name: envh
-description: Use envh when a command needs an API key or other secret. Secrets live in a vault owned by another user; you request a session with a reason, a human approves it on the envh console, then you run commands with `envh run`. Never read .env files or print environment variables.
+description: Use envh when a command needs an API key or other secret. Secrets live in a vault owned by another user; you run the command with `envh run` and a reason, and a human approves it on the envh console (or approves a session once for several commands). Never read .env files or print environment variables.
 ---
 
 # Using envh
 
-Secrets are not in `.env` files and not in your environment. A human approves every session on a console you cannot see or type into. Your job is to ask well: say what you need, why, and for how long.
+Secrets are not in `.env` files and not in your environment. A human approves every request on a console you cannot see or type into. Your job is to ask well: say what you need, why, and for how long.
 
 ## The normal flow
 
@@ -13,24 +13,30 @@ Secrets are not in `.env` files and not in your environment. A human approves ev
    ```bash
    envh list
    ```
-2. Start the smallest session that covers the work, with a clear reason. This blocks until the human approves, so give the tool call a long timeout (10 minutes):
+2. **One command: run it directly.** The human approves this one run; the command then runs with the values, and nothing outlives it. It waits for approval first, so give the tool call a long timeout (10 minutes):
+   ```bash
+   envh run --preset <preset> --reason "weekly report: fetch forecasts" -- uv run python scripts/research.py
+   ```
+   No preset fits? Name the variables: `envh run --with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY --reason "..." -- <command>`.
+   Need variables from two presets? Combine them: `--preset news-bot,forecasting-bot`. If envh says they map a variable to different secrets, leave one preset out or pick with `--with VAR=SECRET`.
+   If the call times out before approval, the request is withdrawn; run the same command again.
+3. **Several commands for one task: start a session** so the human approves once. Start the smallest session that covers the work, with a clear reason. This blocks until the human approves, so give the tool call a long timeout (10 minutes):
    ```bash
    envh session start <preset> --minutes 60 --reason "weekly report: fetch forecasts and draft the summary"
    ```
-   Need variables from two presets? Name both: `envh session start news-bot forecasting-bot --minutes 60 --reason "..."`. If envh says they map a variable to different secrets, leave one preset out or pick with `--with VAR=SECRET`.
-   No preset fits? Map variables explicitly: `envh session start --with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY --minutes 30 --reason "..."`.
+   `--with` and several presets work here too: `envh session start --with OPENAI_API_KEY --minutes 30 --reason "..."`, or `envh session start news-bot forecasting-bot --minutes 60 --reason "..."`.
    If the call times out before approval, resume with `envh session wait <request_id>` (the id is printed). Do not start a second session for the same work.
-3. Run commands inside the session. Each run is approved instantly, logged, and gets only the variables you name:
+   Then run commands inside the session. Each run is approved instantly, logged, and gets only the variables you name:
    ```bash
    envh run --session <id> --reason "research step" -- uv run python scripts/research.py
    envh run --session <id> --with OPENAI_API_KEY --reason "unit test needing a key" -- uv run pytest tests/test_live.py
    ```
-4. End the session when the work is done:
+   End the session when the work is done:
    ```bash
    envh session end <id>
    ```
 
-`envh run` without `--session` asks the human on every run. Prefer sessions.
+Always run directly, without a session, when `envh list` marks a secret `per-run` (sessions never cover those) or when the human asked to approve every request.
 
 ## Always include a reason
 
