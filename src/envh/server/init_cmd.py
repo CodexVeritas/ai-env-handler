@@ -30,14 +30,14 @@ def default_data_dir() -> Path:
 
 def prompt_new_secret(label: str) -> str:
     while True:
-        first = getpass.getpass(f"choose {label}: ")
+        first = getpass.getpass(f"  {label}: ")
         if len(first) < MIN_PASSPHRASE_LENGTH:
-            print(f"use at least {MIN_PASSPHRASE_LENGTH} characters")
+            print(f"  Use at least {MIN_PASSPHRASE_LENGTH} characters.")
             continue
-        second = getpass.getpass("repeat it: ")
+        second = getpass.getpass("  Repeat it: ")
         if first == second:
             return first
-        print("they do not match; try again")
+        print("  They don't match. Try again.")
 
 
 def default_user() -> str:
@@ -57,24 +57,20 @@ def run_init(data_dir: Path, user: str) -> None:
     phrase_path = data_dir / PHRASE_FILE
     if not config_path.exists():
         write_private_file(config_path, render_config_template(user).encode())
-        print(f"wrote {config_path} (users: [{user}])")
     if not presets_path.exists():
         write_private_file(presets_path, PRESETS_TEMPLATE.encode())
-        print(f"wrote {presets_path}")
-    if vault_path.exists():
-        print(f"vault already exists at {vault_path}; leaving it alone")
-    else:
-        print("The vault passphrase encrypts the vault. You type it when you start the console and to approve each request.")
-        Vault.create(vault_path, prompt_new_secret("a vault passphrase"))
-        print(f"created empty vault {vault_path}")
+    if not vault_path.exists():
+        print()
+        print("  Choose a vault passphrase. You'll type it to approve each key request, and it can't be recovered.")
+        Vault.create(vault_path, prompt_new_secret("Passphrase"))
+        print("  ✓ Vault created")
     if not phrase_path.exists():
         phrase = " ".join(secrets.choice(WORDS) for _ in range(3))
         write_private_file(phrase_path, (phrase + "\n").encode())
-        print(f"wrote {phrase_path}")
     phrase = phrase_path.read_text().strip()
     print()
-    print(f"console phrase: {phrase}")
-    print("The real console prints this phrase before asking for the passphrase. If a console does not, close it: it is not envh.")
+    print(f"  Console phrase: {phrase}")
+    print("  The real console always shows it. Never type your passphrase where it's missing.")
 
 
 def main(argv: list[str]) -> int:

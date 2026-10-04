@@ -122,11 +122,10 @@ def preflight_problems(invoking_user: str | None) -> list[str]:
             problems.append(f"could not check the sudo rules of {invoking_user}: {error}")
         else:
             if entries:
-                listed = "".join(f"\n    {entry}" for entry in entries)
+                listed = "".join(f"\n  {entry}" for entry in entries)
                 problems.append(
-                    f"user {invoking_user} can run commands with sudo without a password:{listed}\n"
-                    "  an agent running as you can use these as root; remove them, or pass --ignore-preflight "
-                    "if each one is narrow (a fixed root-owned command you cannot edit that reads no file you can write)"
+                    f"{invoking_user} can run these with sudo without a password, so agents can too:{listed}\n"
+                    "Fine only if each is a fixed root-owned command that reads no file you can write."
                 )
     return problems
 
@@ -134,5 +133,5 @@ def preflight_problems(invoking_user: str | None) -> list[str]:
 def preflight_warnings() -> list[str]:
     warnings: list[str] = []
     if session_type() == "x11":
-        warnings.append("this is an X11 session: any process running as you can read the screen, record keys and type into windows, the console included; see 'Who else can see and type into the console' in the README")
+        warnings.append("X11 session: programs you run can read and type into the console window (README: 'Who else can see and type into the console')")
     return warnings
