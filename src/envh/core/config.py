@@ -174,10 +174,16 @@ def renamed_in_config(text: str, old: str, new: str) -> str:
     """config.yaml with the policy of secret old moved to new. Only text outside comments changes, so the user's layout
     and comments stay; refuses when the result would not parse to the same policies under the new name."""
     token = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])")
+
+    def replacement(match: re.Match[str]) -> str:
+        """The new name, quoted where YAML would otherwise read it as something else (NO, ON and NULL are booleans and null)."""
+        already_quoted = match.start() > 0 and match.string[match.start() - 1] in "'\""
+        return new if already_quoted or yaml.safe_load(new) == new else f"'{new}'"
+
     renamed_lines = []
     for line in text.splitlines(keepends=True):
         code, hash_mark, comment = line.partition("#")
-        renamed_lines.append(token.sub(new, code) + hash_mark + comment)
+        renamed_lines.append(token.sub(replacement, code) + hash_mark + comment)
     renamed = "".join(renamed_lines)
     defaults, policies, users, _ = parse_config(text)
     if new in policies:

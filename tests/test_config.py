@@ -162,3 +162,10 @@ def test_renamed_in_config_refuses_a_name_that_already_has_a_policy() -> None:
     text = f"users: [{getpass.getuser()}]\nsecrets: {{OLD_KEY: {{approval: per-run}}, NEW_KEY: {{max_session: 8h}}}}\n"
     with pytest.raises(ConfigError, match="already has a policy for NEW_KEY"):
         renamed_in_config(text, "OLD_KEY", "NEW_KEY")
+
+
+@pytest.mark.parametrize("new", ["NO", "YES", "ON", "OFF", "TRUE", "FALSE", "NULL"])
+def test_renamed_in_config_quotes_a_name_yaml_would_read_as_a_boolean_or_null(new: str) -> None:
+    text = f"users: [{getpass.getuser()}]\nsecrets:\n  OLD_KEY: {{ approval: per-run }}\n"
+    _, policies, _, _ = parse_config(renamed_in_config(text, "OLD_KEY", new))
+    assert policies[new].approval == "per-run"

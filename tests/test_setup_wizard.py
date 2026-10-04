@@ -226,6 +226,8 @@ def test_root_runs_the_wizard_with_the_system_python_and_sudo_by_absolute_path()
 
 
 def test_the_system_checks_load_from_the_staged_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(sys, "modules", dict(sys.modules))
     wizard.stage_build_files(tmp_path / "staging")
-    assert isinstance(wizard.system_problems(tmp_path / "staging" / "src", "nobody"), list)
+    staged_platform = tmp_path / "staging" / "src" / "envh" / "platform.py"
+    staged_platform.write_text(staged_platform.read_text() + "\n\ndef preflight_problems(invoking_user):\n    return ['staged copy checked ' + invoking_user]\n")
+    assert wizard.system_problems(tmp_path / "staging" / "src", "nobody") == ["staged copy checked nobody"]
