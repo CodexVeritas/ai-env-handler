@@ -23,6 +23,22 @@ def test_install_refuses_when_the_system_checks_find_problems(failing_checks: No
     assert "would set up" not in output.out
 
 
-def test_ignore_preflight_goes_ahead_once_the_problems_were_checked(failing_checks: None, capsys: pytest.CaptureFixture[str]) -> None:
+def test_ignore_preflight_goes_ahead_and_says_what_it_ignored(failing_checks: None, capsys: pytest.CaptureFixture[str]) -> None:
     assert command.main("install", ["--dry-run", "--ignore-preflight"]) == 0
-    assert "would set up" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Going on despite 1 system check problem, as --ignore-preflight asks" in output
+    assert "would set up" in output
+
+
+def test_a_root_shell_without_sudo_is_refused_because_the_checks_need_the_account(failing_checks: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.setattr(command.os, "geteuid", lambda: 0)
+    assert command.main("install", ["--dry-run"]) == 1
+    assert "from your own account" in capsys.readouterr().err
+
+
+def test_a_dry_run_without_root_on_an_installed_system_explains_instead_of_crashing(failing_checks: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    command.DATA_DIR.mkdir(mode=0o700)
+    monkeypatch.setattr(command.os, "access", lambda path, mode: False)
+    assert command.main("install", ["--dry-run", "--ignore-preflight"]) == 1
+    assert "run the dry run with sudo" in capsys.readouterr().err

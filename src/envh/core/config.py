@@ -89,6 +89,9 @@ class Config:
             return policy
         return SecretPolicy(name=policy.name, approval=preset_var.approval, max_session=policy.max_session)
 
+    def presets_using(self, secret: str) -> list[str]:
+        return sorted(preset.name for preset in self.presets.values() if any(entry.secret == secret for entry in preset.env.values()))
+
 
 def _load_yaml(text: str, where: str) -> Any:
     try:
@@ -248,7 +251,11 @@ def load_config(data_dir: Path, known_secrets: set[str] | None) -> Config:
     presets_path = data_dir / PRESETS_FILE
     if not config_path.exists():
         raise ConfigError(f"{config_path} does not exist; run `envh init`")
-    defaults, policies, users, allowed_uids = parse_config_for_broker(config_path.read_text())
     presets_text = presets_path.read_text() if presets_path.exists() else PRESETS_TEMPLATE
+    return config_from_text(config_path.read_text(), presets_text, known_secrets)
+
+
+def config_from_text(config_text: str, presets_text: str, known_secrets: set[str] | None) -> Config:
+    defaults, policies, users, allowed_uids = parse_config_for_broker(config_text)
     presets, raw = parse_presets(presets_text, known_secrets)
     return Config(defaults=defaults, secret_policies=policies, presets=presets, presets_raw=raw, users=users, allowed_uids=allowed_uids)

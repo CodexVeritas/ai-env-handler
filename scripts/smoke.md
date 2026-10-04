@@ -8,5 +8,7 @@
 6. `envh session start <preset> --minutes 30 --reason "smoke"`; approve with the vault passphrase (the prompt shows the console phrase); `envh run --session <id> --reason "smoke" -- env | grep -c KEY`.
 7. `envh run --with SOME_SECRET --reason "one-off" -- true`; approve; confirm `audit.jsonl` has request/decision/run lines.
 8. At a request, type a wrong passphrase: "wrong passphrase", the request stays pending, nothing you typed shows on screen, and `audit.jsonl` has a `wrong_passphrase` line. Start a request and press Ctrl-C in its terminal: the console says it was withdrawn and discards the next line. Send two requests at once: the second appears only after the first is decided.
-9. In a Claude Code session with `claude/skills/envh` and the hook installed: ask it to run a script that needs a key; expect the in-app ask, then the console prompt; deny once and confirm the agent stops and explains.
-10. `sudo envh uninstall --dry-run`.
+9. In a Claude Code session with `claude/skills/envh` and the hook installed: ask it to run a script that needs a key; expect the in-app ask, then the console prompt; deny once and confirm the agent stops and explains. Ask it to run `envh list` and `grep -n "envh session start" README.md`: no in-app ask for either.
+10. In Cursor, after the wizard's "Connect Cursor" step: ask the agent to run a script that needs a key; expect Cursor's approval prompt with the envh reason, then the console prompt. Ask it to run `sudo true`; expect a refusal. Ask it to run `envh list` and `ls`; both run as they did before the hook.
+11. Edit `~/.claude/skills/envh/SKILL.md` and `~/.cursor/hooks/envh_ask.py`, rerun the wizard: steps 5 and 6 say each is out of date, and answering n leaves "out of date" in the summary.
+12. `sudo envh uninstall --dry-run`.
