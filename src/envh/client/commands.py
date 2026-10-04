@@ -41,7 +41,7 @@ def cmd_run(args: argparse.Namespace, sock: Path) -> int:
         conn.send(op="run", session=session_id, preset=args.preset, reason=args.reason, command=command, **{"with": parse_with(args.with_)})
         reply = conn.recv_ok()
         if reply.get("pending"):
-            waiting_notice(reply["request_id"], None)
+            waiting_notice(reply, None)
             reply = conn.recv_ok()
         env = reply["env"]
         print(f"envh: run #{reply['run_id']} with {', '.join(sorted(env))}", file=sys.stderr, flush=True)
@@ -125,7 +125,7 @@ def cmd_session_start(args: argparse.Namespace, sock: Path) -> int:
         reply = conn.recv_ok()
         if reply.get("excluded_per_run"):
             print(f"envh: per-run secrets are not covered by sessions: {', '.join(reply['excluded_per_run'])}", file=sys.stderr, flush=True)
-        waiting_notice(reply["request_id"], f"envh session wait {reply['request_id']}")
+        waiting_notice(reply, f"envh session wait {reply['request_id']}")
         final = conn.recv_ok()
     return print_session(final, args.quiet)
 
@@ -135,7 +135,7 @@ def cmd_session_wait(args: argparse.Namespace, sock: Path) -> int:
         conn.send(op="session_wait", request_id=args.request_id)
         reply = conn.recv_ok()
         if reply.get("pending"):
-            waiting_notice(args.request_id, f"envh session wait {args.request_id}")
+            waiting_notice(reply, f"envh session wait {args.request_id}")
         final = conn.recv_ok()
     return print_session(final, args.quiet)
 
@@ -207,7 +207,7 @@ def cmd_preset_propose(args: argparse.Namespace, sock: Path) -> int:
     with Connection(sock) as conn:
         conn.send(op="preset_propose", yaml=Path(args.file).read_text(), reason=args.reason)
         reply = conn.recv_ok()
-        waiting_notice(reply["request_id"], None)
+        waiting_notice(reply, None)
         conn.recv_ok()
     print(f"presets applied: {', '.join(reply['presets'])}")
     return 0

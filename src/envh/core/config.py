@@ -22,6 +22,7 @@ PRESET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 CONFIG_TEMPLATE = """# envh policy. Secrets not listed here get the defaults.
 users: [{user}]          # login names allowed to talk to the broker; sessions belong to the user who opened them
+notify: true             # when a request needs your passphrase: a desktop notification with a sound, and the console's bell
 defaults:
   approval: session      # session: one console approval opens a session | per-run: ask on every run
   max_session: 1h        # longest session that may include a secret (hard cap 24h)
@@ -76,6 +77,7 @@ class Config:
     presets_raw: dict[str, Any]
     users: tuple[str, ...] = ()
     allowed_uids: frozenset[int] = frozenset()
+    notify: bool = True
 
     def policy_for(self, secret: str) -> SecretPolicy:
         policy = self.secret_policies.get(secret)
@@ -143,9 +145,17 @@ def parse_users(value: Any) -> tuple[tuple[str, ...], frozenset[int]]:
     return tuple(value), frozenset(uids)
 
 
+def parse_notify(text: str) -> bool:
+    value = _expect_mapping(_load_yaml(text, CONFIG_FILE), CONFIG_FILE).get("notify", True)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{CONFIG_FILE}: notify must be true or false, got {value!r}")
+    return value
+
+
 def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[str, ...], frozenset[int]]:
     document = _expect_mapping(_load_yaml(text, CONFIG_FILE), CONFIG_FILE)
-    _reject_unknown(document, ("users", "defaults", "secrets"), CONFIG_FILE)
+    _reject_unknown(document, ("users", "notify", "defaults", "secrets"), CONFIG_FILE)
+    parse_notify(text)
     users, allowed_uids = parse_users(document.get("users"))
     raw_defaults = _expect_mapping(document.get("defaults"), f"{CONFIG_FILE}: defaults")
     _reject_unknown(raw_defaults, ("approval", "max_session"), f"{CONFIG_FILE}: defaults")
@@ -248,7 +258,16 @@ def load_config(data_dir: Path, known_secrets: set[str] | None) -> Config:
     presets_path = data_dir / PRESETS_FILE
     if not config_path.exists():
         raise ConfigError(f"{config_path} does not exist; run `envh init`")
-    defaults, policies, users, allowed_uids = parse_config_for_broker(config_path.read_text())
+    config_text = config_path.read_text()
+    defaults, policies, users, allowed_uids = parse_config_for_broker(config_text)
     presets_text = presets_path.read_text() if presets_path.exists() else PRESETS_TEMPLATE
     presets, raw = parse_presets(presets_text, known_secrets)
-    return Config(defaults=defaults, secret_policies=policies, presets=presets, presets_raw=raw, users=users, allowed_uids=allowed_uids)
+    return Config(
+        defaults=defaults,
+        secret_policies=policies,
+        presets=presets,
+        presets_raw=raw,
+        users=users,
+        allowed_uids=allowed_uids,
+        notify=parse_notify(config_text),
+    )

@@ -159,6 +159,10 @@ class Connection:
                 decision.cancel()
                 return False
 
+    def _pending(self, request: Request, **extra: Any) -> dict[str, Any]:
+        """The first reply to a request that waits for the console; notify tells the client to alert the human."""
+        return {"ok": True, "request_id": request.id, "pending": True, "notify": self.broker.config.notify, **extra}
+
     async def _reply_decision(self, request: Request) -> None:
         decision = request.decision.result()
         if decision.outcome == "approved":
@@ -176,7 +180,7 @@ class Connection:
             command=self._command(message),
             provenance=self.provenance,
         )
-        await self.send({"ok": True, "request_id": request.id, "pending": True, "excluded_per_run": request.summary["excluded_per_run"]})
+        await self.send(self._pending(request, excluded_per_run=request.summary["excluded_per_run"]))
         await self._attend(request)
 
     async def op_session_wait(self, message: dict[str, Any]) -> None:
@@ -212,7 +216,7 @@ class Connection:
             return
         mapping, preset = self._mapping(message)
         request = self.broker.request_run(mapping, preset, reason, command, self.provenance)
-        await self.send({"ok": True, "request_id": request.id, "pending": True})
+        await self.send(self._pending(request))
         if not await self._decided_or_withdrawn(request):
             return
         if request.decision.result().outcome != "approved":
@@ -264,7 +268,7 @@ class Connection:
 
     async def op_preset_propose(self, message: dict[str, Any]) -> None:
         request = self.broker.request_preset(str(message.get("yaml") or ""), self._reason(message), self.provenance)
-        await self.send({"ok": True, "request_id": request.id, "pending": True, "presets": request.summary["presets"]})
+        await self.send(self._pending(request, presets=request.summary["presets"]))
         if not await self._decided_or_withdrawn(request):
             return
         await self._reply_decision(request)
@@ -275,7 +279,7 @@ class Connection:
         if not isinstance(secrets, dict) or not isinstance(presets, dict):
             raise RequestError("import expects 'secrets' and 'presets' objects")
         request = self.broker.request_import(secrets, presets, self._reason(message), self.provenance)
-        await self.send({"ok": True, "request_id": request.id, "pending": True})
+        await self.send(self._pending(request))
         if not await self._decided_or_withdrawn(request):
             return
         if request.decision.result().outcome == "approved":

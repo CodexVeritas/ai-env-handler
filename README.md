@@ -98,6 +98,11 @@ Or click the "envh console" launcher. Enter your sudo password, check the consol
 
 The helper chowns the terminal device to the service user for the duration and restores it afterwards.
 
+**You don't have to watch the console.** When a request needs your passphrase, envh shows a desktop notification with a sound, and the console rings its bell.
+- **The notification comes from the program that asked.** That program runs as you, in your desktop session. A request from a script with no desktop session (cron, SSH) only rings the bell.
+- **Its text is fixed.** It never shows the requester's reason, so a request can't use it to show you instructions.
+- **To turn both off, set `notify: false` in `config.yaml`.** Use `edit config` on the console.
+
 ## Move your `.env` files over
 
 ```bash
@@ -204,6 +209,7 @@ An agent can only *propose*: `envh preset validate draft.yaml` checks a draft wi
 
 ```yaml
 users: [alice]           # login names allowed to talk to the broker; the installer fills in yours
+notify: true             # desktop notification with a sound, and the console's bell, when a request needs your passphrase
 defaults:
   approval: session      # session: one approval opens a session | per-run: ask on every run, never in sessions
   max_session: 1h        # hard cap 24h

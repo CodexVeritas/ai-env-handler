@@ -209,7 +209,7 @@ async def test_render_request_neutralizes_control_characters(harness: Harness) -
     lines = render_request(request, harness.clock())
     assert len(lines) == len("\n".join(lines).splitlines())
     assert not any("\x1b" in line or "\r" in line for line in lines)
-    assert lines[0].startswith("\a") and "DATABASE_URL" in "\n".join(lines)
+    assert lines[0].startswith("[") and "DATABASE_URL" in "\n".join(lines)
     assert not any("\x1b" in line or "\n" in line for line in harness.echoed)
 
 
@@ -326,3 +326,14 @@ async def test_requests_wait_while_the_keys_view_is_open_and_lines_are_held(harn
     reader.feed_data(b"n\nquit\n")
     await asyncio.wait_for(task, timeout=5)
     assert request.decision.result().outcome == "denied"
+
+
+async def test_a_new_request_rings_the_bell_unless_notify_is_off(harness: Harness) -> None:
+    console, _, said = new_console(harness)
+    run_request(harness)
+    assert said[0].startswith("\a")
+    harness.broker.request_listeners.remove(console.on_request)
+    harness.broker.config.notify = False
+    _, _, quiet_said = new_console(harness)
+    run_request(harness)
+    assert quiet_said and not any("\a" in line for line in quiet_said)

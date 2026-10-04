@@ -14,6 +14,7 @@ from envh.core.config import (
     load_config,
     parse_config,
     parse_config_for_broker,
+    parse_notify,
     parse_presets,
     renamed_in_config,
 )
@@ -162,3 +163,14 @@ def test_renamed_in_config_refuses_a_name_that_already_has_a_policy() -> None:
     text = f"users: [{getpass.getuser()}]\nsecrets: {{OLD_KEY: {{approval: per-run}}, NEW_KEY: {{max_session: 8h}}}}\n"
     with pytest.raises(ConfigError, match="already has a policy for NEW_KEY"):
         renamed_in_config(text, "OLD_KEY", "NEW_KEY")
+
+
+def test_notify_defaults_to_on_and_takes_only_true_or_false(tmp_path: Path) -> None:
+    user = getpass.getuser()
+    assert parse_notify(render_config_template(user)) is True
+    assert parse_notify(f"users: [{user}]\n") is True
+    assert parse_notify(f"users: [{user}]\nnotify: false\n") is False
+    with pytest.raises(ConfigError, match="notify must be true or false"):
+        parse_config(f"users: [{user}]\nnotify: sometimes\n")
+    (tmp_path / "config.yaml").write_text(f"users: [{user}]\nnotify: false\n")
+    assert load_config(tmp_path, set()).notify is False

@@ -63,7 +63,7 @@ def approval_prompt(request: Request, phrase: str) -> str:
 
 def render_request(request: Request, now: datetime) -> list[str]:
     reason = f'"{printable(request.reason)}"' if request.reason else "(no reason given)   <-- ask why before approving"
-    header = f"{BELL}[{now:%H:%M:%S}] {request.kind.upper()} REQUEST #{request.id}   pid {request.provenance.pid}  uid {request.provenance.uid}"
+    header = f"[{now:%H:%M:%S}] {request.kind.upper()} REQUEST #{request.id}   pid {request.provenance.pid}  uid {request.provenance.uid}"
     lines = [header, f"   from:     {login_name(request.provenance.uid)}", f"   reason:   {reason}"]
     if request.kind == "session":
         lines.append(f"   preset:   {request.preset or '(ad hoc)'}")
@@ -163,7 +163,10 @@ class Console:
             self._present(request)
 
     def show_request(self, request: Request) -> None:
-        for line in render_request(request, self.broker.state.now()):
+        lines = render_request(request, self.broker.state.now())
+        if self.broker.config.notify:
+            lines[0] = BELL + lines[0]
+        for line in lines:
             self.say(line)
         self.say(approval_prompt(request, self.phrase))
 
@@ -294,7 +297,7 @@ class Console:
             waiting = sum(1 for request in self._queued if request.pending)
             frame = render_keys(view, self.phrase, waiting, self._screen_size())
             if frame != shown["frame"]:
-                self.output.draw(frame + (BELL if waiting > shown["waiting"] else ""))
+                self.output.draw(frame + (BELL if waiting > shown["waiting"] and self.broker.config.notify else ""))
             shown.update(frame=frame, waiting=waiting)
 
         with self.output.holding(), self._full_screen():

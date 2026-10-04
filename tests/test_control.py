@@ -180,3 +180,14 @@ async def test_close_hangs_up_on_waiting_clients(harness: Harness, tmp_path: Pat
         await asyncio.wait_for(server.close(), timeout=5)
         assert client.reader is not None and await client.reader.readline() == b""
     assert harness.broker.state.pending() == []
+
+
+async def test_a_waiting_request_tells_the_client_whether_to_notify(control: Path, harness: Harness) -> None:
+    async with Client(control) as client:
+        await client.send(op="run", **{"with": ["OPENAI_API_KEY"]}, reason="one-off")
+        assert (await client.recv())["notify"] is True
+        harness.broker.deny(harness.broker.state.pending()[0])
+    harness.broker.config.notify = False
+    async with Client(control) as client:
+        await client.send(op="session_start", preset="team", minutes=5, reason="quiet")
+        assert (await client.recv())["notify"] is False
