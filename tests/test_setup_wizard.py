@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable
@@ -130,6 +131,15 @@ def test_cursor_changes_apply_once_and_back_up_hooks_json(tmp_path: Path) -> Non
     assert wizard.cursor_hook_commands(json.loads(hooks_path.read_text())) == [f"python3 {tmp_path / 'hooks' / 'envh_ask.py'}"]
     assert [backup.read_text() for backup in tmp_path.glob("hooks.json.before-envh-*")] == ['{"version": 1, "hooks": {}}\n']
     assert wizard.cursor_changes(tmp_path) == []
+
+
+def test_a_home_folder_with_a_space_gets_a_quoted_hook_command(tmp_path: Path) -> None:
+    cursor_home = tmp_path / "ann lee" / ".cursor"
+    cursor_home.mkdir(parents=True)
+    for change in wizard.cursor_changes(cursor_home):
+        change.apply()
+    [command] = wizard.cursor_hook_commands(json.loads((cursor_home / "hooks.json").read_text()))
+    assert shlex.split(command) == ["python3", str(cursor_home / "hooks" / "envh_ask.py")]
 
 
 def test_a_changed_skill_is_offered_as_an_update(tmp_path: Path) -> None:

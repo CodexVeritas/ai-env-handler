@@ -593,7 +593,7 @@ def hook_config_changes(
 def claude_code_changes(claude_home: Path) -> list[Change]:
     """Each change the Claude Code step would make; empty when everything is in place."""
     changes = skill_and_hook_changes(claude_home)
-    hook_command = f"python3 {claude_home / 'hooks' / HOOK_FILE_NAME}"
+    hook_command = f"python3 {shlex.quote(str(claude_home / 'hooks' / HOOK_FILE_NAME))}"
     changes += hook_config_changes(claude_home / "settings.json", hook_command, with_envh_hook, envh_hook_commands)
     claude_md = claude_home / "CLAUDE.md"
     current = claude_md.read_text() if claude_md.exists() else ""
@@ -605,7 +605,7 @@ def claude_code_changes(claude_home: Path) -> list[Change]:
 
 def cursor_changes(cursor_home: Path) -> list[Change]:
     """Each change the Cursor step would make; empty when everything is in place."""
-    hook_command = f"python3 {cursor_home / 'hooks' / HOOK_FILE_NAME}"
+    hook_command = f"python3 {shlex.quote(str(cursor_home / 'hooks' / HOOK_FILE_NAME))}"
     return skill_and_hook_changes(cursor_home) + hook_config_changes(cursor_home / "hooks.json", hook_command, with_cursor_hook, cursor_hook_commands)
 
 
