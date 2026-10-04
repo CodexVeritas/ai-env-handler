@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from envh.common import fingerprint
+from envh.common import PRESET_NAME, SECRET_NAME, fingerprint
 from envh.client.transport import ClientError, Connection, waiting_notice
 
 ASSIGNMENT = re.compile(r"^(?P<indent>\s*)(?P<comment>#\s*)?(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*)$")
@@ -20,8 +20,7 @@ DROPPED_HEADER_WORDS = {"mode", "keys", "key", "config", "configuration", "setti
 SKIP_DIRS = {"node_modules", ".venv", "venv", ".git", "__pycache__", ".tox", ".mypy_cache", "dist", "build"}
 SKIP_SUFFIXES = (".example", ".template", ".sample", ".dist")
 ENVH_NOTE = "-> envh secret"
-SECRET_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
-PRESET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+LONG_TOKEN = 16
 Ask = Callable[[str], str]
 
 
@@ -131,8 +130,9 @@ def parse_env_text(path: Path, text: str) -> ParsedFile:
                 assignments.append(Assignment(match.group("name"), value, match.group("comment") is None, index, current_group, quoting_problem(match.group("value"))))
             continue
         stripped = line.strip()
-        if stripped.startswith("#") and stripped.lstrip("# ").strip() and ENVH_NOTE not in stripped:
-            current_group = stripped.lstrip("# ").strip()
+        header = stripped.lstrip("# ").strip()
+        if stripped.startswith("#") and header and ENVH_NOTE not in stripped and looks_like_header(header):
+            current_group = header
     used_groups = []
     for assignment in assignments:
         if assignment.group and assignment.group not in used_groups:
@@ -142,6 +142,13 @@ def parse_env_text(path: Path, text: str) -> ParsedFile:
             assignment.group = None
     groups = used_groups
     return ParsedFile(path=path, lines=lines, assignments=assignments, groups=groups)
+
+
+def looks_like_header(comment: str) -> bool:
+    """A comment can name a group of the variables below it. One holding a long token that is not a plain word, such as
+    a key or a URL with a password in it, is not taken for a name, so it is never printed or built into secret and
+    preset names."""
+    return not any(len(word) >= LONG_TOKEN and not word.isalpha() for word in re.split(r"[\s:=]+", comment))
 
 
 def parse_env_file(path: Path) -> ParsedFile:
@@ -289,8 +296,7 @@ def review_classification(files: list[ParsedFile], ask: Ask, say: Callable[[str]
             kind = "secret" if flags[(parsed.path, assignment.line_index)] else "config"
             state = "active" if assignment.active else "commented out"
             say(f"       {assignment.name:<32} {kind:<7} {state:<13} {fingerprint(assignment.value)}")
-        answer = ask("  Flip any of these between secret and config? [names separated by commas, or Enter]: ").strip()
-        for name in (token.strip() for token in answer.split(",") if token.strip()):
+        for name in comma_items(ask("  Flip any of these between secret and config? [names separated by commas, or Enter]: ")):
             matched = False
             for assignment in parsed.assignments:
                 if assignment.name == name:
@@ -341,37 +347,38 @@ def review_presets(presets: dict[str, dict[str, Any]], files: list[ParsedFile], 
         say(f"  {name}{marker}")
         for var, secret in preset["env"].items():
             say(f"      {var:<30} <- {secret}")
-    listed = list(presets)
-    drop_presets(presets, ask, say)
-    rename_presets(presets, ask, say)
-    if list(presets) != listed:
-        say(f"  presets now: {', '.join(presets) or '(none)'}")
-    return presets
+    kept = rename_presets(drop_presets(presets, ask, say), ask, say)
+    if list(kept) != list(presets):
+        say(f"  presets now: {', '.join(kept) or '(none)'}")
+    return kept
 
 
-def drop_presets(presets: dict[str, dict[str, Any]], ask: Ask, say: Callable[[str], None]) -> None:
+def comma_items(answer: str) -> list[str]:
+    """The distinct comma-separated items of an answer, in order."""
+    return list(dict.fromkeys(item.strip() for item in answer.split(",") if item.strip()))
+
+
+def drop_presets(presets: dict[str, dict[str, Any]], ask: Ask, say: Callable[[str], None]) -> dict[str, dict[str, Any]]:
     while True:
-        answer = ask("  Drop any preset? [names as listed above, separated by commas, or Enter to keep all]: ")
-        names = [token.strip() for token in answer.split(",") if token.strip()]
+        names = comma_items(ask("  Drop any preset? [names as listed above, separated by commas, or Enter to keep all]: "))
         unknown = [name for name in names if name not in presets]
         if not unknown:
-            for name in names:
-                del presets[name]
-            return
+            return {name: preset for name, preset in presets.items() if name not in names}
         say(f"  no preset named {', '.join(unknown)}; use the names listed above")
 
 
-def rename_presets(presets: dict[str, dict[str, Any]], ask: Ask, say: Callable[[str], None]) -> None:
+def rename_presets(presets: dict[str, dict[str, Any]], ask: Ask, say: Callable[[str], None]) -> dict[str, dict[str, Any]]:
     while True:
-        answer = ask("  Rename any preset? [listed-name=new-name, separated by commas, or Enter]: ")
         renames: dict[str, str] = {}
         problems: list[str] = []
-        for token in (token.strip() for token in answer.split(",") if token.strip()):
+        for token in comma_items(ask("  Rename any preset? [listed-name=new-name, separated by commas, or Enter]: ")):
             old, separator, new = (part.strip() for part in token.partition("="))
             if not separator:
                 problems.append(f"{token}: write it as listed-name=new-name")
             elif old not in presets:
                 problems.append(f"no preset named {old}; use the names listed above")
+            elif old in renames:
+                problems.append(f"{old} is renamed twice; give it one new name")
             elif not PRESET_NAME.match(new):
                 problems.append(f"{new}: preset names use lowercase letters, digits, and . _ -")
             elif new in presets or new in renames.values():
@@ -379,10 +386,7 @@ def rename_presets(presets: dict[str, dict[str, Any]], ask: Ask, say: Callable[[
             else:
                 renames[old] = new
         if not problems:
-            renamed = {renames.get(name, name): preset for name, preset in presets.items()}
-            presets.clear()
-            presets.update(renamed)
-            return
+            return {renames.get(name, name): preset for name, preset in presets.items()}
         for problem in problems:
             say(f"  {problem}")
 

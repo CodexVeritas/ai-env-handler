@@ -11,14 +11,13 @@ from typing import Any
 
 import yaml
 
+from envh.common import PRESET_NAME, SECRET_NAME
 from envh.core.durations import MAX_SESSION, DurationError, format_duration, parse_duration
 
 CONFIG_FILE = "config.yaml"
 PRESETS_FILE = "presets.yaml"
 APPROVALS = ("session", "per-run")
-SECRET_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-PRESET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 CONFIG_TEMPLATE = """# envh policy. Secrets not listed here get the defaults.
 users: [{user}]          # login names allowed to talk to the broker; sessions belong to the user who opened them
@@ -90,6 +89,9 @@ class Config:
         if preset_var.approval is None:
             return policy
         return SecretPolicy(name=policy.name, approval=preset_var.approval, max_session=policy.max_session)
+
+    def presets_using(self, secret: str) -> list[str]:
+        return sorted(preset.name for preset in self.presets.values() if any(entry.secret == secret for entry in preset.env.values()))
 
 
 def _load_yaml(text: str, where: str) -> Any:
@@ -182,10 +184,16 @@ def renamed_in_config(text: str, old: str, new: str) -> str:
     """config.yaml with the policy of secret old moved to new. Only text outside comments changes, so the user's layout
     and comments stay; refuses when the result would not parse to the same policies under the new name."""
     token = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])")
+
+    def replacement(match: re.Match[str]) -> str:
+        """The new name, quoted where YAML would otherwise read it as something else (NO, ON and NULL are booleans and null)."""
+        already_quoted = match.start() > 0 and match.string[match.start() - 1] in "'\""
+        return new if already_quoted or yaml.safe_load(new) == new else f"'{new}'"
+
     renamed_lines = []
     for line in text.splitlines(keepends=True):
         code, hash_mark, comment = line.partition("#")
-        renamed_lines.append(token.sub(new, code) + hash_mark + comment)
+        renamed_lines.append(token.sub(replacement, code) + hash_mark + comment)
     renamed = "".join(renamed_lines)
     defaults, policies, users, _ = parse_config(text)
     if new in policies:
@@ -258,9 +266,12 @@ def load_config(data_dir: Path, known_secrets: set[str] | None) -> Config:
     presets_path = data_dir / PRESETS_FILE
     if not config_path.exists():
         raise ConfigError(f"{config_path} does not exist; run `envh init`")
-    config_text = config_path.read_text()
-    defaults, policies, users, allowed_uids = parse_config_for_broker(config_text)
     presets_text = presets_path.read_text() if presets_path.exists() else PRESETS_TEMPLATE
+    return config_from_text(config_path.read_text(), presets_text, known_secrets)
+
+
+def config_from_text(config_text: str, presets_text: str, known_secrets: set[str] | None) -> Config:
+    defaults, policies, users, allowed_uids = parse_config_for_broker(config_text)
     presets, raw = parse_presets(presets_text, known_secrets)
     return Config(
         defaults=defaults,

@@ -189,9 +189,14 @@ class StateTable:
         return session
 
     def rename_secret(self, old: str, new: str) -> None:
-        """Point live sessions and waiting requests at a secret's new name; the value they grant does not change."""
-        for holder in [*self.live_sessions(), *self.pending()]:
+        """Point live sessions and every request at a secret's new name; the value they grant does not change. Decided
+        requests are included because an approved run reads its request's mapping when it starts, which can be later."""
+        for holder in [*self.live_sessions(), *self.requests.values()]:
             holder.mapping = {var: new if secret == old else secret for var, secret in holder.mapping.items()}
+
+    def names_in_use(self) -> set[str]:
+        """The secret names that live sessions and waiting requests point at."""
+        return {secret for holder in [*self.live_sessions(), *self.pending()] for secret in holder.mapping.values()}
 
     def live_sessions(self) -> list[Session]:
         now = self.now()

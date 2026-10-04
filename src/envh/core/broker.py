@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import difflib
-import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +19,7 @@ from envh.core.config import (
     ConfigError,
     Preset,
     SecretPolicy,
+    config_from_text,
     dump_presets,
     load_config,
     parse_presets,
@@ -27,7 +27,7 @@ from envh.core.config import (
 )
 from envh.core.durations import MAX_SESSION, format_duration
 from envh.core.state import Provenance, Request, Session, StateTable
-from envh.core.vault import Vault, stage_private_file, write_private_file
+from envh.core.vault import Vault, move_into_place, stage_private_file, write_private_file
 
 
 class RequestError(ValueError):
@@ -47,6 +47,11 @@ def renamed_presets(presets: dict[str, Any], final_names: dict[str, str]) -> dic
             elif isinstance(entry, dict) and isinstance(entry.get("secret"), str):
                 entry["secret"] = final_names.get(entry["secret"], entry["secret"])
     return renamed
+
+
+def require_secret_name(name: str) -> None:
+    if not SECRET_NAME.match(name):
+        raise RequestError(f"{name!r} is not a valid secret name (UPPER_CASE)")
 
 
 def first_free_name(base: str, unavailable: set[str]) -> str:
@@ -125,8 +130,7 @@ class Broker:
             secret = secret or var
             if not VAR_NAME.match(var):
                 raise RequestError(f"{var!r} is not a valid environment variable name")
-            if not SECRET_NAME.match(secret):
-                raise RequestError(f"{secret!r} is not a valid secret name (UPPER_CASE)")
+            require_secret_name(secret)
             if secret not in self.vault:
                 raise RequestError(f"secret {secret} is not in the vault; see `envh list`")
             mapping[var] = secret
@@ -276,8 +280,7 @@ class Broker:
         if not secrets and not presets:
             raise RequestError("nothing to import")
         for name, value in secrets.items():
-            if not SECRET_NAME.match(name):
-                raise RequestError(f"{name!r} is not a valid secret name (UPPER_CASE)")
+            require_secret_name(name)
             if not isinstance(value, str) or not value:
                 raise RequestError(f"secret {name} has an empty value")
         resolution = self.import_resolution(secrets, presets)
@@ -331,14 +334,20 @@ class Broker:
             "additions": renamed_presets(presets, final_names),
         }
 
-    def confirm_import_resolution(self, request: Request) -> None:
-        """Refuses an import whose names would now differ from what the approver saw, for example after a console `add`."""
+    def refresh_import(self, request: Request) -> bool:
+        """Recompute where an import's secrets go against the current vault; True when anything changed."""
         sent = request.summary["sent"]
         current = self.import_resolution(sent["secrets"], sent["presets"])
-        if any(request.summary[key] != value for key, value in current.items()):
-            request.summary.update(current)
-            request.summary["merged"] = self.merged_presets(current["additions"])
-            request.summary["diff"] = self.presets_diff(request.summary["merged"])
+        if all(request.summary[key] == value for key, value in current.items()):
+            return False
+        request.summary.update(current)
+        request.summary["merged"] = self.merged_presets(current["additions"])
+        request.summary["diff"] = self.presets_diff(request.summary["merged"])
+        return True
+
+    def confirm_import_resolution(self, request: Request) -> None:
+        """Refuses an import whose names would now differ from what the approver saw, for example after a console `add`."""
+        if self.refresh_import(request):
             self._show(request)
             raise RequestError(f"the vault changed since request #{request.id} was shown; it is shown again with the current names, type the passphrase again to approve that")
 
@@ -379,40 +388,64 @@ class Broker:
         self.state.decide(request, approved=False, by=by)
         self.audit.event("decision", id=request.id, outcome="denied", by=by)
 
-    def rename_secret(self, old: str, new: str) -> None:
-        """Rename a stored secret everywhere envh refers to it: the vault, its policy in config.yaml, presets, live
-        sessions and waiting requests.
+    def check_rename(self, old: str, new: str) -> tuple[str | None, str | None, Config]:
+        """Check that old can be renamed to new, changing nothing. Returns the new config.yaml and presets.yaml texts
+        (None for a file that stays as it is) and the config they load as.
 
-        Every check runs and the new policy and preset files are written to disk before the vault is saved; they are
-        moved into place right after. A failed write therefore changes nothing, and the secret never sits under a name
-        its policy does not cover, which would quietly give it the default policy."""
+        A name that config.yaml still has a policy for, or that a live session or waiting request points at, is refused:
+        the secret would quietly take over that policy, or that session would get its value without an approval."""
         if old not in self.vault:
             raise RequestError(f"{old} is not in the vault")
-        if not SECRET_NAME.match(new):
-            raise RequestError(f"{new!r} is not a valid secret name (UPPER_CASE)")
+        require_secret_name(new)
         if new in self.vault:
             raise RequestError(f"{new} is already taken")
-        config_path = self.data_dir / CONFIG_FILE
-        presets_path = self.data_dir / PRESETS_FILE
-        renamed_config = renamed_in_config(config_path.read_text(), old, new) if old in self.config.secret_policies else None
+        if new in self.config.secret_policies:
+            raise RequestError(f"config.yaml still has a policy for {new}; remove it with `edit config` first")
+        if new in self.state.names_in_use():
+            raise RequestError(f"a live session or waiting request still uses the name {new}; end or answer it first")
+        config_text = (self.data_dir / CONFIG_FILE).read_text()
+        renamed_config = renamed_in_config(config_text, old, new) if old in self.config.secret_policies else None
         presets = renamed_presets(self.config.presets_raw, {old: new})
-        parse_presets(dump_presets(presets), (set(self.vault.names()) - {old}) | {new})
+        presets_text = dump_presets(presets)
+        config = config_from_text(renamed_config or config_text, presets_text, (set(self.vault.names()) - {old}) | {new})
+        before, after = self.config.policy_for(old), config.policy_for(new)
+        if (before.approval, before.max_session) != (after.approval, after.max_session):
+            raise RequestError(f"the policy for {old} would change; config.yaml differs from what the console loaded, so check it and run reload")
+        return renamed_config, presets_text if presets != self.config.presets_raw else None, config
+
+    def rename_secret(self, old: str, new: str) -> None:
+        """Rename a stored secret everywhere envh refers to it: the vault, its policy in config.yaml, presets, live
+        sessions and requests.
+
+        The new policy and preset files are written and the config they load as is built before the vault is saved, so a
+        failed check or write changes nothing. Only moving the written files into place and the audit line come after."""
+        renamed_config, presets_text, config = self.check_rename(old, new)
         staged: list[tuple[Path, Path]] = []
         try:
-            if renamed_config is not None:
-                staged.append((stage_private_file(config_path, renamed_config.encode()), config_path))
-            if presets != self.config.presets_raw:
-                staged.append((stage_private_file(presets_path, dump_presets(presets).encode()), presets_path))
+            for text, path in ((renamed_config, self.data_dir / CONFIG_FILE), (presets_text, self.data_dir / PRESETS_FILE)):
+                if text is not None:
+                    staged.append((stage_private_file(path, text.encode()), path))
             self.vault.rename(old, new)
         except BaseException:
             for temp_path, _ in staged:
                 temp_path.unlink(missing_ok=True)
             raise
-        for temp_path, path in staged:
-            os.replace(temp_path, path)
+        self.config = config
         self.state.rename_secret(old, new)
+        self._follow_rename_in_waiting_requests(old, new)
+        for temp_path, path in staged:
+            move_into_place(temp_path, path)
         self.audit.event("secret_renamed", old=old, new=new)
-        self.reload()
+
+    def _follow_rename_in_waiting_requests(self, old: str, new: str) -> None:
+        """Update the secret names that waiting preset proposals and imports carry in their summaries."""
+        for request in self.state.pending():
+            if request.kind == "preset":
+                request.summary["additions"] = renamed_presets(request.summary["additions"], {old: new})
+                request.summary["merged"] = self.merged_presets(request.summary["additions"])
+                request.summary["diff"] = self.presets_diff(request.summary["merged"])
+            elif request.kind == "import":
+                self.refresh_import(request)
 
     def write_presets(self, merged: dict[str, Any]) -> None:
         write_private_file(self.data_dir / PRESETS_FILE, dump_presets(merged).encode())

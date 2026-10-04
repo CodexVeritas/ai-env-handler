@@ -35,7 +35,7 @@ def decrypt_secrets(blob: bytes, passphrase: str) -> dict[str, str]:
 
 
 def stage_private_file(path: Path, data: bytes) -> Path:
-    """Write data to a mode-0600 file next to path, synced to disk, and return it for a later os.replace onto path."""
+    """Write data to a mode-0600 file next to path, synced to disk, and return it for move_into_place."""
     temp_path = path.with_name(path.name + ".tmp")
     temp_path.unlink(missing_ok=True)
     descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -50,8 +50,16 @@ def stage_private_file(path: Path, data: bytes) -> Path:
     return temp_path
 
 
+def move_into_place(temp_path: Path, path: Path) -> None:
+    try:
+        os.replace(temp_path, path)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
 def write_private_file(path: Path, data: bytes) -> None:
-    os.replace(stage_private_file(path, data), path)
+    move_into_place(stage_private_file(path, data), path)
 
 
 class Vault:

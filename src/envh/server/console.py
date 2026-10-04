@@ -11,22 +11,27 @@ import shutil
 import subprocess
 import termios
 import traceback
+import tty
+from collections import deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
 from envh.common import fingerprint, printable, reminder_delays
-from envh.core.broker import Broker, RequestError
-from envh.core.config import CONFIG_FILE, PRESETS_FILE, SECRET_NAME, ConfigError, parse_config_for_broker, parse_presets
+from envh.core.broker import Broker, RequestError, require_secret_name
+from envh.core.config import CONFIG_FILE, PRESETS_FILE, ConfigError, parse_config_for_broker, parse_presets
 from envh.core.durations import format_duration
-from envh.core.state import Request, StateError
+from envh.core.state import Request
 from envh.core.vault import MIN_PASSPHRASE_LENGTH, VaultError, write_private_file
-from envh.server.keys_view import ENTER_FULL_SCREEN, LEAVE_FULL_SCREEN, CheckPassphrase, KeyList, KeyRow, Leave, Rename, render_keys, split_keys
+from envh.server.control import HandledErrors
+from envh.server.keys_view import ENTER_FULL_SCREEN, LEAVE_FULL_SCREEN, CheckPassphrase, KeyList, KeyRow, Leave, Rename, incomplete_sequence, key_spans, render_keys
 
 BELL = "\a"
 WRONG_PASSPHRASE_PAUSE_SECONDS = 2
 KEYS_REFRESH_SECONDS = 0.5
+ESCAPE_WAIT_SECONDS = 0.05
+HELD_LINES_KEPT = 200
 HELP = """A request shows up on its own; type the vault passphrase to approve it, or n to deny it.
 commands:
   keys              see your keys; arrows move, F2 renames
@@ -110,29 +115,38 @@ def render_request(request: Request, now: datetime) -> list[str]:
 
 class ConsoleOutput:
     """The console's terminal output. While a full-screen view is open, lines are held and printed when it closes, so
-    audit events neither break the view nor get lost."""
+    audit events neither break the view nor get lost. Only the newest HELD_LINES_KEPT are kept, since any local user can
+    add audit lines by connecting to the socket."""
 
     def __init__(self, say: Callable[[str], None], write: Callable[[str], None]) -> None:
         self._say = say
         self._write = write
-        self._held: list[str] | None = None
+        self._held: deque[str] | None = None
+        self._dropped = 0
 
     def say(self, text: str) -> None:
         if self._held is None:
             self._say(text)
-        else:
-            self._held.append(text)
+            return
+        if len(self._held) == self._held.maxlen:
+            self._dropped += 1
+        self._held.append(text)
 
     def draw(self, frame: str) -> None:
         self._write(frame)
 
     @contextmanager
     def holding(self) -> Iterator[None]:
-        self._held = []
+        if self._held is not None:
+            yield
+            return
+        self._held, self._dropped = deque(maxlen=HELD_LINES_KEPT), 0
         try:
             yield
         finally:
-            held, self._held = self._held, None
+            held, dropped, self._held = self._held, self._dropped, None
+            if dropped:
+                self._say(f"({dropped} earlier lines were not kept; every audit event is in audit.jsonl)")
             for text in held:
                 self._say(text)
 
@@ -158,6 +172,7 @@ class Console:
         self._busy = False
         self._queued: list[Request] = []
         self._reminders: set[asyncio.Task[None]] = set()
+        self._typeahead = b""
         broker.request_listeners.append(self.on_request)
 
     def on_request(self, request: Request) -> None:
@@ -222,7 +237,7 @@ class Console:
         self.say("console ready; requests appear here on their own. Type keys to see your keys, help for commands")
         try:
             while not self.quit_requested.is_set():
-                line = await self.reader.readline()
+                line = await self._next_line()
                 if not line:
                     self.say("console input closed; shutting down")
                     self.quit_requested.set()
@@ -230,7 +245,7 @@ class Console:
                 self._busy = True
                 try:
                     await self.handle_line(line.decode(errors="replace"))
-                except (RequestError, StateError, ConfigError, VaultError) as error:
+                except HandledErrors as error:
                     self.say(f"error: {error}")
                 except Exception:
                     self.say("unexpected error in the console (the broker keeps running):")
@@ -240,6 +255,14 @@ class Console:
                     self._advance()
         finally:
             self.set_echo(True)
+
+    async def _next_line(self) -> bytes:
+        """The next input line, starting with any keys typed after leaving a full-screen view in the same read."""
+        typeahead, self._typeahead = self._typeahead, b""
+        if b"\n" in typeahead:
+            line, _, self._typeahead = typeahead.partition(b"\n")
+            return line + b"\n"
+        return typeahead + await self.reader.readline()
 
     async def handle_line(self, text: str) -> None:
         if self._discard_next_line:
@@ -307,27 +330,25 @@ class Console:
             self.say(HELP)
 
     async def _keys(self) -> None:
-        view = KeyList(self._key_rows())
+        view = KeyList(self._key_rows(), self._rename_problem)
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        shown = {"frame": "", "waiting": 0}
+        last_frame, last_waiting = "", 0
 
         def draw() -> None:
+            nonlocal last_frame, last_waiting
             waiting = sum(1 for request in self._queued if request.pending)
             frame = render_keys(view, self.phrase, waiting, self._screen_size())
-            if frame != shown["frame"]:
-                self.output.draw(frame + (BELL if waiting > shown["waiting"] and self.broker.config.notify else ""))
-            shown.update(frame=frame, waiting=waiting)
+            if frame != last_frame:
+                self.output.draw(frame + (BELL if waiting > last_waiting and self.broker.config.notify else ""))
+            last_frame, last_waiting = frame, waiting
 
         with self.output.holding(), self._full_screen():
             while True:
                 draw()
-                try:
-                    data = await asyncio.wait_for(self.reader.read(4096), KEYS_REFRESH_SECONDS)
-                except asyncio.TimeoutError:
-                    continue
-                if not data:
+                text = await self._read_keys(decoder)
+                if text is None:
                     return
-                for key in split_keys(decoder.decode(data)):
+                for key, end in key_spans(text):
                     action = view.handle(key)
                     if isinstance(action, CheckPassphrase):
                         if self.broker.vault.matches_passphrase(action.typed):
@@ -341,54 +362,82 @@ class Console:
                         draw()
                         self._rename(view, action)
                     elif isinstance(action, Leave):
+                        self._typeahead = text[end:].replace("\r", "\n").encode()
                         return
+
+    async def _read_keys(self, decoder: codecs.IncrementalDecoder) -> str | None:
+        """Typed text: "" when nothing arrives within the refresh interval, None at end of input. An escape sequence
+        split across reads is waited for briefly, so its first byte is not taken for Esc."""
+        try:
+            data = await asyncio.wait_for(self.reader.read(4096), KEYS_REFRESH_SECONDS)
+        except asyncio.TimeoutError:
+            return ""
+        if not data:
+            return None
+        text = decoder.decode(data)
+        while incomplete_sequence(text):
+            try:
+                more = await asyncio.wait_for(self.reader.read(4096), ESCAPE_WAIT_SECONDS)
+            except asyncio.TimeoutError:
+                break
+            if not more:
+                break
+            text += decoder.decode(more)
+        return text
+
+    def _rename_problem(self, old: str, new: str) -> str | None:
+        try:
+            self.broker.check_rename(old, new)
+        except (*HandledErrors, OSError) as error:
+            return str(error)
+        return None
 
     def _rename(self, view: KeyList, rename: Rename) -> None:
         try:
             self.broker.rename_secret(rename.old, rename.new)
-        except (RequestError, ConfigError, VaultError, OSError) as error:
-            view.tell(f"Nothing renamed: {error}")
+        except (*HandledErrors, OSError) as error:
+            if rename.new in self.broker.vault:
+                view.renamed(self._key_rows(), rename.new)
+                view.tell(f"Renamed to {rename.new}, but: {error}")
+            else:
+                view.tell(f"Nothing renamed: {error}")
             return
         view.renamed(self._key_rows(), rename.new)
 
     def _key_rows(self) -> list[KeyRow]:
         config = self.broker.config
-        return [
-            KeyRow(
-                name=name,
-                used_by=tuple(sorted(preset.name for preset in config.presets.values() if any(entry.secret == name for entry in preset.env.values()))),
-                per_run=config.policy_for(name).approval == "per-run",
-            )
-            for name in self.broker.vault.names()
-        ]
+        return [KeyRow(name=name, used_by=tuple(config.presets_using(name)), per_run=config.policy_for(name).approval == "per-run") for name in self.broker.vault.names()]
 
     def _screen_size(self) -> os.terminal_size:
-        if self.tty_fd is not None:
-            try:
-                return os.get_terminal_size(self.tty_fd)
-            except OSError:
-                pass
+        """The terminal's size, or 80x24 when there is none: no terminal, or one never given a size (it reports 0x0)."""
+        if self.tty_fd is not None and os.isatty(self.tty_fd):
+            size = os.get_terminal_size(self.tty_fd)
+            if size.columns > 0 and size.lines > 0:
+                return size
         return os.terminal_size((80, 24))
 
     @contextmanager
     def _full_screen(self) -> Iterator[None]:
-        """Keys arrive as they are pressed, on the alternate screen, so the console's scrollback comes back unchanged.
-        Ctrl-C reaches the view as a key that leaves it, instead of stopping the broker."""
+        """Keys arrive one by one on the alternate screen, so the console's scrollback comes back unchanged. Ctrl-C arrives
+        as input rather than a signal, so it cannot stop the broker. Echo stays off on the way out; _advance turns it back
+        on unless a request is waiting for its passphrase."""
         saved = termios.tcgetattr(self.tty_fd) if self.tty_fd is not None else None
         if saved is not None:
             raw = list(saved)
-            raw[3] = raw[3] & ~(termios.ECHO | termios.ICANON | termios.ISIG)
-            raw[6] = list(saved[6])
-            raw[6][termios.VMIN] = 1
-            raw[6][termios.VTIME] = 0
+            tty.cfmakecbreak(raw)
+            raw[tty.LFLAG] &= ~termios.ISIG
             termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, raw)
-        self.output.draw(ENTER_FULL_SCREEN)
         try:
+            self.output.draw(ENTER_FULL_SCREEN)
             yield
         finally:
-            self.output.draw(LEAVE_FULL_SCREEN)
-            if saved is not None:
-                termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, saved)
+            try:
+                if saved is not None:
+                    quiet = list(saved)
+                    quiet[tty.LFLAG] &= ~termios.ECHO
+                    termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, quiet)
+            finally:
+                self.output.draw(LEAVE_FULL_SCREEN)
 
     def _show_presets(self) -> None:
         for preset in self.broker.list_payload()["presets"]:
@@ -399,8 +448,7 @@ class Console:
                 self.say(f"      {entry['var']:<28} <- {entry['secret']}{per_run}{note}")
 
     async def _add(self, name: str) -> None:
-        if not SECRET_NAME.match(name):
-            raise RequestError(f"{name!r} is not a valid secret name (UPPER_CASE)")
+        require_secret_name(name)
         if not await self.check_passphrase(f"add {name}"):
             return
         if name in self.broker.vault:
@@ -420,7 +468,7 @@ class Console:
     async def _remove(self, name: str) -> None:
         if name not in self.broker.vault:
             raise VaultError(f"secret {name} is not in the vault")
-        users = [preset.name for preset in self.broker.config.presets.values() if any(entry.secret == name for entry in preset.env.values())]
+        users = self.broker.config.presets_using(name)
         if users:
             raise RequestError(f"{name} is used by presets {', '.join(users)}; change or remove them first (edit presets, preset rm NAME), since presets naming a missing secret stop the broker from starting")
         if not await self.check_passphrase(f"rm {name}"):

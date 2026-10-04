@@ -7,6 +7,8 @@ import re
 from collections.abc import Iterator
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+SECRET_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+PRESET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 REMINDER_GAPS_SECONDS = (30, 30, 60, 180)
 REMINDER_REPEAT_SECONDS = 300
 

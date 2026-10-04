@@ -174,3 +174,10 @@ def test_notify_defaults_to_on_and_takes_only_true_or_false(tmp_path: Path) -> N
         parse_config(f"users: [{user}]\nnotify: sometimes\n")
     (tmp_path / "config.yaml").write_text(f"users: [{user}]\nnotify: false\n")
     assert load_config(tmp_path, set()).notify is False
+
+
+@pytest.mark.parametrize("new", ["NO", "YES", "ON", "OFF", "TRUE", "FALSE", "NULL"])
+def test_renamed_in_config_quotes_a_name_yaml_would_read_as_a_boolean_or_null(new: str) -> None:
+    text = f"users: [{getpass.getuser()}]\nsecrets:\n  OLD_KEY: {{ approval: per-run }}\n"
+    _, policies, _, _ = parse_config(renamed_in_config(text, "OLD_KEY", new))
+    assert policies[new].approval == "per-run"
