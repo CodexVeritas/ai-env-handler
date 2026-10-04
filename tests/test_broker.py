@@ -24,18 +24,18 @@ def test_mapping_from_with(harness: Harness) -> None:
 
 def test_preset_mapping_and_caps(harness: Harness) -> None:
     broker = harness.broker
-    mapping, preset = broker.mapping_from_preset("team")
+    mapping, presets = broker.mapping_from_presets(["team"], [])
     assert mapping == {"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY", "OPENAI_API_KEY": "OPENAI_API_KEY"}
-    assert broker.session_cap(mapping, preset) == timedelta(hours=1)
-    assert broker.session_cap({"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY"}, preset) == timedelta(hours=2)
+    assert broker.session_cap(mapping, presets) == timedelta(hours=1)
+    assert broker.session_cap({"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY"}, presets) == timedelta(hours=2)
     with pytest.raises(RequestError, match="unknown preset"):
-        broker.mapping_from_preset("nope")
+        broker.mapping_from_presets(["nope"], [])
 
 
 async def test_session_request_excludes_per_run(harness: Harness) -> None:
     broker = harness.broker
-    mapping, preset = broker.mapping_from_preset("dbwork")
-    request = broker.request_session(mapping, preset, 600, "work", (), harness.provenance())
+    mapping, presets = broker.mapping_from_presets(["dbwork"], [])
+    request = broker.request_session(mapping, presets, 600, "work", (), harness.provenance())
     assert request.mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
     assert request.summary["excluded_per_run"] == ["DATABASE_URL"]
     assert request.granted == timedelta(hours=1)
@@ -43,15 +43,15 @@ async def test_session_request_excludes_per_run(harness: Harness) -> None:
     session = broker.state.session(request.result["session_id"])
     assert session.mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
     with pytest.raises(RequestError, match="every requested secret is per-run"):
-        broker.request_session({"DATABASE_URL": "DATABASE_URL"}, preset, 10, None, (), harness.provenance())
+        broker.request_session({"DATABASE_URL": "DATABASE_URL"}, presets, 10, None, (), harness.provenance())
     with pytest.raises(RequestError, match="positive"):
-        broker.request_session(mapping, preset, 0, None, (), harness.provenance())
+        broker.request_session(mapping, presets, 0, None, (), harness.provenance())
 
 
 async def test_run_in_session_resolution(harness: Harness) -> None:
     broker = harness.broker
-    mapping, preset = broker.mapping_from_preset("team")
-    request = broker.request_session(mapping, preset, 30, None, (), harness.provenance())
+    mapping, presets = broker.mapping_from_presets(["team"], [])
+    request = broker.request_session(mapping, presets, 30, None, (), harness.provenance())
     broker.approve(request)
     session_id = request.result["session_id"]
     uid = harness.provenance().uid
@@ -187,8 +187,8 @@ async def test_import_skips_numbers_that_are_taken(harness: Harness) -> None:
 
 async def test_session_runs_refuse_secrets_that_became_per_run(harness: Harness) -> None:
     broker = harness.broker
-    mapping, preset = broker.mapping_from_preset("team")
-    request = broker.request_session(mapping, preset, 30, None, (), harness.provenance())
+    mapping, presets = broker.mapping_from_presets(["team"], [])
+    request = broker.request_session(mapping, presets, 30, None, (), harness.provenance())
     broker.approve(request)
     session_id = request.result["session_id"]
     uid = harness.provenance().uid
@@ -199,3 +199,34 @@ async def test_session_runs_refuse_secrets_that_became_per_run(harness: Harness)
         broker.resolve_run_in_session(session_id, [], uid)
     _, resolved = broker.resolve_run_in_session(session_id, ["OPENROUTER_API_KEY"], uid)
     assert resolved == {"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY"}
+
+
+async def test_combined_presets_merge_variables_under_the_strictest_policy(harness: Harness) -> None:
+    broker = harness.broker
+    broker.write_presets({**broker.config.presets_raw, "ops": {"max_session": "30m", "env": {"DATABASE_URL": "DATABASE_URL", "OPENAI_API_KEY": "OPENAI_API_KEY"}}})
+    mapping, presets = broker.mapping_from_presets(["team", "dbwork", "team"], [])
+    assert [preset.name for preset in presets] == ["team", "dbwork"]
+    assert mapping == {"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY", "OPENAI_API_KEY": "OPENAI_API_KEY", "DATABASE_URL": "DATABASE_URL"}
+    ops_only = broker.mapping_from_presets(["ops"], [])[1]
+    assert broker.split_per_run({"DATABASE_URL": "DATABASE_URL"}, ops_only) == ({"DATABASE_URL": "DATABASE_URL"}, {})
+    mapping, presets = broker.mapping_from_presets(["ops", "dbwork"], [])
+    request = broker.request_session(mapping, presets, 600, "mixed", (), harness.provenance())
+    assert request.presets == ("ops", "dbwork")
+    assert request.mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
+    assert request.summary["excluded_per_run"] == ["DATABASE_URL"]
+    assert request.granted == timedelta(minutes=30)
+    broker.approve(request)
+    assert broker.state.session(request.result["session_id"]).presets == ("ops", "dbwork")
+
+
+def test_combined_presets_refuse_a_variable_mapped_to_two_secrets(harness: Harness) -> None:
+    broker = harness.broker
+    broker.write_presets({**broker.config.presets_raw, "other": {"env": {"OPENROUTER_API_KEY": "OPENAI_API_KEY", "OPENAI_API_KEY": "OPENAI_API_KEY"}}})
+    with pytest.raises(RequestError, match="OPENROUTER_API_KEY is TEAM_OPENROUTER_KEY in team and OPENAI_API_KEY in other; leave one"):
+        broker.mapping_from_presets(["team", "other"], [])
+    assert broker.mapping_from_presets(["team", "other"], ["OPENAI_API_KEY"])[0] == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
+    assert broker.mapping_from_presets(["team", "other"], ["OPENROUTER_API_KEY=OPENAI_API_KEY"])[0] == {"OPENROUTER_API_KEY": "OPENAI_API_KEY"}
+    with pytest.raises(RequestError, match="maps to TEAM_OPENROUTER_KEY or OPENAI_API_KEY in presets team, other, not DATABASE_URL"):
+        broker.mapping_from_presets(["team", "other"], ["OPENROUTER_API_KEY=DATABASE_URL"])
+    with pytest.raises(RequestError, match="not in presets team, other: DATABASE_URL"):
+        broker.mapping_from_presets(["team", "other"], ["DATABASE_URL"])

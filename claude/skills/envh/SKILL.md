@@ -18,12 +18,13 @@ Secrets are not in `.env` files and not in your environment. A human approves ev
    envh run --preset <preset> --reason "weekly report: fetch forecasts" -- uv run python scripts/research.py
    ```
    No preset fits? Name the variables: `envh run --with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY --reason "..." -- <command>`.
+   Need variables from two presets? Combine them: `--preset news-bot,forecasting-bot`. If envh says they map a variable to different secrets, leave one preset out or pick with `--with VAR=SECRET`.
    If the call times out before approval, the request is withdrawn; run the same command again.
 3. **Several commands for one task: start a session** so the human approves once. Start the smallest session that covers the work, with a clear reason. This blocks until the human approves, so give the tool call a long timeout (10 minutes):
    ```bash
    envh session start <preset> --minutes 60 --reason "weekly report: fetch forecasts and draft the summary"
    ```
-   `--with` works here too: `envh session start --with OPENAI_API_KEY --minutes 30 --reason "..."`.
+   `--with` and several presets work here too: `envh session start --with OPENAI_API_KEY --minutes 30 --reason "..."`, or `envh session start news-bot forecasting-bot --minutes 60 --reason "..."`.
    If the call times out before approval, resume with `envh session wait <request_id>` (the id is printed). Do not start a second session for the same work.
    Then run commands inside the session. Each run is approved instantly, logged, and gets only the variables you name:
    ```bash

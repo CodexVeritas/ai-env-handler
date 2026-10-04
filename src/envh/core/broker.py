@@ -53,6 +53,10 @@ def first_free_name(base: str, unavailable: set[str]) -> str:
     return candidate
 
 
+def presets_label(presets: list[Preset]) -> str:
+    return ("preset " if len(presets) == 1 else "presets ") + ", ".join(preset.name for preset in presets)
+
+
 class Broker:
     def __init__(self, data_dir: Path, config: Config, vault: Vault, state: StateTable, audit: Audit) -> None:
         self.data_dir = data_dir
@@ -69,7 +73,7 @@ class Broker:
             kind=request.kind,
             pid=request.provenance.pid,
             reason=request.reason or "(no reason given)",
-            preset=request.preset,
+            presets=list(request.presets),
             vars=sorted(request.mapping),
         )
         self._show(request)
@@ -78,12 +82,36 @@ class Broker:
         for listener in self.request_listeners:
             listener(request)
 
-    def mapping_from_preset(self, name: str) -> tuple[dict[str, str], Preset]:
+    def preset_named(self, name: str) -> Preset:
         preset = self.config.presets.get(name)
         if preset is None:
             known = ", ".join(sorted(self.config.presets)) or "(none)"
             raise RequestError(f"unknown preset {name!r}; known presets: {known}")
-        return {var: entry.secret for var, entry in preset.env.items()}, preset
+        return preset
+
+    def mapping_from_presets(self, names: list[str], items: list[str]) -> tuple[dict[str, str], list[Preset]]:
+        """The variables of all named presets together, narrowed to items (VAR or VAR=SECRET) when any are given.
+        A variable the presets map to different secrets is refused unless an item picks one, since a run can hold only one value."""
+        presets = [self.preset_named(name) for name in dict.fromkeys(names)]
+        label = presets_label(presets)
+        choices: dict[str, dict[str, str]] = {}
+        for preset in presets:
+            for var, entry in preset.env.items():
+                choices.setdefault(var, {}).setdefault(entry.secret, preset.name)
+        wanted = {var: secret for var, _, secret in (item.partition("=") for item in items)} or dict.fromkeys(choices, "")
+        missing = sorted(set(wanted) - set(choices))
+        if missing:
+            raise RequestError(f"not in {label}: {', '.join(missing)}")
+        mapping: dict[str, str] = {}
+        for var, secret in wanted.items():
+            options = choices[var]
+            if secret and secret not in options:
+                raise RequestError(f"{var} maps to {' or '.join(options)} in {label}, not {secret}; drop the =SECRET part or request it without a preset")
+            if not secret and len(options) > 1:
+                sources = " and ".join(f"{option} in {source}" for option, source in options.items())
+                raise RequestError(f"{var} is {sources}; leave one of those presets out, or choose with --with {var}=SECRET plus the other variables you need")
+            mapping[var] = secret or next(iter(options))
+        return mapping, presets
 
     def mapping_from_with(self, items: list[str]) -> dict[str, str]:
         if not items:
@@ -101,27 +129,29 @@ class Broker:
             mapping[var] = secret
         return mapping
 
-    def policy_for_var(self, var: str, secret: str, preset: Preset | None) -> SecretPolicy:
-        if preset is not None and var in preset.env and preset.env[var].secret == secret:
-            return self.config.effective_policy(preset.env[var])
-        return self.config.policy_for(secret)
+    def policy_for_var(self, var: str, secret: str, presets: list[Preset]) -> SecretPolicy:
+        """When several presets supply the variable, per-run wins over session."""
+        policies = [self.config.effective_policy(preset.env[var]) for preset in presets if var in preset.env and preset.env[var].secret == secret]
+        per_run = [policy for policy in policies if policy.approval == "per-run"]
+        return (per_run or policies or [self.config.policy_for(secret)])[0]
 
-    def split_per_run(self, mapping: dict[str, str], preset: Preset | None) -> tuple[dict[str, str], dict[str, str]]:
+    def split_per_run(self, mapping: dict[str, str], presets: list[Preset]) -> tuple[dict[str, str], dict[str, str]]:
         sessionable: dict[str, str] = {}
         per_run: dict[str, str] = {}
         for var, secret in mapping.items():
-            if self.policy_for_var(var, secret, preset).approval == "per-run":
+            if self.policy_for_var(var, secret, presets).approval == "per-run":
                 per_run[var] = secret
             else:
                 sessionable[var] = secret
         return sessionable, per_run
 
-    def session_cap(self, mapping: dict[str, str], preset: Preset | None) -> timedelta:
+    def session_cap(self, mapping: dict[str, str], presets: list[Preset]) -> timedelta:
         cap = MAX_SESSION
-        if preset is not None and preset.max_session is not None:
-            cap = min(cap, preset.max_session)
+        for preset in presets:
+            if preset.max_session is not None:
+                cap = min(cap, preset.max_session)
         for var, secret in mapping.items():
-            cap = min(cap, self.policy_for_var(var, secret, preset).max_session)
+            cap = min(cap, self.policy_for_var(var, secret, presets).max_session)
         return cap
 
     def env_for(self, mapping: dict[str, str]) -> dict[str, str]:
@@ -130,7 +160,7 @@ class Broker:
     def request_session(
         self,
         mapping: dict[str, str],
-        preset: Preset | None,
+        presets: list[Preset],
         minutes: int,
         reason: str | None,
         command: tuple[str, ...],
@@ -138,18 +168,18 @@ class Broker:
     ) -> Request:
         if minutes <= 0:
             raise RequestError("--minutes must be a positive number")
-        sessionable, per_run = self.split_per_run(mapping, preset)
+        sessionable, per_run = self.split_per_run(mapping, presets)
         if not sessionable:
             raise RequestError("every requested secret is per-run; run without a session instead")
         requested = timedelta(minutes=minutes)
-        granted = min(requested, self.session_cap(sessionable, preset))
+        granted = min(requested, self.session_cap(sessionable, presets))
         request = self.state.new_request(
             kind="session",
             mapping=sessionable,
             provenance=provenance,
             reason=reason,
             command=command,
-            preset=preset.name if preset else None,
+            presets=tuple(preset.name for preset in presets),
             requested=requested,
             granted=granted,
             summary={"excluded_per_run": sorted(per_run)},
@@ -173,8 +203,8 @@ class Broker:
             if secret and secret != session.mapping[var]:
                 raise RequestError(f"{var} maps to {session.mapping[var]} in session {session_id[:8]}, not {secret}")
             mapping[var] = session.mapping[var]
-        preset = self.config.presets.get(session.preset) if session.preset else None
-        _, per_run = self.split_per_run(mapping, preset)
+        presets = [self.config.presets[name] for name in session.presets if name in self.config.presets]
+        _, per_run = self.split_per_run(mapping, presets)
         if per_run:
             raise RequestError(f"approval is now per-run for {', '.join(sorted(per_run))}; run without --session")
         return session, mapping
@@ -182,7 +212,7 @@ class Broker:
     def request_run(
         self,
         mapping: dict[str, str],
-        preset: Preset | None,
+        presets: list[Preset],
         reason: str | None,
         command: tuple[str, ...],
         provenance: Provenance,
@@ -193,7 +223,7 @@ class Broker:
             provenance=provenance,
             reason=reason,
             command=command,
-            preset=preset.name if preset else None,
+            presets=tuple(preset.name for preset in presets),
         )
         self._announce(request)
         return request
@@ -327,7 +357,7 @@ class Broker:
         if request.kind == "session":
             session = self.state.create_session(request)
             request.result = {"session_id": session.id, "expires_at": session.expires_at.isoformat(timespec="seconds")}
-            self.audit.event("session_start", session=session.id, preset=session.preset, vars=sorted(session.mapping), expires=request.result["expires_at"], pid=request.provenance.pid)
+            self.audit.event("session_start", session=session.id, presets=list(session.presets), vars=sorted(session.mapping), expires=request.result["expires_at"], pid=request.provenance.pid)
         elif request.kind == "preset":
             self.write_presets(self.merged_for_approval(request, set(self.vault.names())))
             self.audit.event("presets_updated", presets=request.summary["presets"], by=by)
@@ -372,14 +402,14 @@ class Broker:
             for var, entry in preset.env.items():
                 env.append({"var": var, "secret": entry.secret, "approval": self.config.effective_policy(entry).approval, "in_vault": entry.secret in self.vault})
             mapping = {var: entry.secret for var, entry in preset.env.items()}
-            presets.append({"name": preset.name, "max_session": format_duration(self.session_cap(mapping, preset)), "env": env})
+            presets.append({"name": preset.name, "max_session": format_duration(self.session_cap(mapping, [preset])), "env": env})
         sessions = [session for session in self.state.live_sessions() if for_uid is None or session.provenance.uid == for_uid]
         return {"secrets": secrets, "presets": presets, "sessions": [self.session_payload(session) for session in sessions]}
 
     def session_payload(self, session: Session) -> dict[str, Any]:
         return {
             "id": session.id,
-            "preset": session.preset,
+            "presets": list(session.presets),
             "vars": sorted(session.mapping),
             "expires_at": session.expires_at.isoformat(timespec="seconds"),
             "reason": session.reason,
