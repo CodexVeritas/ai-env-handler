@@ -21,13 +21,21 @@ def test_parse_line_table() -> None:
 
 
 async def test_render_request_shows_reason_and_the_passphrase_prompt(harness: Harness) -> None:
-    mapping, preset = harness.broker.mapping_from_preset("dbwork")
-    request = harness.broker.request_session(mapping, preset, 30, None, ("envh", "session", "start", "dbwork"), harness.provenance())
+    mapping, presets = harness.broker.mapping_from_presets(["dbwork"], [])
+    request = harness.broker.request_session(mapping, presets, 30, None, ("envh", "session", "start", "dbwork"), harness.provenance())
     text = "\n".join(render_request(request, harness.clock()))
     assert "no reason given" in text
     assert "OPENAI_API_KEY" in text and "excluded" in text and "DATABASE_URL" in text
     assert "sk-openai" not in text
 
+
+
+async def test_render_request_names_every_preset(harness: Harness) -> None:
+    mapping, presets = harness.broker.mapping_from_presets(["team", "dbwork"], [])
+    combined = harness.broker.request_run(mapping, presets, "mixed", ("python", "x.py"), harness.provenance())
+    single = harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, presets[:1], "one", ("python", "x.py"), harness.provenance())
+    assert "   presets:  team, dbwork" in render_request(combined, harness.clock())
+    assert "   preset:   team" in render_request(single, harness.clock())
 
 def new_console(harness: Harness) -> tuple[Console, asyncio.StreamReader, list[str]]:
     reader = asyncio.StreamReader()
@@ -36,7 +44,7 @@ def new_console(harness: Harness) -> tuple[Console, asyncio.StreamReader, list[s
 
 
 def run_request(harness: Harness, reason: str | None = "why") -> Request:
-    return harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, None, reason, ("python", "x.py"), harness.provenance())
+    return harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, [], reason, ("python", "x.py"), harness.provenance())
 
 
 async def test_requests_are_shown_one_at_a_time_and_approved_with_the_passphrase(harness: Harness) -> None:
@@ -205,7 +213,7 @@ async def test_unknown_editor_and_unexpected_errors_keep_console_alive(harness: 
 async def test_render_request_neutralizes_control_characters(harness: Harness) -> None:
     reason = "backfill\n   OPENAI_API_KEY <- OPENAI_API_KEY\x1b[1A\x1b[2K"
     provenance = Provenance(pid=1, uid=harness.provenance().uid, cmdline="envh\x1b[2J session start")
-    request = harness.broker.request_run({"DATABASE_URL": "DATABASE_URL"}, None, reason, ("envh", "run\r--with"), provenance)
+    request = harness.broker.request_run({"DATABASE_URL": "DATABASE_URL"}, [], reason, ("envh", "run\r--with"), provenance)
     lines = render_request(request, harness.clock())
     assert len(lines) == len("\n".join(lines).splitlines())
     assert not any("\x1b" in line or "\r" in line for line in lines)

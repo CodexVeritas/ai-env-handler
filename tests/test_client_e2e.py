@@ -49,6 +49,21 @@ async def test_session_start_then_run_and_end(control: Path, harness: Harness) -
     assert code == 0 and "team" in out and "sk-openai" not in out
 
 
+
+async def test_presets_combine_on_the_command_line(control: Path, harness: Harness) -> None:
+    show = "import os; print(sorted(k for k in os.environ if k in {'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'DATABASE_URL'}))"
+    task = asyncio.create_task(run_cli(control, "run", "--preset", "team,dbwork", "--", sys.executable, "-c", show))
+    await approve_next(harness)
+    code, out, err = await asyncio.wait_for(task, timeout=20)
+    assert code == 0, err
+    assert out.strip() == "['DATABASE_URL', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY']"
+    task = asyncio.create_task(run_cli(control, "session", "start", "team", "dbwork", "--minutes", "30", "--quiet"))
+    await approve_next(harness)
+    code, out, err = await asyncio.wait_for(task, timeout=20)
+    assert code == 0 and "not covered by sessions: DATABASE_URL" in err, err
+    code, out, err = await run_cli(control, "list")
+    assert code == 0 and "team, dbwork" in out
+
 async def test_denied_and_no_broker(control: Path, harness: Harness, tmp_path: Path) -> None:
     task = asyncio.create_task(run_cli(control, "run", "--with", "OPENAI_API_KEY", "--", "true"))
     for _ in range(50):

@@ -17,6 +17,7 @@ Secrets are not in `.env` files and not in your environment. A human approves ev
    ```bash
    envh session start <preset> --minutes 60 --reason "weekly report: fetch forecasts and draft the summary"
    ```
+   Need variables from two presets? Name both: `envh session start news-bot forecasting-bot --minutes 60 --reason "..."`. If envh says they map a variable to different secrets, leave one preset out or pick with `--with VAR=SECRET`.
    No preset fits? Map variables explicitly: `envh session start --with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY --minutes 30 --reason "..."`.
    If the call times out before approval, resume with `envh session wait <request_id>` (the id is printed). Do not start a second session for the same work.
 3. Run commands inside the session. Each run is approved instantly, logged, and gets only the variables you name:
