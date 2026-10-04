@@ -25,27 +25,18 @@ BELL = "\a"
 WRONG_PASSPHRASE_PAUSE_SECONDS = 2
 COMMAND_PROMPT = "envh> "
 ERASE_LINE = "\r\x1b[K"
-HELP = """Requests appear here on their own: type the vault passphrase to approve one, or n to deny it.
-Type commands at the envh> prompt. It is hidden while a request waits.
-
-Look
-  secrets           list stored secrets and their approval rules
-  presets           list presets and the variables they set
-  sessions          list open sessions
-  runs              list commands running with secrets right now
-
-Change (each asks for the vault passphrase)
-  add SECRET        store a secret; you type the value hidden
+HELP = """A request shows up on its own; type the vault passphrase to approve it, or n to deny it.
+commands:
+  add SECRET        store a new secret (value typed hidden)
   rm SECRET         remove a secret
+  secrets | presets | sessions | runs
   preset rm NAME    remove a preset
-  edit config       edit config.yaml; it is checked before it is saved
-  edit presets      edit presets.yaml (pick an editor: edit presets vim)
+  edit config       open config.yaml in an editor; validated before it is saved
+  edit presets      same for presets.yaml (optionally: edit presets vim)
   passphrase        change the vault passphrase
-
-Console
   reload            re-read config.yaml and presets.yaml
-  help, ?           show this list
-  quit              close the console; this ends every session"""
+  help | quit
+add, rm, preset rm, edit and passphrase ask for the vault passphrase too (typed hidden)"""
 
 
 @dataclass(frozen=True)
@@ -201,7 +192,7 @@ class Console:
         termios.tcsetattr(self.tty_fd, termios.TCSADRAIN, attributes)
 
     async def run(self) -> None:
-        self.say("console ready. Requests appear here on their own; type help to see commands.")
+        self.say("console ready; requests appear here on their own. Type help for commands")
         try:
             while not self.quit_requested.is_set():
                 if self.current is None and not self._discard_next_line:
@@ -258,7 +249,7 @@ class Console:
 
     async def _command(self, parsed: ParsedLine) -> None:
         command, args = parsed.command, parsed.args
-        if command in ("help", "?"):
+        if command == "help":
             self.say(HELP)
         elif command == "quit":
             self.quit_requested.set()
@@ -272,13 +263,9 @@ class Console:
         elif command == "presets":
             self._show_presets()
         elif command == "sessions":
-            if not self.broker.state.live_sessions():
-                self.say("   no open sessions")
             for session in self.broker.state.live_sessions():
                 self.say(f"   {session.id}  {login_name(session.provenance.uid):<12} {', '.join(session.presets) or '(ad hoc)':<24} expires {session.expires_at:%H:%M:%S}  vars {', '.join(sorted(session.mapping))}  reason {printable(session.reason or '-')}")
         elif command == "runs":
-            if not self.broker.state.active_runs():
-                self.say("   no commands are running with secrets")
             for run in self.broker.state.active_runs():
                 self.say(f"   run #{run.id} pid {run.provenance.pid} vars {', '.join(sorted(run.mapping))}  {printable(' '.join(run.command))}")
         elif command == "preset" and len(args) == 2 and args[0] == "rm":
@@ -291,7 +278,8 @@ class Console:
             self.broker.reload()
             self.say("reloaded")
         else:
-            self.say(f"unknown command: {' '.join((command, *args))}. Type help to see commands.")
+            self.say(f"unknown command: {parsed.command} {' '.join(args)}".rstrip())
+            self.say(HELP)
 
     def _show_presets(self) -> None:
         for preset in self.broker.list_payload()["presets"]:

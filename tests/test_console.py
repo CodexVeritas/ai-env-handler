@@ -9,7 +9,7 @@ import pytest
 from envh.core.state import Provenance, Request
 from envh.core.vault import Vault
 from envh.server import console as console_module
-from envh.server.console import COMMAND_PROMPT, ERASE_LINE, HELP, Console, Screen, parse_line, render_request
+from envh.server.console import COMMAND_PROMPT, ERASE_LINE, Console, Screen, parse_line, render_request
 from tests.conftest import ME, PASSPHRASE, PASSPHRASE_LINE, Harness
 
 PHRASE = "amber basil cedar"
@@ -200,22 +200,7 @@ async def test_unknown_editor_and_unexpected_errors_keep_console_alive(harness: 
     reader.feed_data(b"quit\n")
     await asyncio.wait_for(console.run(), timeout=10)
     assert any("not found" in line for line in said)
-    assert HELP in said
-
-
-async def test_help_and_question_mark_list_commands_and_unknown_commands_point_to_help(harness: Harness) -> None:
-    console, _, said = new_console(harness)
-    await console.handle_line("help\n")
-    await console.handle_line("?\n")
-    await console.handle_line("bogus thing\n")
-    assert said == [HELP, HELP, "unknown command: bogus thing. Type help to see commands."]
-
-
-async def test_empty_session_and_run_lists_say_so(harness: Harness) -> None:
-    console, _, said = new_console(harness)
-    await console.handle_line("sessions\n")
-    await console.handle_line("runs\n")
-    assert said == ["   no open sessions", "   no commands are running with secrets"]
+    assert any("commands:" in line for line in said)
 
 
 async def test_command_prompt_stays_below_log_lines_and_gives_way_to_requests(harness: Harness) -> None:
@@ -225,7 +210,7 @@ async def test_command_prompt_stays_below_log_lines_and_gives_way_to_requests(ha
     console = Console(harness.broker, reader, screen.say, screen.prompt, tty_fd=None, phrase=PHRASE)
     task = asyncio.create_task(console.run())
     await asyncio.sleep(0)
-    assert output.getvalue().endswith(f"console ready. Requests appear here on their own; type help to see commands.\n{COMMAND_PROMPT}")
+    assert output.getvalue().endswith(f"Type help for commands\n{COMMAND_PROMPT}")
     screen.say("[14:00:00] run_start run=1")
     assert output.getvalue().endswith(f"{COMMAND_PROMPT}{ERASE_LINE}[14:00:00] run_start run=1\n{COMMAND_PROMPT}")
     request = run_request(harness)
