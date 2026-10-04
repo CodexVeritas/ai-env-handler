@@ -1,4 +1,5 @@
 import asyncio
+import io
 import os
 import re
 import stat
@@ -9,7 +10,7 @@ import pytest
 from envh.core.state import Provenance, Request
 from envh.core.vault import Vault
 from envh.server import console as console_module
-from envh.server.console import Console, ConsoleOutput, parse_line, render_request
+from envh.server.console import COMMAND_PROMPT, ERASE_LINE, Console, ConsoleOutput, parse_line, render_request
 from tests.conftest import ME, PASSPHRASE, PASSPHRASE_LINE, Harness
 
 PHRASE = "amber basil cedar"
@@ -201,6 +202,28 @@ async def test_unknown_editor_and_unexpected_errors_keep_console_alive(harness: 
     await asyncio.wait_for(console.run(), timeout=10)
     assert any("not found" in line for line in said)
     assert any("commands:" in line for line in said)
+
+
+async def test_command_prompt_stays_below_log_lines_and_gives_way_to_requests(harness: Harness) -> None:
+    output = io.StringIO()
+    console_output = ConsoleOutput(lambda text: output.write(text + "\n"), output.write)
+    reader = asyncio.StreamReader()
+    console = Console(harness.broker, reader, console_output, tty_fd=None, phrase=PHRASE)
+    task = asyncio.create_task(console.run())
+    await asyncio.sleep(0)
+    assert output.getvalue().endswith(f"help for commands\n{COMMAND_PROMPT}")
+    console_output.say("[14:00:00] run_start run=1")
+    assert output.getvalue().endswith(f"{COMMAND_PROMPT}{ERASE_LINE}[14:00:00] run_start run=1\n{COMMAND_PROMPT}")
+    request = run_request(harness)
+    assert f"{COMMAND_PROMPT}{ERASE_LINE}\a[" in output.getvalue()
+    assert output.getvalue().endswith("or n to deny:\n")
+    reader.feed_data(b"n\n")
+    await asyncio.sleep(0.05)
+    assert request.decision.result().outcome == "denied"
+    assert output.getvalue().endswith(f"denied #{request.id}\n{COMMAND_PROMPT}")
+    reader.feed_data(b"quit\n")
+    await asyncio.wait_for(task, timeout=5)
+    assert not output.getvalue().endswith(COMMAND_PROMPT)
 
 
 async def test_render_request_neutralizes_control_characters(harness: Harness) -> None:

@@ -29,6 +29,8 @@ from envh.server.keys_view import ENTER_FULL_SCREEN, LEAVE_FULL_SCREEN, CheckPas
 
 BELL = "\a"
 WRONG_PASSPHRASE_PAUSE_SECONDS = 2
+COMMAND_PROMPT = "envh> "
+ERASE_LINE = "\r\x1b[K"
 KEYS_REFRESH_SECONDS = 0.5
 ESCAPE_WAIT_SECONDS = 0.05
 HELD_LINES_KEPT = 200
@@ -114,26 +116,40 @@ def render_request(request: Request, now: datetime) -> list[str]:
 
 
 class ConsoleOutput:
-    """The console's terminal output. While a full-screen view is open, lines are held and printed when it closes, so
-    audit events neither break the view nor get lost. Only the newest HELD_LINES_KEPT are kept, since any local user can
-    add audit lines by connecting to the socket."""
+    """The console's terminal output. Lines print above the command prompt, which stays on the last line so log lines
+    arriving while the console waits never bury it. While a full-screen view is open, lines are held and printed when
+    it closes, so audit events neither break the view nor get lost. Only the newest HELD_LINES_KEPT are kept, since any
+    local user can add audit lines by connecting to the socket."""
 
     def __init__(self, say: Callable[[str], None], write: Callable[[str], None]) -> None:
         self._say = say
         self._write = write
         self._held: deque[str] | None = None
         self._dropped = 0
+        self._prompt = ""
 
     def say(self, text: str) -> None:
         if self._held is None:
-            self._say(text)
+            self._say_above_prompt(text)
             return
         if len(self._held) == self._held.maxlen:
             self._dropped += 1
         self._held.append(text)
 
+    def prompt(self, text: str) -> None:
+        """Shows text as the prompt on the current line; "" removes it."""
+        self._write(f"{ERASE_LINE if self._prompt else ''}{text}")
+        self._prompt = text
+
     def draw(self, frame: str) -> None:
         self._write(frame)
+
+    def _say_above_prompt(self, text: str) -> None:
+        if self._prompt:
+            self._write(ERASE_LINE)
+        self._say(text)
+        if self._prompt:
+            self._write(self._prompt)
 
     @contextmanager
     def holding(self) -> Iterator[None]:
@@ -146,9 +162,9 @@ class ConsoleOutput:
         finally:
             held, dropped, self._held = self._held, self._dropped, None
             if dropped:
-                self._say(f"({dropped} earlier lines were not kept; every audit event is in audit.jsonl)")
+                self._say_above_prompt(f"({dropped} earlier lines were not kept; every audit event is in audit.jsonl)")
             for text in held:
-                self._say(text)
+                self._say_above_prompt(text)
 
 
 class Console:
@@ -192,6 +208,7 @@ class Console:
         self.say(approval_prompt(request, self.phrase))
 
     def _present(self, request: Request) -> None:
+        self.output.prompt("")
         self.current = request
         request.decision.add_done_callback(lambda decision: self._on_decided(request, decision))
         self.show_request(request)
@@ -237,7 +254,10 @@ class Console:
         self.say("console ready; requests appear here on their own. Type keys to see your keys, help for commands")
         try:
             while not self.quit_requested.is_set():
+                if self.current is None and not self._discard_next_line:
+                    self.output.prompt(COMMAND_PROMPT)
                 line = await self._next_line()
+                self.output.prompt("")
                 if not line:
                     self.say("console input closed; shutting down")
                     self.quit_requested.set()
@@ -254,6 +274,7 @@ class Console:
                     self._busy = False
                     self._advance()
         finally:
+            self.output.prompt("")
             self.set_echo(True)
 
     async def _next_line(self) -> bytes:

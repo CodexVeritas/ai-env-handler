@@ -253,7 +253,7 @@ presets:
 
 The same variable can point at different secrets in different presets; that replaces commenting lines in and out. Unknown fields, bad durations, caps over 24h and secrets missing from the vault are rejected, never warned about.
 
-On the console, requests appear on their own, one at a time: type the vault passphrase to approve the one on screen, or `n` to deny it; others wait their turn. Commands: `keys` (browse and rename keys; see [See and rename your keys](#see-and-rename-your-keys)), `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `passphrase` (change the vault passphrase; the vault is re-encrypted), `reload`, `help`, `quit`. `add`, `rm`, `preset rm`, `edit`, `passphrase` and the first rename in `keys` ask for the vault passphrase too.
+On the console, requests appear on their own, one at a time: type the vault passphrase to approve the one on screen, or `n` to deny it; others wait their turn. When no request is waiting, the console shows an `envh>` prompt for commands: `keys` (browse and rename keys; see [See and rename your keys](#see-and-rename-your-keys)), `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `passphrase` (change the vault passphrase; the vault is re-encrypted), `reload`, `help`, `quit`. `add`, `rm`, `preset rm`, `edit`, `passphrase` and the first rename in `keys` ask for the vault passphrase too.
 
 ## Using it with Claude Code
 
