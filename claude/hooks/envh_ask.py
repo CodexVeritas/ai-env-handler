@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """envh hook for Claude Code (PreToolUse) and Cursor (beforeShellExecution). Standard library only.
 
-Asks in the app exactly when a command will make the envh console ask for the vault passphrase, and refuses sudo
-from the agent. It reads the command the way a shell does, so envh only counts where it runs: as a command name,
-including after `&&`, `;`, a pipe or a newline, inside `$(...)`, backticks, `bash -c` or `eval`, behind wrappers like
-`timeout` or `uv run`, or with a path prefix. envh inside an argument, a quoted string, a comment or a heredoc body is
-a mention and never asks, though a `$(...)` or backticks that bash expands there still count. If a quote never
-closes, text that looks like such a request asks.
-sudo, su, doas and pkexec are denied likewise, only where they would run, and more strictly: every argument of a
-shell, eval or ssh and a heredoc fed to a shell are read as commands too.
+Asks in the app exactly when a command will make the envh console ask for the vault passphrase. It reads the command
+the way a shell does, so envh only counts where it runs: as a command name, including after `&&`, `;`, a pipe or a
+newline, inside `$(...)`, backticks, `bash -c` or `eval`, behind wrappers like `timeout` or `uv run`, or with a path
+prefix. envh inside an argument, a quoted string, a comment or a heredoc body is a mention and never asks, though a
+`$(...)` or backticks that bash expands there still count. If a quote never closes, text that looks like such a
+request asks.
 A script file, an interpreter one-liner, a pipe into a shell or a variable-built command gets around it, and
 nothing depends on it: a disguised session-less `envh run` still prompts on the envh console and a disguised
 `envh session start` still needs the passphrase typed there. The hook is attention plus a second chance to deny, not
@@ -26,8 +24,6 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-PRIVILEGED = ("sudo", "su", "doas", "pkexec")
-PRIVILEGE = re.compile(r"(?<![\w.-])(?:[\w./-]*/)?(?:" + "|".join(PRIVILEGED) + r")(?![\w./-])")
 PASSPHRASE_FORM = re.compile(r"(?<![\w.-])(?:[\w./-]*/)?envh\s+(?:session\s+start|preset\s+propose|import|run)\b")
 SESSION_ASSIGNMENT = "ENVH_SESSION="
 ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
@@ -47,8 +43,6 @@ WRAPPERS = {
 }
 RUNNERS = {"uv", "poetry"}
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
-STRING_RUNNERS = SHELLS | {"eval", "ssh"}
-FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir"}
 MAX_NESTING = 3
 HELP = {"-h", "--help"}
 RUN_OPTIONS_WITH_VALUE = {"--session", "--preset", "--with", "--reason"}
@@ -356,50 +350,7 @@ def commands_in(tokens: list[Word | str], nesting: int) -> list[list[str]]:
     return commands
 
 
-def words_run_privileged(words: list[str], stdin: list[str], nesting: int) -> bool:
-    """Whether one simple command runs sudo, su, doas or pkexec.
-
-    A shell, eval or ssh runs text, so each argument, all of them joined, and the here-string or heredoc it reads are
-    checked as commands too.
-    """
-    name_and_arguments = command_words(words)
-    if not name_and_arguments:
-        return False
-    name, arguments = posixpath.basename(name_and_arguments[0]), name_and_arguments[1:]
-    if name in PRIVILEGED:
-        return True
-    if name in STRING_RUNNERS:
-        return any(text_runs_privileged(text, nesting + 1) for text in dict.fromkeys([*arguments, " ".join(arguments), *stdin]))
-    if name == "find":
-        return any(words_run_privileged(arguments[index + 1 :], [], nesting) for index, word in enumerate(arguments) if word in FIND_ACTIONS)
-    return False
-
-
-def text_runs_privileged(text: str, nesting: int = 0) -> bool:
-    """Past MAX_NESTING scripts deep, any mention counts."""
-    if nesting > MAX_NESTING:
-        return PRIVILEGE.search(text) is not None
-    return tokens_run_privileged(Lexer(text).tokens(), nesting)
-
-
-def tokens_run_privileged(tokens: list[Word | str], nesting: int) -> bool:
-    for command in split_commands(tokens):
-        if any(tokens_run_privileged(inner, nesting) for inner in command.substitutions) or words_run_privileged(command.words, command.stdin, nesting):
-            return True
-    return False
-
-
-def runs_privileged(command: str) -> bool:
-    """Falls back to matching the words anywhere when the command is nested too deeply to parse."""
-    try:
-        return text_runs_privileged(command)
-    except RecursionError:
-        return PRIVILEGE.search(command) is not None
-
-
 def decide(command: str) -> tuple[str, str] | None:
-    if runs_privileged(command):
-        return "deny", "envh policy: agents never run sudo, su, doas or pkexec; a cached credential could be reused. Ask the human to run it."
     try:
         commands = simple_commands(command)
     except (ValueError, RecursionError):
