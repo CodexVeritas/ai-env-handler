@@ -56,6 +56,13 @@ def build_broker(data_dir: Path, echoed: list[str], clock: FakeClock, config_tex
     return Broker(data_dir, config, vault, StateTable(clock), audit)
 
 
+@pytest.fixture(autouse=True)
+def no_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a display, envh clients started by tests never show desktop notifications or play the chime."""
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+
 @pytest.fixture
 def harness(tmp_path: Path) -> Harness:
     clock = FakeClock()
