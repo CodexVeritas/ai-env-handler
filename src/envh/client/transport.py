@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 import socket
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+from envh.client.attention import Reminders, desktop_session
 
 EXIT_USAGE = 2
 EXIT_NO_BROKER = 3
@@ -64,7 +68,17 @@ class Connection:
         self.close()
 
 
-def waiting_notice(request_id: int, resume_hint: str | None) -> None:
+@contextmanager
+def waiting_notice(reply: dict[str, Any], resume_hint: str | None) -> Iterator[None]:
+    """Say the request waits for the console, and while it does, remind the human on the desktop when the broker's
+    notify setting is on. Without a desktop session only the console's bell reminds them."""
+    request_id = reply["request_id"]
     print(f"envh: waiting for approval in the envh console (request #{request_id})", file=sys.stderr, flush=True)
     if resume_hint:
         print(f"envh: if this times out, resume with: {resume_hint}", file=sys.stderr, flush=True)
+    reminders = Reminders(request_id).start() if reply.get("notify") and desktop_session() else None
+    try:
+        yield
+    finally:
+        if reminders is not None:
+            reminders.stop()

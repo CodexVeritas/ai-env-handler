@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import time
@@ -5,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from envh.tools.scanner import looks_placeholder, scan_paths, scan_text
+from envh.tools.scanner import VALUE_PATTERNS, Progress, looks_placeholder, present_kinds, scan_paths, scan_text
 
 OPENAI = "sk-proj-" + "A1b2C3d4" * 6
 OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
@@ -106,3 +107,63 @@ def test_long_lines_are_scanned_to_the_end_in_linear_time() -> None:
     hits = list(scan_text(Path("transcript.jsonl"), line))
     assert time.perf_counter() - started < 2
     assert [hit.name for hit in hits] == ["FRED_API_KEY"]
+
+
+SAMPLES = {
+    "openrouter": OPENROUTER,
+    "anthropic": ANTHROPIC,
+    "openai": OPENAI,
+    "openai-legacy": "sk-" + "Ab12" * 5 + "T3BlbkFJ" + "Cd34" * 5,
+    "perplexity": PPLX,
+    "google-gemini": GEMINI,
+    "e2b": "e2b_" + "0123456789abcdef" * 2,
+    "github": "ghp_" + "a1B2" * 9,
+    "slack": "xoxb-1234567890-abcdefghij",
+    "aws-access-key": "AKIA" + "ABCDEFGHIJKLMNOP",
+    "stripe": "sk_live_" + "a1B2c3D4" * 3,
+    "huggingface": "hf_" + "a1B2c3D4e5" * 3,
+    "groq": "gsk_" + "a1B2c3D4e5" * 4,
+    "tavily": "tvly-" + "a1B2c3D4e5" * 2,
+    "replicate": "r8_" + "a1B2c3D4e5" * 3,
+    "notion": "ntn_" + "a1B2c3D4e5" * 4,
+    "sendgrid": "SG.a1B2c3D4e5f6g7h8.i9J0k1L2m3N4o5P6",
+    "jwt": "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q",
+    "private-key": "-----BEGIN RSA PRIVATE KEY-----",
+    "database-url": "postgres://admin:hunter2secret@db.internal:5432/app",
+}
+
+
+def test_every_value_pattern_has_a_sample() -> None:
+    assert set(SAMPLES) == {kind for kind, _, _ in VALUE_PATTERNS}
+
+
+@pytest.mark.parametrize(("kind", "sample"), SAMPLES.items())
+def test_each_key_format_is_found_through_its_markers(kind: str, sample: str) -> None:
+    hits = list(scan_text(Path("notes.md"), f"noise before {sample} and after\n"))
+    assert [hit.kind for hit in hits] == [kind]
+
+
+def test_text_without_any_marker_skips_the_value_patterns() -> None:
+    assert present_kinds("def main():\n    return compute_everything()\n") == ()
+
+
+def test_installed_packages_caches_and_tagged_folders_are_skipped(tmp_path: Path) -> None:
+    skipped = (".local/share/uv/python", "miniconda3/lib", ".vscode/extensions/tool", ".config/Slack/Cache", "project/target", ".var/app/org.mozilla.thunderbird_esr/cache", "project/web/.next/server")
+    for folder in skipped:
+        (tmp_path / folder).mkdir(parents=True)
+        (tmp_path / folder / "leak.txt").write_text(OPENAI)
+    (tmp_path / "project" / "target" / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+    (tmp_path / "project" / "notes.md").write_text(OPENAI)
+    (tmp_path / ".cache" / "huggingface").mkdir(parents=True)
+    (tmp_path / ".cache" / "huggingface" / "token").write_text(SAMPLES["huggingface"])
+    hits, _, _ = scan_paths([tmp_path], 1024 * 1024)
+    assert {str(hit.path.relative_to(tmp_path)) for hit in hits} == {"project/notes.md", ".cache/huggingface/token"}
+
+
+def test_progress_draws_a_bar_with_the_folder_and_clears_it() -> None:
+    stream = io.StringIO()
+    progress = Progress(stream)
+    progress.scanning(500_000_000, 1_000_000_000, Path.home() / "code" / "bot" / "src" / "deep")
+    assert stream.getvalue() == "\r\x1b[K  [██████████░░░░░░░░░░] 50% · 0.5 of 1.0 GB · ~/code/bot/src"
+    progress.clear()
+    assert stream.getvalue().endswith("\r\x1b[K")

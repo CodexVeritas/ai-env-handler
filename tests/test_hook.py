@@ -41,6 +41,7 @@ DECISIONS = pytest.mark.parametrize(
         ("ENVH_SESSION=abc envh run -- python x.py", None),
         ("env ENVH_SESSION=abc envh run -- python x.py", None),
         ("export ENVH_SESSION=abc && envh run -- python x.py", None),
+        ("export ENVH_SESSION=abc; echo $(envh run -- python x.py)", None),
         ("ENVH_SESSION=abc; envh run -- python x.py", None),
         ("grep ENVH_SESSION= README.md && envh run --with A -- true", "ask"),
         ("envh run --with A -- true  # ENVH_SESSION= later", "ask"),
@@ -77,6 +78,7 @@ DECISIONS = pytest.mark.parametrize(
         ('x=$(echo ")"); envh session start p --minutes 5', "ask"),
         ("diff <(envh run --with A -- cat x) y", "ask"),
         ("echo $((1<<2))\nenvh session start p --minutes 5", "ask"),
+        ("cat > notes.md <<EOF\nRun `envh session start p --minutes 5` first\nEOF", "ask"),
         # quoting that cannot be read falls back to looking for an envh request in the text
         ('echo "unclosed; envh session start p --minutes 5', "ask"),
         ('echo "unclosed; envh list', None),
@@ -101,6 +103,7 @@ DECISIONS = pytest.mark.parametrize(
         ('echo "envh session start p --minutes 5"', None),
         ("grep -rn 'envh run --with' README.md", None),
         ('git commit -m "Ask before envh session start; skip envh list"', None),
+        ("git commit -m \"$(cat <<'EOF'\nDon't forget envh session start\nEOF\n)\"", None),
         ("cat > README.md <<'EOF'\nRun this:\n  envh session start p --minutes 5\nDon't forget the reason.\nEOF", None),
         ("cat <<-EOF > notes.md\n\tenvh import ~/code\n\tEOF", None),
         ("cat <<\\EOF > notes.md\nRun envh session start p --minutes 5\nEOF", None),

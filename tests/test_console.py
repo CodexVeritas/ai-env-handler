@@ -1,4 +1,5 @@
 import asyncio
+import io
 import os
 import re
 import stat
@@ -9,7 +10,7 @@ import pytest
 from envh.core.state import Provenance, Request
 from envh.core.vault import Vault
 from envh.server import console as console_module
-from envh.server.console import Console, ConsoleOutput, parse_line, render_request
+from envh.server.console import COMMAND_PROMPT, ERASE_LINE, Console, ConsoleOutput, parse_line, render_request
 from tests.conftest import ME, PASSPHRASE, PASSPHRASE_LINE, Harness
 
 PHRASE = "amber basil cedar"
@@ -203,6 +204,28 @@ async def test_unknown_editor_and_unexpected_errors_keep_console_alive(harness: 
     assert any("commands:" in line for line in said)
 
 
+async def test_command_prompt_stays_below_log_lines_and_gives_way_to_requests(harness: Harness) -> None:
+    output = io.StringIO()
+    console_output = ConsoleOutput(lambda text: output.write(text + "\n"), output.write)
+    reader = asyncio.StreamReader()
+    console = Console(harness.broker, reader, console_output, tty_fd=None, phrase=PHRASE)
+    task = asyncio.create_task(console.run())
+    await asyncio.sleep(0)
+    assert output.getvalue().endswith(f"help for commands\n{COMMAND_PROMPT}")
+    console_output.say("[14:00:00] run_start run=1")
+    assert output.getvalue().endswith(f"{COMMAND_PROMPT}{ERASE_LINE}[14:00:00] run_start run=1\n{COMMAND_PROMPT}")
+    request = run_request(harness)
+    assert f"{COMMAND_PROMPT}{ERASE_LINE}\a[" in output.getvalue()
+    assert output.getvalue().endswith("or n to deny:\n")
+    reader.feed_data(b"n\n")
+    await asyncio.sleep(0.05)
+    assert request.decision.result().outcome == "denied"
+    assert output.getvalue().endswith(f"denied #{request.id}\n{COMMAND_PROMPT}")
+    reader.feed_data(b"quit\n")
+    await asyncio.wait_for(task, timeout=5)
+    assert not output.getvalue().endswith(COMMAND_PROMPT)
+
+
 async def test_render_request_neutralizes_control_characters(harness: Harness) -> None:
     reason = "backfill\n   OPENAI_API_KEY <- OPENAI_API_KEY\x1b[1A\x1b[2K"
     provenance = Provenance(pid=1, uid=harness.provenance().uid, cmdline="envh\x1b[2J session start")
@@ -210,7 +233,7 @@ async def test_render_request_neutralizes_control_characters(harness: Harness) -
     lines = render_request(request, harness.clock())
     assert len(lines) == len("\n".join(lines).splitlines())
     assert not any("\x1b" in line or "\r" in line for line in lines)
-    assert lines[0].startswith("\a") and "DATABASE_URL" in "\n".join(lines)
+    assert lines[0].startswith("[") and "DATABASE_URL" in "\n".join(lines)
     assert not any("\x1b" in line or "\n" in line for line in harness.echoed)
 
 
@@ -321,6 +344,35 @@ async def test_requests_wait_while_the_keys_view_is_open_and_lines_are_held(harn
     reader.feed_data(b"n\nquit\n")
     await asyncio.wait_for(task, timeout=5)
     assert request.decision.result().outcome == "denied"
+
+
+async def test_a_new_request_rings_the_bell_unless_notify_is_off(harness: Harness) -> None:
+    console, _, said = new_console(harness)
+    run_request(harness)
+    assert said[0].startswith("\a")
+    harness.broker.request_listeners.remove(console.on_request)
+    harness.broker.config.notify = False
+    _, _, quiet_said = new_console(harness)
+    run_request(harness)
+    assert quiet_said and not any("\a" in line for line in quiet_said)
+
+
+async def test_the_console_rings_again_while_a_request_waits(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(console_module, "reminder_delays", lambda: iter([0.02] * 100))
+    said: list[str] = []
+    drawn: list[str] = []
+    console = Console(harness.broker, asyncio.StreamReader(), ConsoleOutput(said.append, drawn.append), tty_fd=None, phrase=PHRASE)
+    run_request(harness)
+    await asyncio.sleep(0.15)
+    assert drawn.count("\a") >= 3
+    await console.handle_line("n\n")
+    rings = drawn.count("\a")
+    await asyncio.sleep(0.1)
+    assert drawn.count("\a") == rings
+    harness.broker.config.notify = False
+    run_request(harness)
+    await asyncio.sleep(0.1)
+    assert drawn.count("\a") == rings
 
 
 async def test_a_rename_that_fails_after_saving_says_so_and_shows_the_new_name(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -104,6 +104,13 @@ Or click the "envh console" launcher. Enter your sudo password, check the consol
 
 The helper chowns the terminal device to the service user for the duration and restores it afterwards.
 
+**You don't have to watch the console.** When a request needs your passphrase, envh shows a desktop notification with its own chime, and the console rings its bell.
+- **It reminds you while the request waits:** after 30 seconds, 1 minute, 2 minutes and 5 minutes, then every 5 minutes. Each reminder updates the same notification ("has been waiting 2 minutes"), and the notification disappears once you approve or deny.
+- **The notification comes from the program that asked.** That program runs as you, in your desktop session, and reminds you only while it is still waiting. A request from a script with no desktop session (cron, SSH) only rings the bell.
+- **The chime is envh's own**, a short rising bell, so it isn't mistaken for another app. envh generates it and keeps it in your private runtime folder (`$XDG_RUNTIME_DIR`).
+- **Its text is fixed.** It never shows the requester's reason, so a request can't use it to show you instructions.
+- **To turn off the notifications, the chime and the bell, set `notify: false` in `config.yaml`.** Use `edit config` on the console.
+
 ## Move your `.env` files over
 
 ```bash
@@ -150,7 +157,15 @@ envh scan                      # your home directory
 envh scan ~/code ~/Downloads   # specific places; add --json for machine-readable output
 ```
 
-It prints the file, the line, what kind of key it looks like, the first four characters, the length and a short fingerprint, never the value. The fingerprint lets you see that the same key sits in several files. Exit code 1 means something was found. It skips binaries, vendor directories, caches, browser profiles and files over 25 MB (`--max-size`), and it looks inside `.git/config` but not git history.
+It prints the file, the line, what kind of key it looks like, the first four characters, the length and a short fingerprint, never the value. The fingerprint lets you see that the same key sits in several files. Exit code 1 means something was found. While it runs, a progress bar shows how much it has read and about how long is left.
+
+To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of installed code and caches that hold none of your keys but can hold millions of files:
+- **Installed packages and environments:** `.venv`, `venv`, `node_modules`, `site-packages`, conda, uv's Pythons, pipx, `.cargo`, `go/pkg` and the like.
+- **Caches:** `.cache`, app caches such as `Cache` and `GPUCache`, and any folder tagged with `CACHEDIR.TAG`. Hugging Face's token file in `.cache` is still read.
+- **Build output:** Next.js's `.next`.
+- **Other bulky data:** editor extensions and Claude Code plugins, Flatpak apps' own data (`~/.var/app`), browser and mail profiles, Steam, Wine and snaps.
+
+`envh scan --help` lists every skipped folder, and the report repeats the summary. It looks inside `.git/config` but not git history.
 
 What it can and cannot identify:
 
@@ -212,6 +227,7 @@ An agent can only *propose*: `envh preset validate draft.yaml` checks a draft wi
 
 ```yaml
 users: [alice]           # login names allowed to talk to the broker; the installer fills in yours
+notify: true             # desktop notification with a sound, and the console's bell, when a request needs your passphrase
 defaults:
   approval: session      # session: one approval opens a session | per-run: ask on every run, never in sessions
   max_session: 1h        # hard cap 24h
@@ -237,14 +253,14 @@ presets:
 
 The same variable can point at different secrets in different presets; that replaces commenting lines in and out. Unknown fields, bad durations, caps over 24h and secrets missing from the vault are rejected, never warned about.
 
-On the console, requests appear on their own, one at a time: type the vault passphrase to approve the one on screen, or `n` to deny it; others wait their turn. Commands: `keys` (browse and rename keys; see [See and rename your keys](#see-and-rename-your-keys)), `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `passphrase` (change the vault passphrase; the vault is re-encrypted), `reload`, `help`, `quit`. `add`, `rm`, `preset rm`, `edit`, `passphrase` and the first rename in `keys` ask for the vault passphrase too.
+On the console, requests appear on their own, one at a time: type the vault passphrase to approve the one on screen, or `n` to deny it; others wait their turn. When no request is waiting, the console shows an `envh>` prompt for commands: `keys` (browse and rename keys; see [See and rename your keys](#see-and-rename-your-keys)), `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `passphrase` (change the vault passphrase; the vault is re-encrypted), `reload`, `help`, `quit`. `add`, `rm`, `preset rm`, `edit`, `passphrase` and the first rename in `keys` ask for the vault passphrase too.
 
 ## Using it with Claude Code
 
 The wizard's "Connect Claude Code" step does this for you, and says so when a rerun finds the copies out of date. By hand, copy the pieces under `claude/`:
 
 - `claude/skills/envh/SKILL.md` → `~/.claude/skills/envh/SKILL.md` (or a project's `.claude/skills/envh/`). It teaches the agent to run one command directly and to start a session only for several, to always give a reason, what to do when refused, and a list of things it must never do.
-- `claude/hooks/envh_ask.py` plus the hooks block from `claude/settings.snippet.json` → your `settings.json`. The hook asks in the app only when a command will make the console ask for your vault passphrase: `envh session start`, `envh preset propose`, `envh import` (not `--dry-run`) and `envh run` without a session. So you are notified exactly when the console needs you. It reads the command the way a shell does: `envh` counts after `&&`, `;`, a pipe or a newline, inside `$(...)`, backticks, `bash -c` or `eval`, behind `timeout`, `nohup`, `env` or `uv run`, and with a path prefix. `envh` in an argument, a quoted string, a comment or a heredoc body, such as a commit message, a `grep` or a README being written, is a mention and never asks. Only when the quoting can't be read at all does text that looks like one of those requests ask. Prefer rules only? The snippet has that variant too, with the caveat that plain rules match only the start of a command.
+- `claude/hooks/envh_ask.py` plus the hooks block from `claude/settings.snippet.json` → your `settings.json`. The hook asks in the app only when a command will make the console ask for your vault passphrase: `envh session start`, `envh preset propose`, `envh import` (not `--dry-run`) and `envh run` without a session. So you are notified exactly when the console needs you. It reads the command the way a shell does: `envh` counts after `&&`, `;`, a pipe or a newline, inside `$(...)`, backticks, `bash -c` or `eval`, behind `timeout`, `nohup`, `env` or `uv run`, and with a path prefix. `envh` in an argument, a quoted string, a comment or a heredoc body, such as a commit message, a `grep` or a README being written, is a mention and never asks, unless it is in a `$(...)` or backticks that bash still runs there, as in double quotes or an unquoted heredoc. Only when the quoting can't be read at all does text that looks like one of those requests ask. Prefer rules only? The snippet has that variant too, with the caveat that plain rules match only the start of a command.
 
   A hook sees only the command string. A script file, an interpreter one-liner (`python -c "subprocess.run(['envh', ...])"`) or a variable-built command can get around it, which is why nothing depends on it: a disguised session-less run still prompts on the envh console, and a disguised session start still needs your passphrase typed there. The hook is attention and a second chance to deny; the console is the boundary.
 - `claude/CLAUDE.snippet.md` → three lines for a project's `CLAUDE.md`. The wizard adds them to `~/.claude/CLAUDE.md` on the first connection only; updates replace the skill and hook and leave your `CLAUDE.md` as you edited it. When it lacks any of the current lines, the wizard shows them so you can add them yourself.
