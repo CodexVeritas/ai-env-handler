@@ -167,6 +167,36 @@ def test_an_update_replaces_the_skill_and_hook_and_leaves_an_edited_claude_md_al
     assert (tmp_path / "CLAUDE.md").read_text() == edited
 
 
+def test_an_edited_claude_md_is_left_alone_with_a_warning_naming_the_lines_it_lacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(wizard, "CLAUDE_HOME", tmp_path)
+    for change in wizard.claude_code_changes(tmp_path):
+        change.apply()
+    snippet_lines = (ROOT / "claude" / "CLAUDE.snippet.md").read_text().splitlines()
+    heading = next(text for text in snippet_lines if text.startswith("#"))
+    first_bullet, *other_bullets = [text for text in snippet_lines if text.startswith("- ")]
+    edited = "## My keys\n- Use envh sessions.\n" + "".join(f"{bullet}\n" for bullet in other_bullets)
+    (tmp_path / "CLAUDE.md").write_text(edited)
+    assert wizard.step_claude_code() == wizard.Outcome(True, "up to date")
+    output = capsys.readouterr().out
+    assert "CLAUDE.md lacks these envh lines" in output
+    assert first_bullet in output
+    assert heading not in output and not any(bullet in output for bullet in other_bullets)
+    assert (tmp_path / "CLAUDE.md").read_text() == edited
+
+
+def test_a_first_connection_adds_the_claude_md_lines_without_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(wizard, "CLAUDE_HOME", tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("# Mine\n")
+    answer_inputs(monkeypatch, "")
+    assert wizard.step_claude_code() == wizard.Outcome(True, "connected")
+    assert "lacks these envh lines" not in capsys.readouterr().out
+    assert wizard.missing_claude_md_lines(tmp_path / "CLAUDE.md") == []
+
+
 @pytest.mark.parametrize(("changes_for", "tool"), [(wizard.claude_code_changes, "Claude Code"), (wizard.cursor_changes, "Cursor")])
 def test_an_out_of_date_skill_and_hook_are_named_and_declining_keeps_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], changes_for: Callable, tool: str
