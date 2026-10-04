@@ -149,7 +149,8 @@ It prints the file, the line, what kind of key it looks like, the first four cha
 To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of installed code and caches that hold none of your keys but can hold millions of files:
 - **Installed packages and environments:** `.venv`, `venv`, `node_modules`, `site-packages`, conda, uv's Pythons, pipx, `.cargo`, `go/pkg` and the like.
 - **Caches:** `.cache`, app caches such as `Cache` and `GPUCache`, and any folder tagged with `CACHEDIR.TAG`. Hugging Face's token file in `.cache` is still read.
-- **Other bulky data:** editor extensions, browser and mail profiles, Steam, Wine and snaps.
+- **Build output:** Next.js's `.next`.
+- **Other bulky data:** editor extensions and Claude Code plugins, Flatpak apps' own data (`~/.var/app`), browser and mail profiles, Steam, Wine and snaps.
 
 `envh scan --help` lists every skipped folder, and the report repeats the summary. It looks inside `.git/config` but not git history.
 

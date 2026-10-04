@@ -148,7 +148,8 @@ def test_text_without_any_marker_skips_the_value_patterns() -> None:
 
 
 def test_installed_packages_caches_and_tagged_folders_are_skipped(tmp_path: Path) -> None:
-    for folder in (".local/share/uv/python", "miniconda3/lib", ".vscode/extensions/tool", ".config/Slack/Cache", "project/target"):
+    skipped = (".local/share/uv/python", "miniconda3/lib", ".vscode/extensions/tool", ".config/Slack/Cache", "project/target", ".var/app/org.mozilla.thunderbird_esr/cache", "project/web/.next/server")
+    for folder in skipped:
         (tmp_path / folder).mkdir(parents=True)
         (tmp_path / folder / "leak.txt").write_text(OPENAI)
     (tmp_path / "project" / "target" / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")

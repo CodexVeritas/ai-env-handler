@@ -55,16 +55,16 @@ NAME_ONLY_PROVIDERS = ("serp", "fred", "asknews", "hyperbrowser", "metaculus", "
 SKIP_DIR_NAMES = {
     "node_modules", ".venv", "venv", "env", "site-packages", "__pycache__", ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
     ".pyenv", ".conda", "miniconda3", "anaconda3", "miniforge3", "mambaforge", ".local/lib", ".local/share/uv", ".local/share/pipx",
-    ".local/share/virtualenvs", ".npm", ".yarn", ".pnpm-store", ".bun", ".nvm", ".cargo", ".rustup", ".gradle", ".m2", ".julia", ".gem",
-    "go/pkg", ".terraform", ".vscode/extensions", ".vscode-insiders/extensions", ".cursor/extensions", ".vscode-server", ".cursor-server",
-    ".cache", "Cache", "Code Cache", "GPUCache", "DawnCache", "CacheStorage", ".local/share/flatpak", ".local/share/containers",
-    ".local/share/Steam", ".steam", ".wine", "snap", ".mozilla", "google-chrome", "chromium", "BraveSoftware", "Microsoft Edge",
-    ".thunderbird", "Trash/expunged",
+    ".local/share/virtualenvs", ".local/share/virtualenv", ".local/share/heroku", ".npm", ".yarn", ".pnpm-store", ".bun", ".nvm", ".cargo",
+    ".rustup", ".gradle", ".m2", ".julia", ".gem", "go/pkg", ".terraform", ".next", ".vscode/extensions", ".vscode-insiders/extensions",
+    ".cursor/extensions", ".vscode-server", ".cursor-server", ".claude/plugins", ".cache", "Cache", "Code Cache", "GPUCache", "DawnCache",
+    "CacheStorage", ".local/share/flatpak", ".var/app", ".local/share/containers", ".local/share/Steam", ".steam", ".wine", "snap",
+    ".mozilla", "google-chrome", "chromium", "BraveSoftware", "Microsoft Edge", ".thunderbird", "Trash/expunged",
 }
 SKIPPED_SUMMARY = (
     "Skipped: installed packages and environments (.venv, node_modules, conda, uv's Pythons and more), caches (.cache, app",
-    "caches, folders tagged with CACHEDIR.TAG), editor extensions, browser and mail profiles, Steam, Wine and snaps.",
-    "The full list: envh scan --help",
+    "caches, folders tagged with CACHEDIR.TAG), build output (.next), editor extensions and plugins, Flatpak apps' data,",
+    "browser and mail profiles, Steam, Wine and snaps. The full list: envh scan --help",
 )
 CACHE_TAG = "CACHEDIR.TAG"
 CACHE_TAG_SIGNATURE = b"Signature: 8a477f597d28d172789f06886806bc55"
