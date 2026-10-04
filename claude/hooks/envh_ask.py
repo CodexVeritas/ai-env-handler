@@ -88,7 +88,7 @@ def classify_invocation(rest: str, whole_command: str) -> tuple[str, str] | None
     if RUN_FORM.match(rest):
         if has_session_flag(segment(rest)) or SESSION_PREFIX.search(whole_command):
             return None
-        return "ask", "envh: running with secrets outside a session prompts on the envh console for every run; approve here first"
+        return "ask", "envh: running one command with secrets; approve it on the envh console with your vault passphrase"
     return "ask", "envh: unrecognized way of invoking envh; approve only if you understand exactly what it does"
 
 

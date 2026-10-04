@@ -34,6 +34,12 @@ session 3f9c... approved, expires 15:02:11
 envh run --session 3f9c... --reason "fetch" -- uv run python scripts/research.py
 ```
 
+**Only one command, or want to approve every request?** Skip the session. `envh run` without one asks the console for that single run:
+
+```bash
+envh run --preset weekly-report --reason "fetch" -- uv run python scripts/research.py
+```
+
 ## Install
 
 Open a terminal window of its own (not a terminal inside an AI tool) and run:
@@ -158,14 +164,19 @@ The scan stays separate from the import wizard on purpose: the wizard moves valu
 
 ```bash
 envh list                                                        # secrets (names, policy), presets, live sessions
+
+# one command, one approval
+envh run --preset news-bot-personal --reason "backfill" -- uv run python scripts/backfill.py
+
+# several commands, one approval
 envh session start news-bot-personal --minutes 120 --reason "backfill articles"
 envh run --session <id> --reason "backfill" -- uv run python scripts/backfill.py
 envh session end <id>
 ```
 
+- `envh run` without a session asks the console for that one run and waits for your answer, then runs the command. It is the way to approve every request, and the only way to use secrets marked `per-run`, which sessions never cover.
 - A session is approved once; every `envh run --session` inside it is approved instantly and logged. The session lasts the minutes you asked for, capped by each secret's `max_session` and by 24 hours.
 - `export ENVH_SESSION=<id>` lets you omit `--session`. `envh session start ... --quiet` prints only the id.
-- `envh run` without a session prompts on the console for that one run.
 - `--with` narrows a run to some of the session's variables, or maps variables ad hoc: `--with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY`.
 - `--reason` is optional but the console shows its absence loudly. Write what you would want to read before approving.
 - A running command is never killed when its session expires; expiry only stops new approvals. When the command itself exits, any process it left running is terminated so the values do not outlive the run (`--keep-background` to opt out).
@@ -220,7 +231,7 @@ On the console, requests appear on their own, one at a time: type the vault pass
 
 Copy the pieces under `claude/`:
 
-- `claude/skills/envh/SKILL.md` → `~/.claude/skills/envh/SKILL.md` (or a project's `.claude/skills/envh/`). It teaches the agent the session flow, to always give a reason, what to do when refused, and a list of things it must never do.
+- `claude/skills/envh/SKILL.md` → `~/.claude/skills/envh/SKILL.md` (or a project's `.claude/skills/envh/`). It teaches the agent to run one command directly and to start a session only for several, to always give a reason, what to do when refused, and a list of things it must never do.
 - `claude/hooks/envh_ask.py` plus the hooks block from `claude/settings.snippet.json` → your `settings.json`. The hook turns `envh session start`, `envh preset propose`, `envh import` and session-less `envh run` into in-app "ask" prompts, so you are notified exactly when the console needs you, and it denies `sudo`, `su`, `doas` or `pkexec` wherever the shell would run them; a mention as data, such as a quoted argument or a commit message, passes. It fails closed: `envh` reached through `&&` chains, subshells, `bash -c`, interpreter one-liners, or a path prefix also asks, as does any invocation it does not recognize. Prefer rules only? The snippet has that variant too, with the caveat that plain rules match only the start of a command.
 
   A hook sees only the command string. A script file or a variable-built command can get around it, which is why nothing depends on it: a disguised session-less run still prompts on the envh console, and a disguised session start still needs your passphrase typed there. The hook is attention and a second chance to deny; the console is the boundary.
