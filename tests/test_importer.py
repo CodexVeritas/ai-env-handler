@@ -13,6 +13,7 @@ from envh.tools.importer import (
     discover,
     looks_secret,
     parse_env_text,
+    review_classification,
     review_names,
     review_presets,
     rewrite_text,
@@ -271,3 +272,35 @@ def test_renaming_a_preset_onto_a_taken_name_is_refused() -> None:
     presets = review_presets(build_presets([parsed], decisions), [parsed], lambda prompt: next(answers), said.append)
     assert list(presets) == ["news-bot-team", "news-bot-personal"]
     assert "  news-bot-personal is already taken" in said
+
+
+def test_names_typed_twice_count_once_at_every_prompt() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    flags = review_classification([parsed], lambda prompt: "LOG_LEVEL, LOG_LEVEL", lambda line: None)
+    assert flags[(parsed.path, 1)] is True
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    answers = iter(["news-bot-personal, news-bot-personal", ""])
+    presets = review_presets(build_presets([parsed], decisions), [parsed], lambda prompt: next(answers), lambda line: None)
+    assert list(presets) == ["news-bot-team"]
+
+
+def test_one_preset_renamed_two_ways_is_refused() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    answers = iter(["", "news-bot-team=work, news-bot-team=home", "news-bot-team=work"])
+    said: list[str] = []
+    presets = review_presets(build_presets([parsed], decisions), [parsed], lambda prompt: next(answers), said.append)
+    assert list(presets) == ["work", "news-bot-personal"]
+    assert "  news-bot-team is renamed twice; give it one new name" in said
+
+
+def test_a_comment_holding_a_key_is_never_a_group_name() -> None:
+    text = "# Team Mode\nTEAM_TOKEN=fake-team-1234567890\n# old key: sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAA\nOPENAI_API_KEY=fake-value-123456789\n# postgres://user:fakepass123@db/x\nDB_PASSWORD=fake-db-1234567890\n"
+    parsed = parse_env_text(Path("/code/myproj/.env"), text)
+    assert parsed.groups == ["Team Mode"]
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    names = [decision.secret_name for decision in decisions]
+    assert names == ["MYPROJ_TEAM_TEAM_TOKEN", "MYPROJ_TEAM_OPENAI_API_KEY", "MYPROJ_TEAM_DB_PASSWORD"]
+    said: list[str] = []
+    review_classification([parsed], lambda prompt: "", said.append)
+    assert not any("sk-proj" in line or "fakepass" in line for line in said)

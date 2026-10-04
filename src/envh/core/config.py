@@ -11,14 +11,13 @@ from typing import Any
 
 import yaml
 
+from envh.common import PRESET_NAME, SECRET_NAME
 from envh.core.durations import MAX_SESSION, DurationError, format_duration, parse_duration
 
 CONFIG_FILE = "config.yaml"
 PRESETS_FILE = "presets.yaml"
 APPROVALS = ("session", "per-run")
-SECRET_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-PRESET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 CONFIG_TEMPLATE = """# envh policy. Secrets not listed here get the defaults.
 users: [{user}]          # login names allowed to talk to the broker; sessions belong to the user who opened them

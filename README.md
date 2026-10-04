@@ -116,7 +116,7 @@ Import one project now and others whenever you like; an import never overwrites 
 The wizard walks through six steps and writes nothing until the last one:
 
 1. **Files.** Lists every `.env` and `.env.*` found (not `.env.example`); choose all or some.
-2. **Contents.** Parses active lines and commented-out assignments, and treats comment headers as **groups**. A file like this
+2. **Contents.** Parses active lines and commented-out assignments, and treats comment headers as **groups**. A comment holding a long token that is not a word, such as a key, is never taken for a header, so it is not printed or built into names; it stays in the file, and `envh scan` reports it. A file like this
 
    ```
    GITHUB_TOKEN=...
