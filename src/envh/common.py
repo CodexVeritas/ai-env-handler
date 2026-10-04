@@ -11,7 +11,7 @@ _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 def fingerprint(value: str) -> str:
     digest = hashlib.sha256(value.encode()).hexdigest()[:6]
     head = value[:4] if len(value) > 8 else value[:1]
-    return f"{head}…{digest} ({len(value)} chars)"
+    return f"{head}… ({len(value)} chars, id {digest})"
 
 
 def printable(text: str) -> str:
