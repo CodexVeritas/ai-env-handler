@@ -24,8 +24,6 @@
         "Bash(envh import *)"
       ],
       "deny": [
-        "Bash(sudo *)",
-        "Bash(su *)",
         "Read(**/.env)",
         "Read(**/.env.*)"
       ]

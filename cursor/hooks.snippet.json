@@ -6,7 +6,7 @@
       {
         "command": "python3 /ABSOLUTE/PATH/TO/envh_ask.py",
         "timeout": 10,
-        "matcher": "envh|sudo|su|doas|pkexec"
+        "matcher": "envh"
       }
     ]
   }
