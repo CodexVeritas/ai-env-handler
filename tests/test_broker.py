@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 
 import pytest
@@ -117,8 +118,8 @@ def test_list_payload_and_fingerprint(harness: Harness) -> None:
     assert team_preset["max_session"] == "1h"
     assert all(entry["in_vault"] for entry in team_preset["env"])
     assert "sk-openai" not in str(payload)
-    assert fingerprint("sk-proj-abcdefghijkl").startswith("sk-p…")
-    assert fingerprint("short") == f"s…{fingerprint('short').split('…')[1]}"
+    assert re.fullmatch(r"sk-p… \(20 chars, id [0-9a-f]{6}\)", fingerprint("sk-proj-abcdefghijkl"))
+    assert re.fullmatch(r"s… \(5 chars, id [0-9a-f]{6}\)", fingerprint("short"))
 
 
 async def test_approval_refuses_a_stale_presets_snapshot(harness: Harness) -> None:
