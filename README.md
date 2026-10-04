@@ -116,7 +116,7 @@ Import one project now and others whenever you like; an import never overwrites 
 The wizard walks through six steps and writes nothing until the last one:
 
 1. **Files.** Lists every `.env` and `.env.*` found (not `.env.example`); choose all or some.
-2. **Contents.** Parses active lines and commented-out assignments, and treats comment headers as **groups**. A file like this
+2. **Contents.** Parses active lines and commented-out assignments, and treats comment headers as **groups**. A comment holding a long token that is not a word, such as a key, is never taken for a header, so it is not printed or built into names; it stays in the file, and `envh scan` reports it. A file like this
 
    ```
    GITHUB_TOKEN=...
@@ -133,8 +133,8 @@ The wizard walks through six steps and writes nothing until the last one:
 
    has a base group (`GITHUB_TOKEN`, `LOG_LEVEL`) and two mode groups. Each variable is classified as secret or config by its name and value; you can flip any.
 3. **Names.** Secrets get vault names that start with the project: `NEWS_BOT_GITHUB_TOKEN`, `NEWS_BOT_TEAM_OPENROUTER_API_KEY`, `NEWS_BOT_PERSONAL_OPENROUTER_API_KEY`, and so on. Identical values share one entry, across projects and with keys already in the vault. Rename anything.
-4. **Presets.** One preset per group, named `<repo>-<group>` (`news-bot-team`, `news-bot-personal`), each containing the base variables plus the group's. A repo without groups gets one preset named after it. Rename or drop presets.
-5. **Plan.** Secrets to store (names and fingerprints only), presets in full, and a diff per file: secret lines become `# VAR -> envh secret NAME (presets: ...)`, headers and config lines stay as they are. Choose per file whether to rewrite it.
+4. **Presets.** One preset per group, named `<repo>-<group>` (`news-bot-team`, `news-bot-personal`), each containing the base variables plus the group's. A repo without groups gets one preset named after it. Drop presets, then rename them, both by the names listed.
+5. **Plan.** Secrets to store (names and fingerprints only), presets in full, and per file the lines that change, shown as they will read: each secret line becomes `# VAR -> envh secret NAME (presets: ...)`. The old lines are not shown, since they hold the values. Headers and config lines stay as they are. Choose per file whether to rewrite it.
 6. **Apply.** The console shows the same summary and asks for your vault passphrase. Then each original file is backed up and the files are rewritten.
 
 **The backup.** Before rewriting, the wizard copies each original file into a new folder, `~/.local/state/envh/import-backups/<date-time>/` (under `$XDG_STATE_HOME` if you set it), at its full path: `/home/you/code/bot/.env` is backed up as `.../<date-time>/home/you/code/bot/.env`. The folder is mode 0700 and the wizard prints its exact path, with the command to delete it. The copies hold the old values in plaintext, readable by anything running as you, just as the original files were. So once the rewritten files work, delete the folder (`rm -r ~/.local/state/envh/import-backups/<date-time>`). `envh scan ~` keeps reporting it until you do.

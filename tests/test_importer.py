@@ -13,8 +13,11 @@ from envh.tools.importer import (
     discover,
     looks_secret,
     parse_env_text,
+    review_classification,
     review_names,
+    review_presets,
     rewrite_text,
+    show_plan,
     slugify_header,
     suggest_secret_names,
     unquote,
@@ -234,3 +237,70 @@ def test_names_the_vault_chose_reach_presets_and_files(tmp_path: Path) -> None:
     apply_renames(plan, {"NEWS_BOT_OPENAI_API_KEY": "NEWS_BOT_OPENAI_API_KEY_2"})
     assert plan.presets["news-bot"]["env"] == {"OPENAI_API_KEY": "NEWS_BOT_OPENAI_API_KEY_2"}
     assert plan.rewrites[env_path] == "# OPENAI_API_KEY -> envh secret NEWS_BOT_OPENAI_API_KEY_2 (presets: news-bot)\n"
+
+
+def test_the_plan_shows_the_new_lines_and_never_a_value() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    plan = build_plan([parsed], decisions, build_presets([parsed], decisions))
+    said: list[str] = []
+    show_plan(plan, [parsed], Path("/backups"), said.append)
+    output = "\n".join(said)
+    for original in ("gh-token-1234567890", "pw@localhost", "sk-or-team-000000", "an-team-000000", "sk-or-personal-1111111", "an-personal-1111111", "LOG_LEVEL=info"):
+        assert original not in output
+    assert "line 1    # GITHUB_TOKEN -> envh secret NEWS_BOT_GITHUB_TOKEN (presets: news-bot-personal, news-bot-team)" in output
+    assert "line 11   # ASKNEWS_API_KEY -> envh secret NEWS_BOT_PERSONAL_ASKNEWS_API_KEY (presets: news-bot-personal)" in output
+
+
+def test_presets_are_dropped_then_renamed_by_their_listed_names() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    answers = iter(["nope", "news-bot-personal", "news-bot-team=Bad Name", "news-bot-team=news"])
+    said: list[str] = []
+    presets = review_presets(build_presets([parsed], decisions), [parsed], lambda prompt: next(answers), said.append)
+    assert list(presets) == ["news"]
+    assert "  no preset named nope; use the names listed above" in said
+    assert "  Bad Name: preset names use lowercase letters, digits, and . _ -" in said
+    assert said[-1] == "  presets now: news"
+
+
+def test_renaming_a_preset_onto_a_taken_name_is_refused() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    answers = iter(["", "news-bot-team=news-bot-personal", ""])
+    said: list[str] = []
+    presets = review_presets(build_presets([parsed], decisions), [parsed], lambda prompt: next(answers), said.append)
+    assert list(presets) == ["news-bot-team", "news-bot-personal"]
+    assert "  news-bot-personal is already taken" in said
+
+
+def test_names_typed_twice_count_once_at_every_prompt() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    flags = review_classification([parsed], lambda prompt: "LOG_LEVEL, LOG_LEVEL", lambda line: None)
+    assert flags[(parsed.path, 1)] is True
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    answers = iter(["news-bot-personal, news-bot-personal", ""])
+    presets = review_presets(build_presets([parsed], decisions), [parsed], lambda prompt: next(answers), lambda line: None)
+    assert list(presets) == ["news-bot-team"]
+
+
+def test_one_preset_renamed_two_ways_is_refused() -> None:
+    parsed = parse_env_text(Path("/code/news-bot/.env"), NEWS_BOT_ENV)
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    answers = iter(["", "news-bot-team=work, news-bot-team=home", "news-bot-team=work"])
+    said: list[str] = []
+    presets = review_presets(build_presets([parsed], decisions), [parsed], lambda prompt: next(answers), said.append)
+    assert list(presets) == ["work", "news-bot-personal"]
+    assert "  news-bot-team is renamed twice; give it one new name" in said
+
+
+def test_a_comment_holding_a_key_is_never_a_group_name() -> None:
+    text = "# Team Mode\nTEAM_TOKEN=fake-team-1234567890\n# old key: sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAA\nOPENAI_API_KEY=fake-value-123456789\n# postgres://user:fakepass123@db/x\nDB_PASSWORD=fake-db-1234567890\n"
+    parsed = parse_env_text(Path("/code/myproj/.env"), text)
+    assert parsed.groups == ["Team Mode"]
+    decisions = suggest_secret_names([parsed], flags_for(parsed))
+    names = [decision.secret_name for decision in decisions]
+    assert names == ["MYPROJ_TEAM_TEAM_TOKEN", "MYPROJ_TEAM_OPENAI_API_KEY", "MYPROJ_TEAM_DB_PASSWORD"]
+    said: list[str] = []
+    review_classification([parsed], lambda prompt: "", said.append)
+    assert not any("sk-proj" in line or "fakepass" in line for line in said)
