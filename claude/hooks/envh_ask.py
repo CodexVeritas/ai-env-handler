@@ -38,7 +38,7 @@ RUN_OPTIONS_WITH_VALUE = {"--session", "--preset", "--with", "--reason"}
 SESSION_REASON = "envh: starting a secret session; approve it on the envh console with your vault passphrase"
 PROPOSE_REASON = "envh: proposing a preset change; review the diff on the envh console"
 IMPORT_REASON = "envh: importing secrets; this is an interactive wizard meant for a human"
-RUN_REASON = "envh: running with secrets outside a session prompts on the envh console for every run; approve here first"
+RUN_REASON = "envh: running one command with secrets; approve it on the envh console with your vault passphrase"
 UNREADABLE_REASON = "envh: this command's quoting could not be read, and it may start an envh request that needs your passphrase"
 
 
