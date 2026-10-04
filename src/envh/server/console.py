@@ -325,8 +325,8 @@ class Console:
     def _rename(self, view: KeyList, rename: Rename) -> None:
         try:
             self.broker.rename_secret(rename.old, rename.new)
-        except (RequestError, ConfigError, VaultError) as error:
-            view.tell(str(error))
+        except (RequestError, ConfigError, VaultError, OSError) as error:
+            view.tell(f"Nothing renamed: {error}")
             return
         view.renamed(self._key_rows(), rename.new)
 
