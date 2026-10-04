@@ -410,12 +410,12 @@ def install_as_root(argv: list[str]) -> int:
         staging = Path(scratch) / "source"
         stage_build_files(staging)
         detail(f"Copied the source to a root-only folder: {staging}")
-        problems = system_problems(staging / "src", invoking_user)
-        if problems and not args.ignore_preflight:
+        if not args.ignore_preflight:
+            problems = system_problems(staging / "src", invoking_user)
             for problem in problems:
                 warn(problem)
-            return PREFLIGHT_EXIT
-        if not problems:
+            if problems:
+                return PREFLIGHT_EXIT
             ok("System checks passed")
         build_environment(uv, staging, INSTALL_PREFIX)
     detail(f"Built {INSTALL_PREFIX / 'env'} with {uv}: Python 3.12 and the versions pinned in uv.lock")
@@ -428,8 +428,7 @@ def install_as_root(argv: list[str]) -> int:
     link_envh_bin(INSTALL_PREFIX / "env" / "bin" / "envh")
     detail(f"Linked {ENVH_BIN}")
     ok("envh built")
-    install_flags = [flag for flag, wanted in (("--verbose", verbose), ("--ignore-preflight", args.ignore_preflight)) if wanted]
-    return subprocess.run([str(ENVH_BIN), "install", *install_flags]).returncode
+    return subprocess.run([str(ENVH_BIN), "install", *(["--verbose"] if verbose else []), *(["--ignore-preflight"] if args.ignore_preflight else [])]).returncode
 
 
 def step_console() -> Outcome:

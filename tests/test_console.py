@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -109,9 +110,7 @@ async def test_a_withdrawn_request_discards_the_next_line_unread(harness: Harnes
 
 
 async def test_console_admin_add_rm_reload_quit(harness: Harness) -> None:
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, ConsoleOutput(said.append, said.append), tty_fd=None, phrase=PHRASE)
+    console, reader, said = new_console(harness)
     reader.feed_data(b"add NEW_SECRET\n")
     reader.feed_data(PASSPHRASE_LINE)
     reader.feed_data(b"super-secret-value\n")
@@ -153,9 +152,7 @@ async def test_requests_arriving_while_busy_are_shown_after(harness: Harness) ->
 
 
 async def test_edit_presets_validates_before_saving(harness: Harness, tmp_path: Path) -> None:
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, ConsoleOutput(said.append, said.append), tty_fd=None, phrase=PHRASE)
+    console, reader, said = new_console(harness)
     bad_editor = tmp_path / "bad_editor.sh"
     bad_editor.write_text("#!/bin/sh\nprintf 'presets: {broken: {env: {X: NOPE}}}\\n' > \"$1\"\n")
     good_editor = tmp_path / "good_editor.sh"
@@ -180,9 +177,7 @@ async def test_edit_presets_validates_before_saving(harness: Harness, tmp_path: 
 
 
 async def test_edit_config_discard_keeps_file(harness: Harness, tmp_path: Path) -> None:
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, ConsoleOutput(said.append, said.append), tty_fd=None, phrase=PHRASE)
+    console, reader, said = new_console(harness)
     editor = tmp_path / "editor.sh"
     editor.write_text(f"#!/bin/sh\nprintf 'users: [{ME}]\\ndefaults: {{approval: per-run}}\\n' > \"$1\"\n")
     os.chmod(editor, stat.S_IRWXU)
@@ -199,9 +194,7 @@ async def test_edit_config_discard_keeps_file(harness: Harness, tmp_path: Path) 
 
 
 async def test_unknown_editor_and_unexpected_errors_keep_console_alive(harness: Harness) -> None:
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, ConsoleOutput(said.append, said.append), tty_fd=None, phrase=PHRASE)
+    console, reader, said = new_console(harness)
     reader.feed_data(b"edit presets definitely-not-an-editor\n")
     reader.feed_data(b"help\n")
     reader.feed_data(b"quit\n")
@@ -222,9 +215,7 @@ async def test_render_request_neutralizes_control_characters(harness: Harness) -
 
 
 async def test_edit_config_without_users_is_rejected(harness: Harness, tmp_path: Path) -> None:
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, ConsoleOutput(said.append, said.append), tty_fd=None, phrase=PHRASE)
+    console, reader, said = new_console(harness)
     editor = tmp_path / "editor.sh"
     editor.write_text("#!/bin/sh\nprintf 'defaults: {approval: per-run}\\n' > \"$1\"\n")
     os.chmod(editor, stat.S_IRWXU)
@@ -240,9 +231,7 @@ async def test_edit_config_without_users_is_rejected(harness: Harness, tmp_path:
 
 
 async def test_add_is_audited_even_when_reload_fails(harness: Harness) -> None:
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, ConsoleOutput(said.append, said.append), tty_fd=None, phrase=PHRASE)
+    console, reader, said = new_console(harness)
     (harness.data_dir / "presets.yaml").write_text("presets: {broken: {env: {X: NOPE}}}\n")
     reader.feed_data(b"add NEW_ONE\n")
     reader.feed_data(PASSPHRASE_LINE)
@@ -272,9 +261,7 @@ async def test_passphrase_change_reencrypts_the_vault_and_takes_effect(harness: 
 
 
 async def test_rm_refuses_a_secret_that_presets_use(harness: Harness) -> None:
-    reader = asyncio.StreamReader()
-    said: list[str] = []
-    console = Console(harness.broker, reader, ConsoleOutput(said.append, said.append), tty_fd=None, phrase=PHRASE)
+    console, reader, said = new_console(harness)
     reader.feed_data(b"rm TEAM_OPENROUTER_KEY\n")
     reader.feed_data(b"quit\n")
     await asyncio.wait_for(console.run(), timeout=5)
@@ -328,9 +315,66 @@ async def test_requests_wait_while_the_keys_view_is_open_and_lines_are_held(harn
     await asyncio.sleep(console_module.KEYS_REFRESH_SECONDS + 0.2)
     assert any("1 request waiting" in text for text in said)
     reader.feed_data(b"\x1b")
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(console_module.ESCAPE_WAIT_SECONDS + 0.2)
     assert said.index("held line") > said.index(console_module.LEAVE_FULL_SCREEN)
     assert console.current is request
     reader.feed_data(b"n\nquit\n")
     await asyncio.wait_for(task, timeout=5)
     assert request.decision.result().outcome == "denied"
+
+
+async def test_a_rename_that_fails_after_saving_says_so_and_shows_the_new_name(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    console, reader, said = new_console(harness)
+
+    def renames_then_fails(old: str, new: str) -> None:
+        harness.broker.vault.rename(old, new)
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(harness.broker, "rename_secret", renames_then_fails)
+    reader.feed_data(b"\x1b[B\x1bOQ\x15my_openai\n" + PASSPHRASE_LINE)
+    view = asyncio.create_task(console.handle_line("keys\n"))
+    await asyncio.sleep(0.2)
+    assert "Renamed to MY_OPENAI, but: No space left on device" in said[-1]
+    assert "MY_OPENAI" in said[-1].split("Name")[1]
+    reader.feed_data(b"\x1b")
+    await asyncio.wait_for(view, timeout=5)
+
+
+async def test_keys_typed_after_esc_in_the_same_read_reach_the_waiting_request(harness: Harness) -> None:
+    console, reader, said = new_console(harness)
+    reader.feed_data(b"keys\n")
+    task = asyncio.create_task(console.run())
+    await asyncio.sleep(0.05)
+    request = run_request(harness)
+    reader.feed_data(b"\x1bn\n")
+    await asyncio.sleep(0.2)
+    assert request.decision.result().outcome == "denied"
+    reader.feed_data(b"quit\n")
+    await asyncio.wait_for(task, timeout=5)
+
+
+async def test_an_arrow_key_split_across_reads_moves_instead_of_leaving(harness: Harness) -> None:
+    console, reader, said = new_console(harness)
+    view = asyncio.create_task(console.handle_line("keys\n"))
+    await asyncio.sleep(0.05)
+    reader.feed_data(b"\x1b")
+    await asyncio.sleep(0.01)
+    reader.feed_data(b"[B")
+    await asyncio.sleep(0.2)
+    assert not view.done()
+    assert "› OPENAI_API_KEY" in re.sub(r"\x1b\[[0-9;]*m", "", said[-1])
+    reader.feed_data(b"\x1b")
+    await asyncio.wait_for(view, timeout=5)
+
+
+def test_held_output_keeps_the_newest_lines_and_tolerates_nesting() -> None:
+    printed: list[str] = []
+    output = ConsoleOutput(printed.append, printed.append)
+    with output.holding():
+        with output.holding():
+            output.say("inner")
+        for number in range(console_module.HELD_LINES_KEPT + 5):
+            output.say(f"line {number}")
+        assert printed == []
+    assert printed[0] == "(6 earlier lines were not kept; every audit event is in audit.jsonl)"
+    assert printed[1] == "line 5" and printed[-1] == f"line {console_module.HELD_LINES_KEPT + 4}"

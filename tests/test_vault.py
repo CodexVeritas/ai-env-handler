@@ -6,7 +6,7 @@ from pathlib import Path
 import pyrage.passphrase
 import pytest
 
-from envh.core.vault import Vault, VaultError, decrypt_secrets, encrypt_secrets
+from envh.core.vault import Vault, VaultError, decrypt_secrets, encrypt_secrets, write_private_file
 
 
 def test_round_trip(tmp_path: Path) -> None:
@@ -61,3 +61,12 @@ def test_stale_temp_file_does_not_block_saves(tmp_path: Path) -> None:
     (tmp_path / "vault.age.tmp").write_text("leftover")
     Vault.create(path, "pw")
     assert not (tmp_path / "vault.age.tmp").exists()
+
+
+def test_write_private_file_removes_its_temp_file_when_the_final_move_fails(tmp_path: Path) -> None:
+    target = tmp_path / "config.yaml"
+    target.mkdir()
+    (target / "inside").write_text("x")
+    with pytest.raises(OSError):
+        write_private_file(target, b"data")
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["config.yaml"]

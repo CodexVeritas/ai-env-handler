@@ -162,11 +162,11 @@ The scan stays separate from the import wizard on purpose: the wizard moves valu
 
 ## See and rename your keys
 
-Type `keys` in the console. Arrow keys move through your keys, each shown with the presets that use it. **F2** (or Enter) renames the selected key: type the new name, press Enter. The first rename asks for your vault passphrase; later renames in the same visit do not. Esc goes back, and any request that arrived meanwhile is shown then.
+Type `keys` in the console. Arrow keys move through your keys, each shown with the presets that use it. **F2** renames the selected key: type the new name, press Enter. The first rename asks for your vault passphrase; later renames in the same visit do not. Esc goes back, and any request that arrived meanwhile is shown then. Other keys do nothing while you browse, so a passphrase typed there by mistake is dropped.
 
-A rename follows the key everywhere envh refers to it: the vault, its policy in `config.yaml` (your comments stay), presets, live sessions and waiting requests. Two things keep the old name: the `# VAR -> envh secret NAME` comments in `.env` files you imported, and any command or script that names the key itself (`--with VAR=OLD_NAME`).
+A rename follows the key everywhere envh refers to it: the vault, its policy in `config.yaml` (your comments stay), presets, live sessions and waiting requests. Two things keep the old name: the `# VAR -> envh secret NAME` comments in `.env` files you imported, and any command or script that names the key itself (`--with VAR=OLD_NAME`). A new name is refused while `config.yaml` still has a policy for it (left behind by `rm`; remove it with `edit config`), or while a live session or waiting request still uses it, since either would quietly attach to the renamed key.
 
-Asking once per visit costs a little: until you press Esc, something that can type into the console window could rename more keys without the passphrase (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)). It cannot read or change a value that way.
+Asking once per visit costs a little: until you press Esc, something that can type into the console window could rename more keys without the passphrase (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)). It cannot read a value that way, but by swapping two names it can change which key a name refers to, and so which value a command naming that key receives.
 
 ## Daily use
 
@@ -320,7 +320,7 @@ Please report privately, not in a public issue. See [SECURITY.md](SECURITY.md).
 
 The wizard's install step asks for sudo once, and runs `sudo -k` afterwards so the terminal forgets it. If root has no `uv` of its own, the wizard first offers to install one into `/usr/local/bin` with astral.sh's installer (a `uv` in your home folder could be swapped by anything running as you before root runs it); you can use your own instead, at that risk.
 
-As root, it copies the source files from your clone to a root-only folder and checks the system there. It stops where a process running as you could become root: it needs Linux 6.2 or newer with Yama, `sudo` that asks for a password (no `NOPASSWD` rules for you), and your user outside root-granting groups such as `docker`. Each problem says how to fix it; you can continue anyway after checking each one yourself. It warns on X11. `envh install` runs the same checks again, so running it directly also refuses on a problem unless you pass `--ignore-preflight`.
+As root, it copies the source files from your clone to a root-only folder and checks the system there. It stops where a process running as you could become root: it needs Linux 6.2 or newer with Yama, `sudo` that asks for a password (no `NOPASSWD` rules for you), and your user outside root-granting groups such as `docker`. Each problem says how to fix it; you can continue anyway after checking each one yourself. It warns on X11. `envh install` runs the same checks again, so running it directly also refuses on a problem unless you pass `--ignore-preflight` (which then says how many it ignored). Run it with `sudo` from your own account: from a plain root shell it cannot tell whose account to check, so it refuses.
 
 Then it builds `/opt/envh` from that copy: Python 3.12 in `/opt/envh/python`, envh in `/opt/envh/env`, and the commit it came from in `/opt/envh/installed-from`. It links `/usr/local/bin/envh` and runs `envh install` (`sudo envh install --dry-run` lists its changes), which:
 
