@@ -58,15 +58,6 @@ def run_hook(command: str, tool: str = "Bash") -> dict | None:
         ('envh run --with A --reason "no --session here" -- true', "ask"),
         ("envh run --session-file x --with A -- true", "ask"),
         ("envh run --session=abc -- true", None),
-        # privilege escalation is denied however it is spelled
-        ("sudo apt install x", "deny"),
-        ("ls && sudo -n true", "deny"),
-        ("TERM=dumb sudo -n ls", "deny"),
-        ("/usr/bin/sudo -n ls", "deny"),
-        ("bash -c 'sudo -n ls'", "deny"),
-        ("su - root", "deny"),
-        ("pkexec cat /etc/shadow", "deny"),
-        ("envh list && sudo -k", "deny"),
         # innocents
         ("echo sudoku", None),
         ("cat docs/su/notes.md", None),
@@ -83,6 +74,145 @@ def test_hook_decisions(command: str, expected: str | None) -> None:
         assert output is not None, command
         assert output["permissionDecision"] == expected
         assert output["hookEventName"] == "PreToolUse"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # at the start of a command, after any operator or keyword
+        "sudo apt install x",
+        "su - root",
+        "doas ls",
+        "pkexec cat /etc/shadow",
+        "ls && sudo -n true",
+        "envh list && sudo -k",
+        "ls || sudo ls",
+        "ls; sudo ls",
+        "ls | sudo tee /etc/x",
+        "ls |& sudo tee /etc/x",
+        "sleep 1 & sudo ls",
+        "ls\nsudo ls",
+        "true && \\\n  sudo ls",
+        "(sudo ls)",
+        "if sudo -n true; then ls; fi",
+        "if true; then ls; else sudo ls; fi",
+        "while true; do sudo ls; done",
+        "! sudo ls",
+        "{ sudo ls; }",
+        "f() { sudo ls; }; f",
+        "function f { sudo ls; }; f",
+        "case x in x) sudo ls;; esac",
+        # however the name is spelled
+        "/usr/bin/sudo -n ls",
+        "./sudo ls",
+        '"sudo" ls',
+        "s\\udo ls",
+        'su""do ls',
+        "\\sudo ls",
+        "$'sudo' ls",
+        "su\\\ndo ls",
+        # behind assignments, redirections and wrappers
+        "TERM=dumb sudo -n ls",
+        "A=1 B=2 sudo ls",
+        ">out sudo ls",
+        "2>/dev/null sudo ls",
+        "env sudo ls",
+        "env -i PATH=/usr/bin sudo ls",
+        "env -u HOME sudo ls",
+        "nice -n 10 sudo ls",
+        "nohup sudo ls &",
+        "xargs sudo rm",
+        "xargs -0 -n1 sudo rm",
+        "xargs -I {} sudo cp {} /etc/",
+        "exec sudo ls",
+        "time -p sudo ls",
+        "command sudo ls",
+        "timeout -s KILL 5s sudo ls",
+        "stdbuf -oL sudo journalctl -f",
+        "setsid sudo ls",
+        "nohup env FOO=1 nice sudo ls",
+        "find . -exec sudo rm {} \\;",
+        # inside text a shell runs
+        "echo $(sudo ls)",
+        "echo `sudo ls`",
+        'echo "$(sudo ls)"',
+        'git commit -m "run `sudo ls`"',
+        "x=$(sudo ls)",
+        "arr=(a $(sudo ls) b)",
+        "diff <(sudo cat /etc/shadow) /dev/null",
+        "cat <<EOF\n$(sudo ls)\nEOF",
+        "cat <<EOF\nrun `sudo ls`\nEOF",
+        "bash -c 'sudo -n ls'",
+        'sh -c "cd /tmp && sudo ls"',
+        "bash -lc 'sudo ls'",
+        "eval 'sudo ls'",
+        "eval sudo ls",
+        "ssh host sudo reboot",
+        "ssh -p 22 host 'sudo reboot'",
+        "ssh host <<'EOF'\nsudo reboot\nEOF",
+        "bash <<'EOF'\nsudo ls\nEOF",
+        "bash <<< 'sudo ls'",
+        "xargs sh -c 'sudo ls'",
+        "find . -name x -execdir sh -c 'sudo rm \"$1\"' _ {} \\;",
+        # after a comment or a heredoc ends
+        "# what's next\nsudo ls",
+        "cat <<'EOF'\nsudo in a body\nEOF\nsudo ls",
+        "cat <<-EOF\n\tsudo in a body\n\tEOF\nsudo ls",
+        "x=$(cat <<EOF\nbody\nEOF); sudo ls",
+    ],
+)
+def test_hook_denies_privilege_escalation_where_the_shell_would_run_it(command: str) -> None:
+    output = run_hook(command)
+    assert output is not None, command
+    assert output["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # arguments, quoted or not
+        'grep -n "sudo" README.md',
+        "grep -n sudo README.md",
+        "grep -rn 'sudo\\|doas' .",
+        'echo "use sudo to install"',
+        "printf '%s\\n' \"su - root\"",
+        "echo 'a; sudo ls'",
+        "echo hi > sudo",
+        "./sudo.sh",
+        "which sudo",
+        "command -v sudo",
+        "for name in sudo su doas pkexec; do echo $name; done",
+        "words=(sudo su doas pkexec); echo ${words[@]}",
+        "case $x in sudo) echo hi;; esac",
+        "time grep -rn sudo .",
+        'git ls-files | xargs grep -n "sudo"',
+        "find . -exec grep -l sudo {} +",
+        "sed -i 's/sudo/doas/g' README.md",
+        "ls # sudo would be wrong here",
+        # heredocs and commit messages
+        "python3 - <<'EOF'\ntext = text.replace(\"sudo\", \"doas\")\nEOF",
+        "cat <<EOF\nNever run sudo here\nsudo ls\nEOF",
+        "cat <<'EOF' > notes.md\nRun `sudo envh-console`\nEOF",
+        'git commit -m "Deny sudo only in command position"',
+        "git commit -m \"$(cat <<'EOF'\nFix: sudo; su && pkexec | doas\n\n(sudo) `sudo`\nEOF\n)\" && git push",
+        'gh pr create --title "Hook: allow sudo as data" --body "Stops blocking \\`grep sudo\\`."',
+        # strings a shell runs, where the word is still data
+        "bash -c 'grep -n sudo README.md'",
+        'bash -c "echo \\"sudo\\""',
+        "ssh host 'grep sudo /etc/group'",
+        "python3 -c 'print(\"sudo\")'",
+    ],
+)
+def test_hook_allows_privilege_words_as_data(command: str) -> None:
+    assert run_hook(command) is None
+
+
+def test_hook_falls_back_to_the_word_match_when_nested_too_deeply_to_parse() -> None:
+    nested = "echo " + "$(" * 3000 + "{} ls" + ")" * 3000
+    assert run_hook(nested.format("true")) is None
+    output = run_hook(nested.format("sudo"))
+    assert output is not None
+    assert output["permissionDecision"] == "deny"
 
 
 def test_hook_ignores_other_tools() -> None:
