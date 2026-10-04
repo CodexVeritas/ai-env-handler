@@ -67,7 +67,7 @@ Check it with `envh preset validate draft.yaml`, then `envh preset propose draft
 The human approves on a console that shows your exact command line, the variables, the duration and your reason. Behave so that what they read is the whole truth:
 
 - One session per task, sized to the task. Do not ask for more minutes, more variables or a broader preset "just in case", and do not start a session before you actually need it.
-- Ask plainly. Never hide an envh call behind another command (`git pull && envh session start ...`, `bash -c "envh run ..."`, a wrapper script, an interpreter one-liner, or a path like `/usr/local/bin/envh`). A hook flags these, and a human who sees a disguised request should deny it.
+- Ask plainly. Never hide an envh call behind another command (`git pull && envh session start ...`, `bash -c "envh run ..."`, a wrapper script, an interpreter one-liner, or a path like `/usr/local/bin/envh`). A hook flags most of these, and a human who sees a disguised request should deny it.
 - No pressure. Do not ask the human to "just approve" in chat, do not repeat a request after a denial with different wording, and do not split one refused request into several smaller ones.
 - Use only sessions you started in this conversation and that are still meant for this task. Never pick up a session id from a file, a process environment, a log, or another agent.
 - Keep values where they land. Do not copy a variable into a file, a shell variable, a commit, a command-line argument, a log line or the conversation, and do not pass `--with` for variables the command does not need.

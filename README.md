@@ -49,7 +49,7 @@ git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
 python3 scripts/setup_wizard.py
 ```
 
-The wizard walks through five short steps and asks before each change. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
+The wizard walks through six short steps and asks before each change. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
 
 Later, run it again to upgrade (after `git pull`) or to import more projects.
 
@@ -229,15 +229,29 @@ On the console, requests appear on their own, one at a time: type the vault pass
 
 ## Using it with Claude Code
 
-Copy the pieces under `claude/`:
+The wizard's "Connect Claude Code" step does this for you, and says so when a rerun finds the copies out of date. By hand, copy the pieces under `claude/`:
 
 - `claude/skills/envh/SKILL.md` → `~/.claude/skills/envh/SKILL.md` (or a project's `.claude/skills/envh/`). It teaches the agent to run one command directly and to start a session only for several, to always give a reason, what to do when refused, and a list of things it must never do.
-- `claude/hooks/envh_ask.py` plus the hooks block from `claude/settings.snippet.json` → your `settings.json`. The hook turns `envh session start`, `envh preset propose`, `envh import` and session-less `envh run` into in-app "ask" prompts, so you are notified exactly when the console needs you, and it denies `sudo`, `su`, `doas` or `pkexec` wherever the shell would run them; a mention as data, such as a quoted argument or a commit message, passes. It fails closed: `envh` reached through `&&` chains, subshells, `bash -c`, interpreter one-liners, or a path prefix also asks, as does any invocation it does not recognize. Prefer rules only? The snippet has that variant too, with the caveat that plain rules match only the start of a command.
+- `claude/hooks/envh_ask.py` plus the hooks block from `claude/settings.snippet.json` → your `settings.json`. The hook asks in the app only when a command will make the console ask for your vault passphrase: `envh session start`, `envh preset propose`, `envh import` (not `--dry-run`) and `envh run` without a session. So you are notified exactly when the console needs you. It reads the command the way a shell does: `envh` counts after `&&`, `;`, a pipe or a newline, inside `$(...)`, backticks, `bash -c` or `eval`, behind `timeout`, `nohup`, `env` or `uv run`, and with a path prefix. `envh` in an argument, a quoted string, a comment or a heredoc body, such as a commit message, a `grep` or a README being written, is a mention and never asks. Only when the quoting can't be read at all does text that looks like one of those requests ask. The hook also denies `sudo`, `su`, `doas` or `pkexec` wherever the shell would run them, reading every argument of `bash -c`, `eval` or `ssh` and a heredoc fed to a shell as commands; a mention, such as a quoted argument or a commit message, passes. Prefer rules only? The snippet has that variant too, with the caveat that plain rules match only the start of a command.
 
-  A hook sees only the command string. A script file or a variable-built command can get around it, which is why nothing depends on it: a disguised session-less run still prompts on the envh console, and a disguised session start still needs your passphrase typed there. The hook is attention and a second chance to deny; the console is the boundary.
+  A hook sees only the command string. A script file, an interpreter one-liner (`python -c "subprocess.run(['envh', ...])"`) or a variable-built command can get around it, which is why nothing depends on it: a disguised session-less run still prompts on the envh console, and a disguised session start still needs your passphrase typed there. The hook is attention and a second chance to deny; the console is the boundary.
 - `claude/CLAUDE.snippet.md` → three lines for a project's `CLAUDE.md`.
 
 Agents can draft presets: they write a YAML file, run `envh preset validate draft.yaml`, then `envh preset propose draft.yaml --reason "..."`; you see a diff on the console and decide. They cannot edit the files.
+
+## Using it with Cursor
+
+The wizard's "Connect Cursor" step does this for you, and says so when a rerun finds the copies out of date. Cursor uses the same skill and hook as Claude Code. By hand:
+
+- `claude/skills/envh/SKILL.md` → `~/.cursor/skills/envh/SKILL.md` (or a project's `.cursor/skills/envh/`).
+- `claude/hooks/envh_ask.py` → `~/.cursor/hooks/envh_ask.py`, plus the block from `cursor/hooks.snippet.json` → `~/.cursor/hooks.json`. The hook reads Cursor's `beforeShellExecution` format and makes the same decisions as in Claude Code. The matcher keeps Cursor from starting it for commands that mention none of `envh`, `sudo`, `su`, `doas` or `pkexec`.
+
+What differs from Claude Code:
+
+- **Cursor's ask is less reliable than its deny.** Cursor has been [reported](https://forum.cursor.com/t/beforeshellexecution-hook-permissions-allow-ask-ignored-allow-list-takes-precedence/144244) to skip a hook's ask for a command on its own allowlist. The deny for `sudo` holds. As with Claude Code, nothing depends on the hook: the console still asks.
+- **The hook never answers "allow".** In Cursor an allow can skip Cursor's own approval of a command. For commands it has no opinion on, such as `envh list`, it prints nothing; Cursor logs that as a hook failure, which does not block the command.
+- **No rules file.** Cursor keeps user rules in its settings, so there is no counterpart to the `CLAUDE.md` lines. The skill carries the same instructions.
+- **Cursor also reads Claude Code's setup.** With its "Third-Party Imports" setting on (the default), Cursor loads `~/.claude/skills` and the hooks in `~/.claude/settings.json` too. It does not act on an ask from a Claude Code hook, which is why Cursor gets its own hook entry. The two skill copies are identical.
 
 ## Habits that keep this safe
 
@@ -252,7 +266,7 @@ Agents can draft presets: they write a YAML file, run `envh preset validate draf
 
 ## Who else can see and type into the console
 
-The console is only as safe as the screen you read it on and the keyboard you type into it. On an ordinary desktop, three things let a program running as you reach both. An agent that gets past the Claude Code hook, or never meets it, can use them.
+The console is only as safe as the screen you read it on and the keyboard you type into it. On an ordinary desktop, three things let a program running as you reach both. An agent that gets past the Claude Code or Cursor hook, or never meets it, can use them.
 
 - **An X11 session** (`echo $XDG_SESSION_TYPE` prints `x11`). Every program running as you can read any window, record every key you type, and type into any window. It can record the vault passphrase, and your sudo password, as you enter them, and then type the passphrase into the console itself. With your sudo password it has root, and root beats envh.
 - **Write access to `/dev/uinput`.** It lets a program create a virtual keyboard that types into whatever has focus: X11, Wayland and text consoles alike. Some udev rules give it to the logged-in user, for example Steam's `60-steam-input.rules`; `getfacl /dev/uinput` then shows a `user:<you>` line. To remove it, override the rule with a file of the same name in `/etc/udev/rules.d` without the uinput line, then reboot. Typing blind, it does not know the passphrase; the pause after each wrong attempt keeps it from guessing.
@@ -262,7 +276,7 @@ What does not fix it:
 
 - **The passphrase, on X11.** It stops anything that can type but cannot see or record, such as a virtual keyboard on Wayland or a text console. On X11, a program running as you can record it the first time you type it, and approve on its own after that. If that may have happened, change it with `passphrase` from a text console.
 - **One-time codes** (backup codes, an authenticator app). A recorded code cannot be replayed. But a program that can draw over and type into your windows can show you a fake request, or change the request as you type, so your code approves its request.
-- **The Claude Code hook.** It sees only the command text, so a few lines of Python that talk to the display get past it, and so does a script file. It also covers only Claude Code's Bash tool, not MCP servers, other agents, or a package inside a script you run.
+- **The Claude Code or Cursor hook.** It sees only the command text, so a few lines of Python that talk to the display get past it, and so does a script file. It also covers only the agent's shell commands, not MCP servers, other agents, or a package inside a script you run.
 
 What does:
 
@@ -312,7 +326,7 @@ The wizard refuses to run inside Claude Code, but it cannot tell when another AI
 
 envh never runs from your clone. Your agents can edit the clone, and the console runs the code that holds your keys, so that code must live where only root can change it.
 
-**Upgrade:** `git pull` in your clone and run the wizard again. It asks before updating (`?` shows the installed commit next to the clone's), and asks again if the clone has uncommitted changes, since root installs those too. The vault, its passphrase and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then.
+**Upgrade:** `git pull` in your clone and run the wizard again. It asks before updating (`?` shows the installed commit next to the clone's), and asks again if the clone has uncommitted changes, since root installs those too. The vault, its passphrase and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then. The last two steps then compare the skill and hook copies for Claude Code and Cursor with the clone, and say if they are out of date. Copies you made by hand somewhere else, such as in a project, you update yourself.
 
 **Uninstall:** `sudo envh uninstall` keeps the vault; `sudo envh uninstall --purge` deletes it too.
 
