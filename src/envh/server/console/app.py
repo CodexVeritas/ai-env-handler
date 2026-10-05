@@ -121,6 +121,7 @@ class ConsoleApp:
             card.problem = str(error)
             return
         self.card = None
+        self.changed()
         self.tell(f"Approved #{request.id}.", "ok")
         self.present()
 
@@ -270,8 +271,7 @@ class ConsoleApp:
         lock them; clear a copied value from the clipboard; close dialogs whose time is up."""
         self._lock_on_time()
         if self._clear_clipboard_at and self.clock() >= self._clear_clipboard_at:
-            self._clear_clipboard_at = 0.0
-            self._write("\x1b]52;c;\a")
+            self._clear_clipboard()
         for dialog in [dialog for dialog in self.dialogs if dialog.expired()]:
             self.close(dialog)
         if self.card is not None and not self.card.withdrawn:
@@ -286,6 +286,15 @@ class ConsoleApp:
         elif self.clock() >= self._reminder[1]:
             self.ring()
             self._reminder = (target, self.clock() + next(self._reminder[2]), self._reminder[2])
+
+    def _clear_clipboard(self) -> None:
+        """Ask the terminal to empty the clipboard a copy filled. A terminal that has gone away can't be asked; that is
+        logged."""
+        self._clear_clipboard_at = 0.0
+        try:
+            self._write("\x1b]52;c;\a")
+        except OSError as error:
+            self.broker.audit.event("error", where="console", detail=f"could not clear the clipboard: {error}")
 
     def _lock_on_time(self) -> None:
         if not self.unlocked_until:
@@ -403,5 +412,7 @@ class ConsoleApp:
         finally:
             if reading is not None:
                 reading.cancel()
+            if self._clear_clipboard_at:
+                self._clear_clipboard()
             self.terminal = None
             self.stop()

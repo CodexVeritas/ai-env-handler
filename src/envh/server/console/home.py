@@ -45,7 +45,8 @@ def lock(app: ConsoleApp) -> None:
 
 
 def reload(app: ConsoleApp) -> None:
-    app.broker.reload()
+    if not app.attempt(app.broker.reload):
+        return
     app.changed()
     app.tell(f"Read config.yaml and presets.yaml again: {len(app.broker.config.presets)} presets.", "ok")
 

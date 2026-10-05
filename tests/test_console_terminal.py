@@ -5,23 +5,45 @@ import fcntl
 import os
 import struct
 import termios
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 from envh.server.console.activity import Activity
 from envh.server.console.app import ConsoleApp
 from envh.server.console.tui import ENTER_FULL_SCREEN, LEAVE_FULL_SCREEN, Terminal
 from tests.conftest import PASSPHRASE, Harness
 
-
-async def wait_for(output: bytearray, text: str, after: int = 0) -> int:
-    for _ in range(200):
-        found = output.decode(errors="replace").find(text, after)
-        if found >= 0:
-            return found
-        await asyncio.sleep(0.01)
-    raise AssertionError(f"{text!r} never appeared on the terminal")
+COPY_OF_DATABASE_URL = "\x1b]52;c;cG9zdGdyZXM6Ly94\a"
+CLEAR_CLIPBOARD = "\x1b]52;c;\a"
 
 
-async def test_the_console_runs_full_screen_and_puts_the_terminal_back(harness: Harness) -> None:
+@dataclass
+class Session:
+    app: ConsoleApp
+    master: int
+    output: bytearray
+    task: asyncio.Task[None]
+
+    async def wait_for(self, text: str) -> int:
+        for _ in range(200):
+            found = self.output.decode(errors="replace").find(text)
+            if found >= 0:
+                return found
+            await asyncio.sleep(0.01)
+        raise AssertionError(f"{text!r} never appeared on the terminal")
+
+    def type(self, keys: bytes) -> None:
+        os.write(self.master, keys)
+
+    @property
+    def text(self) -> str:
+        return self.output.decode(errors="replace")
+
+
+@asynccontextmanager
+async def console_on_a_terminal(harness: Harness) -> AsyncIterator[Session]:
+    """The console running on a fresh pseudo-terminal, which must have its modes back once the console stops."""
     loop = asyncio.get_running_loop()
     master, slave = os.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
@@ -36,27 +58,47 @@ async def test_the_console_runs_full_screen_and_puts_the_terminal_back(harness: 
         os.write(slave, text.encode())
 
     app = ConsoleApp(harness.broker, "amber basil cedar", Activity(harness.clock), write=write)
-    task = asyncio.create_task(app.run(reader, Terminal(read_fd, write)))
+    session = Session(app, master, output, asyncio.create_task(app.run(reader, Terminal(read_fd, write))))
     try:
-        await wait_for(output, "Type / for commands")
-        assert output.startswith(ENTER_FULL_SCREEN.encode())
-        os.write(master, b"/keys\r")
-        await wait_for(output, "Keys")
-        request = harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, [], "e2e", ("python", "x.py"), harness.provenance())
-        await wait_for(output, "Run request #1")
-        os.write(master, PASSPHRASE.encode() + b"\r")
-        await asyncio.wait_for(asyncio.shield(request.decision), 5)
-        assert request.decision.result().outcome == "approved"
-        os.write(master, b"\x03\x03\x03")
-        await asyncio.wait_for(task, 5)
-        await asyncio.sleep(0.05)
+        await session.wait_for("Type / for commands")
+        yield session
         assert termios.tcgetattr(slave) == modes_before
     finally:
         loop.remove_reader(master)
         transport.close()
         os.close(master)
         os.close(slave)
-    text = output.decode(errors="replace")
-    assert text.rindex(LEAVE_FULL_SCREEN) > text.rindex(ENTER_FULL_SCREEN)
-    assert PASSPHRASE not in text
-    assert app.quit_requested.is_set()
+
+
+async def test_the_console_runs_full_screen_and_puts_the_terminal_back(harness: Harness) -> None:
+    async with console_on_a_terminal(harness) as session:
+        assert session.output.startswith(ENTER_FULL_SCREEN.encode())
+        session.type(b"/keys\r")
+        await session.wait_for("Keys")
+        request = harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, [], "e2e", ("python", "x.py"), harness.provenance())
+        await session.wait_for("Run request #1")
+        session.type(PASSPHRASE.encode() + b"\r")
+        await asyncio.wait_for(asyncio.shield(request.decision), 5)
+        assert request.decision.result().outcome == "approved"
+        session.type(b"\x03\x03\x03")
+        await asyncio.wait_for(session.task, 5)
+        await asyncio.sleep(0.05)
+    assert session.text.rindex(LEAVE_FULL_SCREEN) > session.text.rindex(ENTER_FULL_SCREEN)
+    assert PASSPHRASE not in session.text
+    assert session.app.quit_requested.is_set()
+
+
+async def test_stopping_the_console_right_after_a_copy_clears_the_clipboard(harness: Harness) -> None:
+    async with console_on_a_terminal(harness) as session:
+        session.type(b"/keys\r")
+        await session.wait_for("Description")
+        session.type(b"\r")
+        await session.wait_for("Copy the value")
+        session.type(b"\x1b[B\r")
+        await session.wait_for("Copy the value of DATABASE_URL")
+        session.type(PASSPHRASE.encode() + b"\r")
+        await session.wait_for(COPY_OF_DATABASE_URL)
+        session.type(b"\x03\x03\x03\x03")
+        await asyncio.wait_for(session.task, 5)
+        await asyncio.sleep(0.05)
+    assert session.text.rindex(CLEAR_CLIPBOARD) > session.text.index(COPY_OF_DATABASE_URL)

@@ -563,3 +563,22 @@ async def test_copy_asks_the_terminal_to_hold_the_value_and_clears_it_later(harn
     console.clock.now += 31
     console.app.tick()
     assert console.written[-1] == "\x1b]52;c;\a"
+
+
+async def test_an_approved_import_shows_up_on_the_open_keys_screen(harness: Harness) -> None:
+    console = new_console(harness)
+    console.command("keys")
+    harness.broker.request_import({"FRESH_KEY": "fresh-value-123456"}, {}, "import", harness.provenance())
+    console.type(PASSPHRASE)
+    console.press("enter")
+    assert "FRESH_KEY" in harness.broker.vault
+    assert "FRESH_KEY" in console.screen() and console.screen().startswith("envh console › Keys")
+
+
+async def test_reload_of_a_broken_file_says_what_is_wrong_and_keeps_the_loaded_policy(harness: Harness) -> None:
+    console = new_console(harness)
+    (harness.data_dir / "presets.yaml").write_text("presets: {broken: {env: {X: NOT_STORED}}}\n")
+    console.command("reload")
+    assert "secret NOT_STORED is not in the vault" in console.screen()
+    assert "team" in harness.broker.config.presets
+    assert not any("error where=console" in line for line in harness.echoed)
