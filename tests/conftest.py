@@ -57,10 +57,12 @@ def build_broker(data_dir: Path, echoed: list[str], clock: FakeClock, config_tex
 
 
 @pytest.fixture(autouse=True)
-def no_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without a display, envh clients started by tests never show desktop notifications or play the chime."""
+def no_desktop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Tests and the envh clients they start never reach the desktop: without a display envh doesn't notify, and with
+    the session bus pointed at a missing socket, no notification or chime could get through anyway."""
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", f"unix:path={tmp_path / 'no-session-bus'}")
 
 
 @pytest.fixture
