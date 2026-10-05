@@ -128,7 +128,7 @@ The console is one full-screen terminal app, modeled on Claude Code's. The home 
 
 | Command | What it is for |
 |---|---|
-| `/keys` | every key with the first and last few characters of its value (fewer for short values, at most a fifth, nothing under 12 characters), where it is used, how it is approved and its description. Enter opens a key: show or copy its value, rename it, describe it, replace its value, give it its own approval rule, or remove it. F2 renames and Del removes from the list too. |
+| `/keys` | every key with the first and last few characters of its value (fewer for short values, at most a fifth, nothing under 12 characters), where it is used, how it is approved and its description. Enter opens a key: show its value, rename it, describe it, replace its value, give it its own approval rule, or remove it. F2 renames and Del removes from the list too. |
 | `/add` | store a new key; the value is typed or pasted hidden |
 | `/presets` | create, rename and remove presets, and change their variables: the key each reads, its approval, and the preset's longest session. Edits stay in a draft; Ctrl-S shows every change and asks for the passphrase once, and leaving with unsaved edits asks what to do with them. |
 | `/settings` | every option in `config.yaml` with its value and what it does: notifications, allowed users, the default approval and longest session, and rules for single keys. Saved like presets. |
@@ -139,7 +139,7 @@ The console is one full-screen terminal app, modeled on Claude Code's. The home 
 | `/reload` | read `config.yaml` and `presets.yaml` again, after root changed them |
 | `/quit` | stop the console (so does Ctrl-C twice); live sessions end |
 
-**Showing and copying a value.** Show puts the whole value on screen, where you can also select it with the mouse, and hides it again after 30 seconds or at Esc. Copy hands it to your terminal, which puts it on the clipboard, and envh clears the clipboard 30 seconds later; terminals that don't let programs set the clipboard (OSC 52), such as GNOME Terminal and other VTE-based ones, ignore it, so use Show there. Both are logged; see [What envh does not do](#what-envh-does-not-do) for what they expose.
+**Showing a value.** Show puts the whole value on screen, where you can also select it with the mouse, and hides it again after 30 seconds or at Esc. The audit log records which key was shown; see [What envh does not do](#what-envh-does-not-do) for what it exposes.
 
 **Descriptions.** A key's description says what it is for ("Personal OpenAI account, news bot"). `envh list` shows it, so scripts and agents can pick the right key. Never put the key itself in it.
 
@@ -341,8 +341,8 @@ What does:
 
 ## What envh does not do
 
-- **For an hour after you type the passphrase for a change, changes are unlocked.** Anything that can type into the console window during that hour (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)) can rename, replace, show, copy or remove keys and change presets and settings without knowing the passphrase. It still cannot approve a request or change the passphrase. `/lock` ends the hour early, and stopping the console ends it too.
-- **Showing or copying a value puts the whole key where others can get it.** Shown, it is on screen for up to 30 seconds. Copied, it sits on your clipboard for 30 seconds, where every program running as you, agents included, can read it, and a clipboard manager may keep it longer. The copy also passes through your terminal, so a terminal session recording would hold it. Both are written to the audit log.
+- **For an hour after you type the passphrase for a change, changes are unlocked.** Anything that can type into the console window during that hour (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)) can rename, replace, show or remove keys and change presets and settings without knowing the passphrase. It still cannot approve a request or change the passphrase. `/lock` ends the hour early, and stopping the console ends it too.
+- **Showing a value puts the whole key where others can get it.** It is on screen for up to 30 seconds, and it passes through your terminal, so a terminal session recording would hold it. Selecting it with the mouse puts it on your selection or clipboard, where every program running as you, agents included, can read it. The audit log records which key was shown, not its value.
 - **The console shows the ends of each key.** `/keys` shows the first and last few characters of every value (at most a fifth of it, and nothing of a value under 12 characters), so a key can be matched with a provider's dashboard. Anyone who can see the console's screen sees those characters too; the rest stays hidden.
 - **It does not hide a value from the command that receives it.** Values are visible to that process, everything it imports, and every other process running as you for the duration of the run. envh cannot revoke a value once delivered, cannot undo a copy the command made (a log line, a file, a cache), and a session expiring does not stop a running command. It does end the run cleanly: processes the command left behind are terminated when it exits.
 - **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent; see the [Roadmap](#roadmap). On the host, your agent's own permission rules and classifier are the only control over what else it reads.
