@@ -1,13 +1,15 @@
 """The console app: one full-screen terminal where requests are approved and keys, presets and settings are managed.
 
 A waiting request takes over the screen as soon as nothing else is being typed, and then takes every key until it is
-answered. Every change asks for the vault passphrase; a wrong one is audited and stops all input for two seconds, so
-guessing by typing blind is slow and visible. Typing on a screen without a text field does nothing, and neither does the
+answered, always with the vault passphrase. A change asks for the passphrase too, and for an hour afterwards only for a
+confirmation; changing the passphrase itself always asks. A wrong passphrase is audited and stops all input for two
+seconds, so guessing by typing blind is slow and visible. Typing on a screen without a text field does nothing, and neither does the
 Enter after it, so a passphrase typed at the wrong moment never opens a field that typing it again would fill."""
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import codecs
 import math
 import time
@@ -18,7 +20,7 @@ from envh.common import reminder_delays
 from envh.core.broker import Broker
 from envh.core.state import Request
 from envh.server.console.activity import Activity
-from envh.server.console.dialogs import PassphraseDialog, View
+from envh.server.console.dialogs import Choice, PassphraseDialog, View
 from envh.server.console.home import Command, HomeView
 from envh.server.console.request_card import RequestCard
 from envh.server.console.summaries import plural
@@ -30,6 +32,9 @@ ESCAPE_WAIT_SECONDS = 0.05
 WRONG_PASSPHRASE_PAUSE_SECONDS = 2
 QUIT_CONFIRM_SECONDS = 2
 HISTORY_KEPT = 100
+UNLOCK_SECONDS = 3600
+LOCK_WARNING_SECONDS = 300
+CLIPBOARD_SECONDS = 30
 MIN_COLUMNS = 50
 MIN_ROWS = 14
 
@@ -62,12 +67,15 @@ class ConsoleApp:
         self.history: list[str] = []
         self.message: tuple[str, str] | None = None
         self.paused_until = 0.0
+        self.unlocked_until = 0.0
         self.quit_requested = asyncio.Event()
         self.wake = asyncio.Event()
         self.terminal: Terminal | None = None
         self.display: Display | None = None
         self._quit_armed_until = 0.0
         self._typed_while_browsing = False
+        self._lock_warned = False
+        self._clear_clipboard_at = 0.0
         self._reminder: tuple[Request, float, Iterator[float]] | None = None
         self._last_failure = ""
         self.views.append(HomeView(self))
@@ -134,14 +142,41 @@ class ConsoleApp:
         self.paused_until = self.clock() + WRONG_PASSPHRASE_PAUSE_SECONDS
         return False
 
-    def ask_passphrase(self, title: str, details: list[Line], action: Callable[[], None]) -> None:
-        """Ask for the vault passphrase, then run action, which makes the change."""
-        self.open(PassphraseDialog(self, title, details, action))
+    @property
+    def unlocked(self) -> bool:
+        return self.clock() < self.unlocked_until
+
+    def ask_passphrase(self, title: str, details: list[Line], action: Callable[[], None], always: bool = False) -> None:
+        """Ask for the vault passphrase, then run action, which makes the change. While changes are unlocked, ask only to
+        confirm, unless always."""
+        if self.unlocked and not always:
+            options = [(title, lambda: self._change(action)), ("Cancel", lambda: self.tell("Nothing changed."))]
+            self.open(Choice(self, title, options, lines=details, on_cancel=lambda: self.tell("Nothing changed.")))
+        else:
+            self.open(PassphraseDialog(self, title, details, action))
 
     def run_with_passphrase(self, typed: str, title: str, action: Callable[[], None]) -> None:
         if not self.passphrase_matches(typed, title):
             self.tell("Wrong passphrase. Nothing changed.", "error")
             return
+        if not self.unlocked:
+            self.activity.note("info", "Changes unlocked for an hour; /lock locks them now")
+        self.unlocked_until = self.clock() + UNLOCK_SECONDS
+        self._lock_warned = False
+        self._change(action)
+
+    def lock(self, note: str) -> None:
+        """End the unlocked hour now; the next change asks for the passphrase again."""
+        self.unlocked_until = 0.0
+        self.activity.note("info", note)
+
+    def copy_to_clipboard(self, value: str) -> None:
+        """Ask the terminal to put value on the clipboard (OSC 52), and to clear it after CLIPBOARD_SECONDS. Terminals
+        that don't allow programs to set the clipboard ignore both."""
+        self._write(f"\x1b]52;c;{base64.b64encode(value.encode()).decode()}\a")
+        self._clear_clipboard_at = self.clock() + CLIPBOARD_SECONDS
+
+    def _change(self, action: Callable[[], None]) -> None:
         working = ("info", "Saving…")
         self.message = working
         self.redraw()
@@ -231,7 +266,14 @@ class ConsoleApp:
         self.present()
 
     def tick(self) -> None:
-        """Ring again, with growing gaps, while the oldest request waits."""
+        """Timed work: ring again, with growing gaps, while the oldest request waits; warn before changes lock again and
+        lock them; clear a copied value from the clipboard; close dialogs whose time is up."""
+        self._lock_on_time()
+        if self._clear_clipboard_at and self.clock() >= self._clear_clipboard_at:
+            self._clear_clipboard_at = 0.0
+            self._write("\x1b]52;c;\a")
+        for dialog in [dialog for dialog in self.dialogs if dialog.expired()]:
+            self.close(dialog)
         if self.card is not None and not self.card.withdrawn:
             target: Request | None = self.card.request
         else:
@@ -244,6 +286,17 @@ class ConsoleApp:
         elif self.clock() >= self._reminder[1]:
             self.ring()
             self._reminder = (target, self.clock() + next(self._reminder[2]), self._reminder[2])
+
+    def _lock_on_time(self) -> None:
+        if not self.unlocked_until:
+            return
+        remaining = self.unlocked_until - self.clock()
+        if remaining <= 0:
+            self.lock("Changes locked again after an hour; the next one asks for your passphrase")
+            self.tell("Changes are locked again. The next one asks for your passphrase.", "warn")
+        elif remaining <= LOCK_WARNING_SECONDS and not self._lock_warned:
+            self._lock_warned = True
+            self.tell(f"Changes lock again in {math.ceil(remaining / 60)} min; the next change after that asks for your passphrase.", "warn")
 
     def _failed(self, message: str) -> None:
         detail = traceback.format_exc(limit=5)
@@ -280,6 +333,9 @@ class ConsoleApp:
         counts = f"{plural(len(broker.vault.names()), 'key')} · {plural(len(broker.config.presets), 'preset')}" + (f" · {plural(sessions, 'live session')}" if sessions else "")
         waiting = len(self.waiting) + (1 if self.card is not None and not self.card.withdrawn else 0)
         right = [Span(counts, DIM), *([Span(f" · {waiting} waiting", YELLOW)] if waiting else [])]
+        if self.unlocked:
+            remaining = self.unlocked_until - self.clock()
+            right.append(Span(f" · unlocked {math.ceil(remaining / 60)} min", YELLOW if remaining <= LOCK_WARNING_SECONDS else DIM))
         gap = columns - line_width(left) - line_width(right)
         return left + [Span(" " * gap), *right] if gap >= 2 else left
 

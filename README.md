@@ -92,7 +92,7 @@ The boundaries, in words:
 
 **What a key use means:** the approved command receives the real value in its environment. It is visible to that process, to everything it imports, and to every other process running as you while it runs. A malicious dependency no longer gets every key on disk whenever it likes; it gets the values of the one approved run it is part of, and you see that run in the log.
 
-**While you are not at the console, nothing is approved or changed.** Approving a request, and every change on the console (to keys, presets, settings or the passphrase itself), ask for your vault passphrase, typed hidden. A wrong passphrase is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with that passphrase, which is stored nowhere. The exception is a session you already approved: it keeps working until it expires.
+**While you are not at the console, nothing is approved or changed.** Approving a request always asks for your vault passphrase, typed hidden, and so does changing the passphrase. Other changes on the console (to keys, presets or settings) ask for it once, then only for a confirmation for the next hour; `/lock` ends that hour early. A wrong passphrase is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with that passphrase, which is stored nowhere. The exception is a session you already approved: it keeps working until it expires.
 
 **One passphrase, on purpose.** The vault passphrase both unlocks the vault and approves requests, so approving is one thing to type. That costs some security, and you should know what: you type the passphrase often, so on X11 a program running as you has many chances to record it; and anyone who learns it can approve at your console and also decrypt any copy of `vault.age`, such as a backup. To make a fake prompt easy to spot, every approval prompt shows your console phrase: type the passphrase only where you see it. See [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console).
 
@@ -124,19 +124,22 @@ The console is one full-screen terminal app, modeled on Claude Code's. The home 
 - **Type `/` for commands.** A list appears as you type; ↑↓ pick one, Tab completes it, Enter runs it. **↑ on an empty command line brings back earlier commands.** `?` shows every shortcut.
 - **A request takes over the screen when it arrives**, with everything it would grant: who asked, the reason, the variables and keys, the duration, the command line and the process. Type your vault passphrase and press Enter to approve, or press ↓ (or Esc) and then Enter to deny. If something is being typed when it arrives, such as a key name, it waits until you finish (Enter or Esc); the status line says so. A request that is withdrawn while you type stays on screen and ignores what you type until Enter, so the rest of a passphrase never lands anywhere else.
 - **Letters typed on the home screen do nothing and are not shown.** Only `/` starts a command, so a passphrase typed when no request is on screen never appears there.
-- **Every change asks for your vault passphrase.** A wrong one is logged and stops typing for two seconds.
+- **A change asks for your vault passphrase once; for the next hour, changes ask only to be confirmed.** The header shows the time left, the console warns five minutes before it locks again, and `/lock` locks it at once. Approving a request and changing the passphrase always ask. A wrong passphrase is logged and stops typing for two seconds.
 
 | Command | What it is for |
 |---|---|
-| `/keys` | every key with the first and last few characters of its value (fewer for short values, at most a fifth, nothing under 12 characters), where it is used, how it is approved and its description. Enter opens a key: rename it, describe it, replace its value, give it its own approval rule, or remove it. F2 renames and Del removes from the list too. |
+| `/keys` | every key with the first and last few characters of its value (fewer for short values, at most a fifth, nothing under 12 characters), where it is used, how it is approved and its description. Enter opens a key: show or copy its value, rename it, describe it, replace its value, give it its own approval rule, or remove it. F2 renames and Del removes from the list too. |
 | `/add` | store a new key; the value is typed or pasted hidden |
 | `/presets` | create, rename and remove presets, and change their variables: the key each reads, its approval, and the preset's longest session. Edits stay in a draft; Ctrl-S shows every change and asks for the passphrase once, and leaving with unsaved edits asks what to do with them. |
 | `/settings` | every option in `config.yaml` with its value and what it does: notifications, allowed users, the default approval and longest session, and rules for single keys. Saved like presets. |
 | `/sessions` | live sessions and the commands running with keys; Enter ends a session early |
 | `/passphrase` | change the vault passphrase; the vault is encrypted again with it |
+| `/lock` | end the unlocked hour now; the next change asks for the passphrase again |
 | `/edit-config`, `/edit-presets` | open the file in `$VISUAL`, `$EDITOR`, nano or vi; what you save is checked and shown before it is used |
 | `/reload` | read `config.yaml` and `presets.yaml` again, after root changed them |
 | `/quit` | stop the console (so does Ctrl-C twice); live sessions end |
+
+**Showing and copying a value.** Show puts the whole value on screen, where you can also select it with the mouse, and hides it again after 30 seconds or at Esc. Copy hands it to your terminal, which puts it on the clipboard, and envh clears the clipboard 30 seconds later; terminals that don't let programs set the clipboard (OSC 52), such as GNOME Terminal and other VTE-based ones, ignore it, so use Show there. Both are logged; see [What envh does not do](#what-envh-does-not-do) for what they expose.
 
 **Descriptions.** A key's description says what it is for ("Personal OpenAI account, news bot"). `envh list` shows it, so scripts and agents can pick the right key. Never put the key itself in it.
 
@@ -338,6 +341,8 @@ What does:
 
 ## What envh does not do
 
+- **For an hour after you type the passphrase for a change, changes are unlocked.** Anything that can type into the console window during that hour (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)) can rename, replace, show, copy or remove keys and change presets and settings without knowing the passphrase. It still cannot approve a request or change the passphrase. `/lock` ends the hour early, and stopping the console ends it too.
+- **Showing or copying a value puts the whole key where others can get it.** Shown, it is on screen for up to 30 seconds. Copied, it sits on your clipboard for 30 seconds, where every program running as you, agents included, can read it, and a clipboard manager may keep it longer. The copy also passes through your terminal, so a terminal session recording would hold it. Both are written to the audit log.
 - **The console shows the ends of each key.** `/keys` shows the first and last few characters of every value (at most a fifth of it, and nothing of a value under 12 characters), so a key can be matched with a provider's dashboard. Anyone who can see the console's screen sees those characters too; the rest stays hidden.
 - **It does not hide a value from the command that receives it.** Values are visible to that process, everything it imports, and every other process running as you for the duration of the run. envh cannot revoke a value once delivered, cannot undo a copy the command made (a log line, a file, a cache), and a session expiring does not stop a running command. It does end the run cleanly: processes the command left behind are terminated when it exits.
 - **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent; see the [Roadmap](#roadmap). On the host, your agent's own permission rules and classifier are the only control over what else it reads.

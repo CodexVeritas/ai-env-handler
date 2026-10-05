@@ -509,6 +509,12 @@ class Broker:
             entries = {other: entry for other, entry in self.config.settings.secrets.items() if other != name}
             self.save_settings(replace(self.config.settings, secrets=entries))
 
+    def reveal_secret(self, name: str, how: str) -> str:
+        """A secret's value, for the console to show or copy at the human's request; each time is audited."""
+        value = self.vault.get(name)
+        self.audit.event("secret_revealed", secret=name, how=how)
+        return value
+
     def change_passphrase(self, new_passphrase: str) -> None:
         if len(new_passphrase) < MIN_PASSPHRASE_LENGTH:
             raise VaultError(f"use at least {MIN_PASSPHRASE_LENGTH} characters")

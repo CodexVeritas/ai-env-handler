@@ -44,6 +44,10 @@ class View:
     def refresh(self, renamed: dict[str, str]) -> None:
         """Reread what the view shows after a change; renamed maps old key names to new ones."""
 
+    def expired(self) -> bool:
+        """True when a dialog's time is up and the app should close it."""
+        return False
+
 
 def text_lines(text: str, columns: int, style: str = "") -> list[Line]:
     return [styled(part, style) for paragraph in text.split("\n") for part in wrap(paragraph, columns)]
@@ -144,6 +148,7 @@ class PassphraseDialog(View):
         if lines:
             lines.append([])
         lines.append([Span(f"[{self.app.phrase}] ", CYAN), Span("Vault passphrase: ", BOLD), *self.field.render(inner)])
+        lines.append(styled("Changes then stay unlocked for an hour; /lock locks them sooner.", DIM))
         return box(lines, columns, styled(self.heading, ACCENT))
 
 

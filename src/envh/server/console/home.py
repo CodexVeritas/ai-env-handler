@@ -36,6 +36,14 @@ def confirm_quit(app: ConsoleApp) -> None:
     ))
 
 
+def lock(app: ConsoleApp) -> None:
+    if not app.unlocked:
+        app.tell("Changes are already locked; the next one asks for your passphrase.")
+        return
+    app.lock("Changes locked; the next one asks for your passphrase")
+    app.tell("Locked. The next change asks for your passphrase.", "ok")
+
+
 def reload(app: ConsoleApp) -> None:
     app.broker.reload()
     app.changed()
@@ -49,6 +57,7 @@ COMMANDS = (
     Command("sessions", "Live sessions and running commands; end a session", lambda app: app.push(sessions.SessionsView(app))),
     Command("add", "Store a new key", keys.start_add),
     Command("passphrase", "Change the vault passphrase", start_passphrase_change),
+    Command("lock", "Lock changes now; the next one asks for your passphrase", lock),
     Command("edit-config", "Open config.yaml in a text editor", lambda app: start_edit(app, "config")),
     Command("edit-presets", "Open presets.yaml in a text editor", lambda app: start_edit(app, "presets")),
     Command("reload", "Read config.yaml and presets.yaml again", reload),
@@ -87,7 +96,7 @@ def help_dialog(app: ConsoleApp) -> Info:
         styled("Approving", BOLD),
         styled("A request takes over the screen when it arrives. Type your vault passphrase and press Enter to approve it, or press ↓ and Enter to deny it."),
         [Span("Type the passphrase only where your console phrase is shown: "), Span(app.phrase, CYAN)],
-        styled("Every change to keys, presets or settings asks for the passphrase too."),
+        styled("A change to keys, presets or settings asks for it too; for an hour after that, changes ask only to be confirmed. /lock ends the hour early. Approving a request and changing the passphrase always ask."),
         [],
         styled('Details: README, "The console"', DIM),
     ]

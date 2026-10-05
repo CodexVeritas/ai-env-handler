@@ -1,5 +1,5 @@
-"""Changes made outside the console's screens: editing config.yaml or presets.yaml in a text editor, and changing the
-vault passphrase. Both ask for the vault passphrase first."""
+"""Changes made outside the console's screens: editing config.yaml or presets.yaml in a text editor, which asks for the
+passphrase like any change, and changing the vault passphrase, which always asks for the current one."""
 
 from __future__ import annotations
 
@@ -80,7 +80,11 @@ def save_file(app: ConsoleApp, which: str, editor: str, path: Path, text: str) -
 
 def start_passphrase_change(app: ConsoleApp) -> None:
     details = [styled("Then type the new passphrase twice. The vault is encrypted again with it.")]
-    app.ask_passphrase("Change the vault passphrase", details, lambda: app.open(Prompt(app, "New vault passphrase", lambda first: _repeat(app, first), hidden=True, phrase=True, hint=f"At least {MIN_PASSPHRASE_LENGTH} characters.")))
+    app.ask_passphrase("Change the vault passphrase", details, lambda: _ask_new(app), always=True)
+
+
+def _ask_new(app: ConsoleApp) -> None:
+    app.open(Prompt(app, "New vault passphrase", lambda first: _repeat(app, first), hidden=True, phrase=True, hint=f"At least {MIN_PASSPHRASE_LENGTH} characters."))
 
 
 def _repeat(app: ConsoleApp, first: str) -> None:

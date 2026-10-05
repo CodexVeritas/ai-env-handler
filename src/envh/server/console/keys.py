@@ -13,13 +13,14 @@ from envh.core.durations import format_duration
 from envh.server.console.dialogs import Prompt, View, text_lines
 from envh.server.console.settings import open_rule
 from envh.server.console.summaries import approval_text, plural, rule_text
-from envh.server.console.tui import ACCENT, BOLD, CYAN, DIM, POINTER, Key, Line, Selection, Span, styled, typed_character
+from envh.server.console.tui import ACCENT, BOLD, CYAN, DIM, POINTER, YELLOW, Key, Line, Selection, Span, box, styled, typed_character, wrap_line
 from envh.server.control import HandledErrors
 
 if TYPE_CHECKING:
     from envh.server.console.app import ConsoleApp
 
 ADD_ROW = "+ Add a key…"
+SHOWN_SECONDS = 30
 
 
 def name_character(char: str) -> str:
@@ -150,6 +151,49 @@ def _describe(app: ConsoleApp, name: str, text: str | None) -> None:
     app.tell(f"Saved the description of {name}." if text else f"Removed the description of {name}.", "ok")
 
 
+def start_show(app: ConsoleApp, name: str) -> None:
+    details = [styled(f"It stays on screen for {SHOWN_SECONDS} seconds, or until you press Esc. Anyone who can see the screen sees it.")]
+    app.ask_passphrase(f"Show the value of {name}", details, lambda: app.open(ValueDialog(app, name, app.broker.reveal_secret(name, "shown"))))
+
+
+def start_copy(app: ConsoleApp, name: str) -> None:
+    details = [
+        styled(f"Your terminal puts it on the clipboard, and envh clears the clipboard after {SHOWN_SECONDS} seconds."),
+        styled("Until then, every program running as you can read it, agents included. GNOME Terminal and others that don't let programs set the clipboard ignore this; use Show there.", DIM),
+    ]
+    app.ask_passphrase(f"Copy the value of {name}", details, lambda: _copy(app, name))
+
+
+def _copy(app: ConsoleApp, name: str) -> None:
+    app.copy_to_clipboard(app.broker.reveal_secret(name, "copied"))
+    app.tell(f"Sent {name} to your terminal's clipboard; it clears in {SHOWN_SECONDS} s. If pasting gives nothing, your terminal ignores this: use Show.", "ok")
+
+
+class ValueDialog(View):
+    """A key's full value, on screen until Esc or for SHOWN_SECONDS. Line breaks in the value are kept."""
+
+    def __init__(self, app: ConsoleApp, name: str, value: str) -> None:
+        super().__init__(app)
+        self.name = name
+        self.value = value
+        self.closes_at = app.clock() + SHOWN_SECONDS
+
+    def expired(self) -> bool:
+        return self.app.clock() >= self.closes_at
+
+    def hints(self) -> str:
+        return "Esc hide · select it with the mouse to copy it"
+
+    def handle(self, key: Key) -> None:
+        if key in ("escape", "ctrl_c", "enter"):
+            self.app.close(self)
+
+    def body(self, columns: int, rows: int) -> list[Line]:
+        lines = [part for text in self.value.split("\n") for part in wrap_line(styled(text, BOLD), columns - 4)]
+        left = max(int(self.closes_at - self.app.clock()), 0)
+        return box(lines[: max(rows - 2, 1)], columns, styled(f"Value of {self.name}", ACCENT), styled(f"hides in {left} s", YELLOW))
+
+
 class KeysView(View):
     def __init__(self, app: ConsoleApp, select: str | None = None) -> None:
         super().__init__(app)
@@ -218,7 +262,7 @@ class KeysView(View):
 
 
 class KeyDetailView(View):
-    ACTIONS = ("Rename…", "Describe…", "Replace the value…", "Approval rule…", "Remove…")
+    ACTIONS = ("Show the value…", "Copy the value…", "Rename…", "Describe…", "Replace the value…", "Approval rule…", "Remove…")
 
     def __init__(self, app: ConsoleApp, name: str) -> None:
         super().__init__(app)
@@ -245,7 +289,11 @@ class KeyDetailView(View):
             start_remove(self.app, self.name)
         elif key == "enter":
             action = self.ACTIONS[self.selection.index]
-            if action == "Rename…":
+            if action == "Show the value…":
+                start_show(self.app, self.name)
+            elif action == "Copy the value…":
+                start_copy(self.app, self.name)
+            elif action == "Rename…":
                 start_rename(self.app, self.name)
             elif action == "Describe…":
                 start_describe(self.app, self.name)
