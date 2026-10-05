@@ -90,7 +90,6 @@ class Run:
 class StateTable:
     def __init__(self, clock: Callable[[], datetime]) -> None:
         self._clock = clock
-        self._next_id = 1
         self.requests: dict[int, Request] = {}
         self.sessions: dict[str, Session] = {}
         self.runs: dict[int, Run] = {}
@@ -99,9 +98,15 @@ class StateTable:
         return self._clock()
 
     def _allocate_id(self) -> int:
-        allocated = self._next_id
-        self._next_id += 1
-        return allocated
+        """A random, unique id for a request or run. Not a monotonic counter: a sequential id lets a
+        client that sees its own id (the client prints `request #N`) infer how many requests and runs
+        other listed users allocated between two of its own — a cross-user activity-count leak that
+        the per-user filtering of list/status otherwise prevents. Collisions are vanishingly unlikely
+        but checked against both live tables anyway."""
+        while True:
+            candidate = random_secrets.randbelow(2**53 - 1) + 1
+            if candidate not in self.requests and candidate not in self.runs:
+                return candidate
 
     def new_request(
         self,
