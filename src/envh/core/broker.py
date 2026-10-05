@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import difflib
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -19,15 +20,17 @@ from envh.core.config import (
     ConfigError,
     Preset,
     SecretPolicy,
+    Settings,
     config_from_text,
     dump_presets,
     load_config,
     parse_presets,
-    renamed_in_config,
+    parse_settings,
+    render_config,
 )
 from envh.core.durations import MAX_SESSION, format_duration
 from envh.core.state import Provenance, Request, Session, StateTable
-from envh.core.vault import Vault, move_into_place, stage_private_file, write_private_file
+from envh.core.vault import MIN_PASSPHRASE_LENGTH, Vault, VaultError, move_into_place, stage_private_file, write_private_file
 
 
 class RequestError(ValueError):
@@ -392,29 +395,37 @@ class Broker:
         """Check that old can be renamed to new, changing nothing. Returns the new config.yaml and presets.yaml texts
         (None for a file that stays as it is) and the config they load as.
 
-        A name that config.yaml still has a policy for, or that a live session or waiting request points at, is refused:
-        the secret would quietly take over that policy, or that session would get its value without an approval."""
+        A name that config.yaml still has settings for, or that a live session or waiting request points at, is refused:
+        the key would quietly take over those settings, or that session would get its value without an approval."""
         if old not in self.vault:
             raise RequestError(f"{old} is not in the vault")
         require_secret_name(new)
         if new in self.vault:
             raise RequestError(f"{new} is already taken")
-        if new in self.config.secret_policies:
-            raise RequestError(f"config.yaml still has a policy for {new}; remove it with `edit config` first")
+        if new in self.config.settings.secrets:
+            raise RequestError(f"config.yaml still has settings for {new}; remove them in /settings first")
         if new in self.state.names_in_use():
             raise RequestError(f"a live session or waiting request still uses the name {new}; end or answer it first")
-        config_text = (self.data_dir / CONFIG_FILE).read_text()
-        renamed_config = renamed_in_config(config_text, old, new) if old in self.config.secret_policies else None
+        config_text = self._config_text_as_loaded()
+        renamed_config = None
+        if old in self.config.settings.secrets:
+            entries = {(new if name == old else name): entry for name, entry in self.config.settings.secrets.items()}
+            renamed_config = render_config(replace(self.config.settings, secrets=entries))
         presets = renamed_presets(self.config.presets_raw, {old: new})
         presets_text = dump_presets(presets)
         config = config_from_text(renamed_config or config_text, presets_text, (set(self.vault.names()) - {old}) | {new})
-        before, after = self.config.policy_for(old), config.policy_for(new)
-        if (before.approval, before.max_session) != (after.approval, after.max_session):
-            raise RequestError(f"the policy for {old} would change; config.yaml differs from what the console loaded, so check it and run reload")
         return renamed_config, presets_text if presets != self.config.presets_raw else None, config
 
+    def _config_text_as_loaded(self) -> str:
+        """config.yaml as it is on disk, refused when it no longer says what the broker loaded, so a change made there
+        since is never overwritten."""
+        text = (self.data_dir / CONFIG_FILE).read_text()
+        if parse_settings(text) != self.config.settings:
+            raise RequestError("config.yaml changed on disk since the console loaded it; run /reload first")
+        return text
+
     def rename_secret(self, old: str, new: str) -> None:
-        """Rename a stored secret everywhere envh refers to it: the vault, its policy in config.yaml, presets, live
+        """Rename a stored secret everywhere envh refers to it: the vault, its settings in config.yaml, presets, live
         sessions and requests.
 
         The new policy and preset files are written and the config they load as is built before the vault is saved, so a
@@ -451,6 +462,59 @@ class Broker:
         write_private_file(self.data_dir / PRESETS_FILE, dump_presets(merged).encode())
         self.reload()
 
+    def save_presets(self, presets: dict[str, Any]) -> None:
+        """Replace every preset, after checking the whole file as the broker would load it."""
+        parsed, raw = parse_presets(dump_presets(presets), set(self.vault.names()))
+        changed = sorted(name for name in set(raw) | set(self.config.presets_raw) if raw.get(name) != self.config.presets_raw.get(name))
+        write_private_file(self.data_dir / PRESETS_FILE, dump_presets(raw).encode())
+        self.config = replace(self.config, presets=parsed, presets_raw=raw)
+        self.audit.event("presets_saved", presets=changed)
+
+    def save_settings(self, settings: Settings) -> None:
+        """Rewrite config.yaml from settings, after checking it loads together with the current presets."""
+        self._config_text_as_loaded()
+        text = render_config(settings)
+        config = config_from_text(text, dump_presets(self.config.presets_raw), set(self.vault.names()))
+        before = self.config.settings
+        changed = [field for field in ("users", "notify", "defaults") if getattr(before, field) != getattr(settings, field)]
+        changed += sorted(name for name in set(before.secrets) | set(settings.secrets) if before.secrets.get(name) != settings.secrets.get(name))
+        write_private_file(self.data_dir / CONFIG_FILE, text.encode())
+        self.config = config
+        self.audit.event("settings_saved", changed=changed)
+
+    def store_secret(self, name: str, value: str) -> None:
+        """Add a secret, or replace the value of one."""
+        require_secret_name(name)
+        if not value:
+            raise RequestError("an empty value can't be stored")
+        replacing = name in self.vault
+        self.vault.store(name, value)
+        self.audit.event("admin_replace" if replacing else "admin_add", secret=name)
+        self.reload()
+
+    def remove_secret(self, name: str) -> None:
+        """Remove a secret and its settings. A secret a preset uses is refused, since such a preset would stop the broker
+        from starting."""
+        if name not in self.vault:
+            raise VaultError(f"{name} is not in the vault")
+        users = self.config.presets_using(name)
+        if users:
+            raise RequestError(f"{name} is used by {'preset' if len(users) == 1 else 'presets'} {', '.join(users)}; remove it there first")
+        has_settings = name in self.config.settings.secrets
+        if has_settings:
+            self._config_text_as_loaded()
+        self.vault.delete(name)
+        self.audit.event("admin_rm", secret=name)
+        if has_settings:
+            entries = {other: entry for other, entry in self.config.settings.secrets.items() if other != name}
+            self.save_settings(replace(self.config.settings, secrets=entries))
+
+    def change_passphrase(self, new_passphrase: str) -> None:
+        if len(new_passphrase) < MIN_PASSPHRASE_LENGTH:
+            raise VaultError(f"use at least {MIN_PASSPHRASE_LENGTH} characters")
+        self.vault.change_passphrase(new_passphrase)
+        self.audit.event("vault_passphrase_changed")
+
     def reload(self) -> None:
         self.config = load_config(self.data_dir, set(self.vault.names()))
         self.audit.event("reload", secrets=len(self.vault.names()), presets=len(self.config.presets))
@@ -466,7 +530,7 @@ class Broker:
         secrets = []
         for name in self.vault.names():
             policy = self.config.policy_for(name)
-            secrets.append({"name": name, "approval": policy.approval, "max_session": format_duration(policy.max_session)})
+            secrets.append({"name": name, "approval": policy.approval, "max_session": format_duration(policy.max_session), "description": self.config.description_for(name)})
         presets = []
         for preset in self.config.presets.values():
             env = []

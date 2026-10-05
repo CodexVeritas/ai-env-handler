@@ -698,7 +698,7 @@ def print_summary(results: list[tuple[str, Outcome]]) -> None:
         line(f"{dim('·')} {title:<20} {dim('not reached')}")
     say()
     line(dim("Rerun this any time to update envh or import more projects."))
-    line(dim("To see or rename your keys, type keys in the console."))
+    line(dim("To see, rename or describe your keys, type /keys in the console."))
     say()
 
 

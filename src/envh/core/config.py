@@ -1,40 +1,31 @@
-"""Policy files: config.yaml (defaults and per-secret policy) and presets.yaml (variable to secret mappings)."""
+"""Policy files: config.yaml (defaults and per-key settings) and presets.yaml (variable to secret mappings)."""
 
 from __future__ import annotations
 
+import json
 import pwd
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from envh.common import PRESET_NAME, SECRET_NAME
+from envh.common import PRESET_NAME, SECRET_NAME, printable
 from envh.core.durations import MAX_SESSION, DurationError, format_duration, parse_duration
 
 CONFIG_FILE = "config.yaml"
 PRESETS_FILE = "presets.yaml"
 APPROVALS = ("session", "per-run")
+SECRET_FIELDS = ("approval", "max_session", "description")
 VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-CONFIG_TEMPLATE = """# envh policy. Secrets not listed here get the defaults.
-users: [{user}]          # login names allowed to talk to the broker; sessions belong to the user who opened them
-notify: true             # when a request needs your passphrase: a desktop notification with a sound, and the console's bell
-defaults:
-  approval: session      # session: one console approval opens a session | per-run: ask on every run
-  max_session: 1h        # longest session that may include a secret (hard cap 24h)
-secrets: {}
-#  DATABASE_URL: { approval: per-run }
-#  OPENAI_API_KEY: { max_session: 8h }
-"""
+PLAIN_SCALAR = re.compile(r"^[A-Za-z0-9_.-]+$")
+DESCRIPTION_LIMIT = 200
+COMMENT_COLUMN = 26
+DEFAULT_MAX_SESSION = timedelta(hours=1)
 
 PRESETS_TEMPLATE = "presets: {}\n"
-
-
-def render_config_template(user: str) -> str:
-    return CONFIG_TEMPLATE.replace("{user}", user)
 
 
 class ConfigError(ValueError):
@@ -68,12 +59,37 @@ class Defaults:
     max_session: timedelta
 
 
+@dataclass(frozen=True)
+class SecretEntry:
+    """A key's own settings in config.yaml; None follows the defaults (or, for the description, means there is none)."""
+
+    approval: str | None = None
+    max_session: timedelta | None = None
+    description: str | None = None
+
+    @property
+    def empty(self) -> bool:
+        return self == SecretEntry()
+
+
+@dataclass(frozen=True)
+class Settings:
+    """config.yaml as the console edits it. Each key's entry keeps only the fields it sets, so the rest keeps following the
+    defaults when they change."""
+
+    users: tuple[str, ...]
+    notify: bool
+    defaults: Defaults
+    secrets: dict[str, SecretEntry] = field(default_factory=dict)
+
+
 @dataclass
 class Config:
     defaults: Defaults
     secret_policies: dict[str, SecretPolicy]
     presets: dict[str, Preset]
     presets_raw: dict[str, Any]
+    settings: Settings
     users: tuple[str, ...] = ()
     allowed_uids: frozenset[int] = frozenset()
     notify: bool = True
@@ -92,6 +108,10 @@ class Config:
 
     def presets_using(self, secret: str) -> list[str]:
         return sorted(preset.name for preset in self.presets.values() if any(entry.secret == secret for entry in preset.env.values()))
+
+    def description_for(self, secret: str) -> str | None:
+        entry = self.settings.secrets.get(secret)
+        return entry.description if entry is not None else None
 
 
 def _load_yaml(text: str, where: str) -> Any:
@@ -133,6 +153,16 @@ def _parse_session_duration(value: Any, where: str) -> timedelta:
     return duration
 
 
+def _parse_description(value: Any, where: str) -> str:
+    if not isinstance(value, str):
+        raise ConfigError(f"{where}: description must be text, got {value!r}")
+    if len(value) > DESCRIPTION_LIMIT:
+        raise ConfigError(f"{where}: description is longer than {DESCRIPTION_LIMIT} characters")
+    if printable(value) != value:
+        raise ConfigError(f"{where}: description must be one line of plain text")
+    return value
+
+
 def parse_users(value: Any) -> tuple[tuple[str, ...], frozenset[int]]:
     if value is None:
         return (), frozenset()
@@ -163,7 +193,7 @@ def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[st
     _reject_unknown(raw_defaults, ("approval", "max_session"), f"{CONFIG_FILE}: defaults")
     defaults = Defaults(
         approval=_parse_approval(raw_defaults.get("approval", "session"), f"{CONFIG_FILE}: defaults"),
-        max_session=_parse_session_duration(raw_defaults.get("max_session", "1h"), f"{CONFIG_FILE}: defaults"),
+        max_session=_parse_session_duration(raw_defaults.get("max_session", format_duration(DEFAULT_MAX_SESSION)), f"{CONFIG_FILE}: defaults"),
     )
     policies: dict[str, SecretPolicy] = {}
     for name, raw in _expect_mapping(document.get("secrets"), f"{CONFIG_FILE}: secrets").items():
@@ -171,38 +201,76 @@ def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[st
         if not isinstance(name, str) or not SECRET_NAME.match(name):
             raise ConfigError(f"{where}: secret names must be UPPER_CASE identifiers")
         fields = _expect_mapping(raw, where)
-        _reject_unknown(fields, ("approval", "max_session"), where)
-        policies[name] = SecretPolicy(
-            name=name,
-            approval=_parse_approval(fields.get("approval", defaults.approval), where),
-            max_session=_parse_session_duration(fields.get("max_session", format_duration(defaults.max_session)), where),
-        )
+        _reject_unknown(fields, SECRET_FIELDS, where)
+        if "description" in fields:
+            _parse_description(fields["description"], where)
+        approval = _parse_approval(fields.get("approval", defaults.approval), where)
+        max_session = _parse_session_duration(fields.get("max_session", format_duration(defaults.max_session)), where)
+        if "approval" in fields or "max_session" in fields:
+            policies[name] = SecretPolicy(name=name, approval=approval, max_session=max_session)
     return defaults, policies, users, allowed_uids
 
 
-def renamed_in_config(text: str, old: str, new: str) -> str:
-    """config.yaml with the policy of secret old moved to new. Only text outside comments changes, so the user's layout
-    and comments stay; refuses when the result would not parse to the same policies under the new name."""
-    token = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])")
+def parse_settings(text: str) -> Settings:
+    """config.yaml, validated, with each key's entry as written: fields it leaves out stay None."""
+    defaults, _, users, _ = parse_config(text)
+    document = _expect_mapping(_load_yaml(text, CONFIG_FILE), CONFIG_FILE)
+    secrets: dict[str, SecretEntry] = {}
+    for name, raw in _expect_mapping(document.get("secrets"), f"{CONFIG_FILE}: secrets").items():
+        fields = _expect_mapping(raw, f"{CONFIG_FILE}: secrets.{name}")
+        entry = SecretEntry(
+            approval=fields.get("approval"),
+            max_session=parse_duration(fields["max_session"]) if "max_session" in fields else None,
+            description=fields.get("description") or None,
+        )
+        if not entry.empty:
+            secrets[name] = entry
+    return Settings(users=users, notify=parse_notify(text), defaults=defaults, secrets=secrets)
 
-    def replacement(match: re.Match[str]) -> str:
-        """The new name, quoted where YAML would otherwise read it as something else (NO, ON and NULL are booleans and null)."""
-        already_quoted = match.start() > 0 and match.string[match.start() - 1] in "'\""
-        return new if already_quoted or yaml.safe_load(new) == new else f"'{new}'"
 
-    renamed_lines = []
-    for line in text.splitlines(keepends=True):
-        code, hash_mark, comment = line.partition("#")
-        renamed_lines.append(token.sub(replacement, code) + hash_mark + comment)
-    renamed = "".join(renamed_lines)
-    defaults, policies, users, _ = parse_config(text)
-    if new in policies:
-        raise ConfigError(f"{CONFIG_FILE} already has a policy for {new}; remove it with `edit config` first")
-    expected = {new if name == old else name: replace(policy, name=new if name == old else name) for name, policy in policies.items()}
-    renamed_defaults, renamed_policies, renamed_users, _ = parse_config(renamed)
-    if (renamed_defaults, renamed_policies, renamed_users) != (defaults, expected, users):
-        raise ConfigError(f"{CONFIG_FILE}: could not move the policy of {old} to {new}; rename it there with `edit config` first")
-    return renamed
+def yaml_scalar(text: str) -> str:
+    """text as a YAML scalar: plain where YAML reads it back unchanged (NO and NULL would be a boolean and null), else quoted."""
+    if PLAIN_SCALAR.match(text) and yaml.safe_load(text) == text:
+        return text
+    return json.dumps(text)
+
+
+def _commented(code: str, comment: str) -> str:
+    return f"{code:<{COMMENT_COLUMN - 1}} # {comment}"
+
+
+def render_config(settings: Settings) -> str:
+    """config.yaml for these settings, with a comment on each option. Refuses settings it could not write exactly."""
+    lines = [
+        "# envh settings. Change them on the console with /settings; saving there rewrites this file.",
+        _commented(f"users: [{', '.join(yaml_scalar(user) for user in settings.users)}]", "logins whose scripts and agents may ask for keys"),
+        _commented(f"notify: {'true' if settings.notify else 'false'}", "notification, chime and console bell while a request waits"),
+        _commented("defaults:", "for every key without its own setting below"),
+        _commented(f"  approval: {settings.defaults.approval}", "session: one approval opens a session | per-run: ask on every run"),
+        _commented(f"  max_session: {format_duration(settings.defaults.max_session)}", "longest session that may include a key; hard cap 24h"),
+    ]
+    entries = {name: entry for name, entry in sorted(settings.secrets.items()) if not entry.empty}
+    if entries:
+        lines.append(_commented("secrets:", "per key: approval, max_session, description; the rest follows the defaults"))
+    else:
+        lines.append(_commented("secrets: {}", 'per key, like DATABASE_URL: {approval: per-run, description: "..."}'))
+    for name, entry in entries.items():
+        fields = []
+        if entry.approval is not None:
+            fields.append(f"approval: {entry.approval}")
+        if entry.max_session is not None:
+            fields.append(f"max_session: {format_duration(entry.max_session)}")
+        if entry.description is not None:
+            fields.append(f"description: {json.dumps(entry.description, ensure_ascii=False)}")
+        lines.append(f"  {yaml_scalar(name)}: {{{', '.join(fields)}}}")
+    text = "\n".join(lines) + "\n"
+    if parse_settings(text) != replace(settings, secrets=entries):
+        raise ConfigError(f"{CONFIG_FILE}: these settings could not be written exactly")
+    return text
+
+
+def render_config_template(user: str) -> str:
+    return render_config(Settings(users=(user,), notify=True, defaults=Defaults(approval="session", max_session=DEFAULT_MAX_SESSION)))
 
 
 def parse_config_for_broker(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[str, ...], frozenset[int]]:
@@ -281,4 +349,5 @@ def config_from_text(config_text: str, presets_text: str, known_secrets: set[str
         users=users,
         allowed_uids=allowed_uids,
         notify=parse_notify(config_text),
+        settings=parse_settings(config_text),
     )

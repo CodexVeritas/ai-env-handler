@@ -9,7 +9,7 @@ Secrets are not in `.env` files and not in your environment. A human approves ev
 
 ## The normal flow
 
-1. See what exists (names only, never values):
+1. See what exists (names and descriptions, never values). A key's description says what it is for; use it to pick the right one:
    ```bash
    envh list
    ```

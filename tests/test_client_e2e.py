@@ -2,10 +2,12 @@ import asyncio
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from envh.client.commands import CONSOLE_COMMANDS
-from envh.server.console import HELP
+from envh.core.config import SecretEntry
+from envh.server.console.home import COMMANDS
 from tests.conftest import Harness, approve_next
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -129,7 +131,7 @@ async def test_signal_killed_command_exits_like_a_shell(control: Path, harness: 
 async def test_manage_lists_console_commands_and_sees_the_running_console(control: Path) -> None:
     code, out, err = await run_cli(control, "manage")
     assert code == 0, err
-    assert "add SECRET" in out and "edit presets" in out
+    assert "/keys" in out and "/presets" in out and "/settings" in out
     assert "✓ The console is running." in out
     assert "sudo envh-console" not in out
 
@@ -142,5 +144,17 @@ async def test_manage_says_how_to_start_a_stopped_console(tmp_path: Path) -> Non
 
 
 def test_manage_names_only_commands_the_console_knows() -> None:
+    known = {"/" + command.name for command in COMMANDS}
     for command, _purpose in CONSOLE_COMMANDS:
-        assert f"  {command}" in HELP, command
+        assert command in known, command
+
+
+async def test_list_shows_each_key_with_its_description(control: Path, harness: Harness) -> None:
+    settings = harness.broker.config.settings
+    described = replace(settings.secrets.get("DATABASE_URL", SecretEntry()), description="Production database, read-only user")
+    harness.broker.save_settings(replace(settings, secrets={**settings.secrets, "DATABASE_URL": described}))
+    code, out, err = await run_cli(control, "list")
+    assert code == 0, err
+    assert "DATABASE_URL" in out and "Production database, read-only user" in out
+    assert "postgres://x" not in out
+

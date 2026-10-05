@@ -52,7 +52,7 @@ def build_broker(data_dir: Path, echoed: list[str], clock: FakeClock, config_tex
     (data_dir / "presets.yaml").write_text(presets_text)
     vault = Vault(data_dir / "vault.age", PASSPHRASE, {"OPENAI_API_KEY": "sk-openai", "TEAM_OPENROUTER_KEY": "sk-or-team", "DATABASE_URL": "postgres://x"})
     config = load_config(data_dir, set(vault.names()))
-    audit = Audit(data_dir / "audit.jsonl", echoed.append, clock)
+    audit = Audit(data_dir / "audit.jsonl", lambda event: echoed.append(event.line()), clock)
     return Broker(data_dir, config, vault, StateTable(clock), audit)
 
 
