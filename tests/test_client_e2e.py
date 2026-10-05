@@ -158,3 +158,16 @@ async def test_list_shows_each_key_with_its_description(control: Path, harness: 
     assert "DATABASE_URL" in out and "Production database, read-only user" in out
     assert "postgres://x" not in out
 
+
+async def test_the_approver_sees_where_each_argument_of_the_requester_starts_and_ends(control: Path, harness: Harness) -> None:
+    task = asyncio.create_task(run_cli(control, "run", "--with", "OPENAI_API_KEY", "--reason", "two words -- three", "--", sys.executable, "-c", "pass"))
+    for _ in range(200):
+        pending = harness.broker.state.pending()
+        if pending:
+            break
+        await asyncio.sleep(0.05)
+    [request] = pending
+    assert "--reason 'two words -- three' -- " in request.provenance.cmdline
+    harness.broker.approve(request)
+    code, _, err = await asyncio.wait_for(task, timeout=20)
+    assert code == 0, err

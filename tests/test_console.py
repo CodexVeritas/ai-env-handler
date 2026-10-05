@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import shlex
 import stat
 from dataclasses import dataclass
 from datetime import timedelta
@@ -480,3 +481,9 @@ async def test_enter_after_typing_in_a_list_opens_nothing(harness: Harness) -> N
     console.press("up", "down", "enter")
     assert console.app.dialogs and "Add a key" in console.screen()
 
+
+async def test_the_process_line_shows_the_command_line_as_quoted(harness: Harness) -> None:
+    console = new_console(harness)
+    cmdline = shlex.join(["envh", "run", "--reason", "fix the build -- then rm -rf ~", "--", "make"])
+    harness.broker.request_run({"DATABASE_URL": "DATABASE_URL"}, [], "build", ("make",), Provenance(pid=7, uid=harness.provenance().uid, cmdline=cmdline))
+    assert "pid 7 · envh run --reason 'fix the build -- then rm -rf ~' -- make" in console.screen(160, 40)
