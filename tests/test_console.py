@@ -257,7 +257,7 @@ async def test_add_stores_a_key_whose_value_never_shows(harness: Harness) -> Non
 async def test_a_description_is_saved_and_shown_to_clients(harness: Harness) -> None:
     console = new_console(harness)
     console.command("keys")
-    console.press("enter", "down", "down", "down", "enter")
+    console.press("enter", "down", "down", "enter")
     console.type("Production database, read-only")
     console.press("enter")
     console.type(PASSPHRASE)
@@ -345,7 +345,7 @@ async def test_a_wrong_passphrase_saves_nothing(harness: Harness) -> None:
 async def test_a_key_gets_its_own_rule_from_its_screen(harness: Harness) -> None:
     console = new_console(harness)
     console.command("keys")
-    console.press("enter", *["down"] * 5, "enter")
+    console.press("enter", *["down"] * 4, "enter")
     assert "Rule for DATABASE_URL" in console.screen()
     console.press("enter", "down", "down", "enter", "ctrl_s")
     assert "+ Rule for DATABASE_URL: per-run" in console.screen()
@@ -492,7 +492,7 @@ async def test_the_process_line_shows_the_command_line_as_quoted(harness: Harnes
 async def test_one_passphrase_unlocks_changes_for_an_hour_with_a_warning_before_they_lock(harness: Harness) -> None:
     console = new_console(harness)
     console.command("keys")
-    console.press("enter", "down", "down", "down", "enter")
+    console.press("enter", "down", "down", "enter")
     console.type("Production database")
     console.press("enter")
     assert "Changes then stay unlocked for an hour" in console.screen()
@@ -544,25 +544,11 @@ async def test_show_puts_the_full_value_on_screen_briefly_and_is_audited(harness
     console.press("enter")
     screen = console.screen()
     assert "postgres://x" in screen and "Value of DATABASE_URL" in screen and "hides in 30 s" in screen
-    assert any("secret_revealed" in line and "DATABASE_URL" in line and "how=shown" in line for line in harness.echoed)
+    assert any("secret_revealed" in line and "DATABASE_URL" in line for line in harness.echoed)
     console.clock.now += 31
     console.app.tick()
     assert "postgres://x" not in console.screen()
     assert any(entry.text == "Showed the value of DATABASE_URL" for entry in console.app.activity.entries)
-
-
-async def test_copy_asks_the_terminal_to_hold_the_value_and_clears_it_later(harness: Harness) -> None:
-    console = new_console(harness)
-    console.command("keys")
-    console.press("enter", "down", "enter")
-    console.type(PASSPHRASE)
-    console.press("enter")
-    assert console.written[-1] == "\x1b]52;c;cG9zdGdyZXM6Ly94\a"
-    assert "postgres://x" not in console.screen() and "clears in 30 s" in console.screen()
-    assert any("secret_revealed" in line and "how=copied" in line for line in harness.echoed)
-    console.clock.now += 31
-    console.app.tick()
-    assert console.written[-1] == "\x1b]52;c;\a"
 
 
 async def test_an_approved_import_shows_up_on_the_open_keys_screen(harness: Harness) -> None:
