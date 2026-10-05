@@ -28,7 +28,7 @@ def test_core_never_imports_process_edges_or_the_untrusted_side(module: str) -> 
     assert imports_cleanly(module, ("envh.server", "envh.client", "envh.tools", "envh.install")) == "ok"
 
 
-@pytest.mark.parametrize("module", ["envh.server.control", "envh.server.console", "envh.server.serve", "envh.server.hardening", "envh.server.init_cmd"])
+@pytest.mark.parametrize("module", ["envh.server.control", "envh.server.console.app", "envh.server.serve", "envh.server.hardening", "envh.server.init_cmd"])
 def test_server_never_imports_the_untrusted_side(module: str) -> None:
     assert imports_cleanly(module, ("envh.client", "envh.tools")) == "ok"
 

@@ -106,6 +106,29 @@ class Vault:
             raise VaultError(f"secret {name} is not in the vault")
         del self._secrets[name]
 
+    def store(self, name: str, value: str) -> None:
+        """Set a secret and save; if saving fails, the vault in memory is as it was."""
+        previous = self._secrets.get(name)
+        self._secrets[name] = value
+        try:
+            self.save()
+        except BaseException:
+            if previous is None:
+                del self._secrets[name]
+            else:
+                self._secrets[name] = previous
+            raise
+
+    def delete(self, name: str) -> None:
+        """Remove a secret and save; if saving fails, the vault in memory is as it was."""
+        value = self.get(name)
+        del self._secrets[name]
+        try:
+            self.save()
+        except BaseException:
+            self._secrets[name] = value
+            raise
+
     def rename(self, old: str, new: str) -> None:
         """Move a secret to a new name and save; if saving fails, the vault keeps the old name in memory too."""
         if new in self._secrets:
@@ -122,8 +145,12 @@ class Vault:
         return hmac.compare_digest(candidate.encode(), self._passphrase.encode())
 
     def change_passphrase(self, new_passphrase: str) -> None:
-        self._passphrase = new_passphrase
-        self.save()
+        previous, self._passphrase = self._passphrase, new_passphrase
+        try:
+            self.save()
+        except BaseException:
+            self._passphrase = previous
+            raise
 
     def save(self) -> None:
         write_private_file(self._path, encrypt_secrets(self._secrets, self._passphrase))

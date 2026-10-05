@@ -23,11 +23,9 @@ SESSION_ENV_VAR = "ENVH_SESSION"
 RUN_MARKER_VAR = "ENVH_RUN_MARKER"
 LINGER_GRACE_SECONDS = 2.0
 CONSOLE_COMMANDS = (
-    ("add SECRET", "add a secret, or replace its value"),
-    ("rm SECRET", "remove a secret"),
-    ("edit presets", "add, change or remove presets"),
-    ("preset rm NAME", "remove a preset"),
-    ("edit config", "change approval rules and session limits"),
+    ("/keys", "add, rename, describe or remove keys, or replace a value"),
+    ("/presets", "create, change or remove presets"),
+    ("/settings", "approval rules, session limits, notifications, users"),
 )
 
 
@@ -172,7 +170,8 @@ def cmd_list(args: argparse.Namespace, sock: Path) -> int:
         payload = conn.recv_ok()
     print("SECRETS")
     for entry in payload["secrets"]:
-        print(f"  {entry['name']:<34} {entry['approval']:<8} max session {entry['max_session']}")
+        description = f"   {entry['description']}" if entry.get("description") else ""
+        print(f"  {entry['name']:<34} {entry['approval']:<8} max session {entry['max_session']:<4}{description}".rstrip())
     print("PRESETS")
     for preset in payload["presets"] or []:
         print(f"  {preset['name']}   (max session {preset['max_session']})")
@@ -206,9 +205,9 @@ def cmd_manage(args: argparse.Namespace, sock: Path) -> int:
     print("Secrets and presets change only on the envh console. Type one of these there:")
     print()
     for command, purpose in CONSOLE_COMMANDS:
-        print(f"  {command:<18}{purpose}")
+        print(f"  {command:<12}{purpose}")
     print()
-    print("Each asks for your vault passphrase.")
+    print("Each change asks for your vault passphrase.")
     print("Or write presets in a file here and send them to the console: envh preset propose FILE")
     print()
     if console_running(sock):
@@ -284,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     end.add_argument("session_id", nargs="?")
     end.set_defaults(func=cmd_session_end)
 
-    commands.add_parser("list", help="secrets, presets and live sessions").set_defaults(func=cmd_list)
+    commands.add_parser("list", help="secrets (names and descriptions), presets and live sessions").set_defaults(func=cmd_list)
     commands.add_parser("status", help="pending requests, runs, sessions").set_defaults(func=cmd_status)
     commands.add_parser("manage", help="how to add, change or remove secrets and presets").set_defaults(func=cmd_manage)
 

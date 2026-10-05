@@ -1,10 +1,12 @@
 import re
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
 
+from envh.common import peek
 from envh.core.broker import RequestError, fingerprint
-from envh.core.config import ConfigError, load_config
+from envh.core.config import ConfigError, SecretEntry, load_config
 from envh.core.vault import Vault
 from tests.conftest import PASSPHRASE, Harness
 
@@ -118,8 +120,14 @@ def test_list_payload_and_fingerprint(harness: Harness) -> None:
     assert team_preset["max_session"] == "1h"
     assert all(entry["in_vault"] for entry in team_preset["env"])
     assert "sk-openai" not in str(payload)
-    assert re.fullmatch(r"sk-p… \(20 chars, id [0-9a-f]{6}\)", fingerprint("sk-proj-abcdefghijkl"))
-    assert re.fullmatch(r"s… \(5 chars, id [0-9a-f]{6}\)", fingerprint("short"))
+    assert re.fullmatch(r"sk…kl \(20 chars, id [0-9a-f]{6}\)", fingerprint("sk-proj-abcdefghijkl"))
+    assert re.fullmatch(r"… \(5 chars, id [0-9a-f]{6}\)", fingerprint("short"))
+
+
+@pytest.mark.parametrize(("value", "shown"), [("a" * 11, "…"), ("abcdefghijkl", "a…l"), ("ab" + "x" * 16 + "yz", "ab…yz"), ("abc" + "x" * 26 + "xyz", "abc…xyz"), ("sk-p" + "x" * 52 + "a3f9", "sk-p…a3f9")])
+def test_peek_shows_the_ends_of_a_value_and_at_most_a_fifth_of_it(value: str, shown: str) -> None:
+    assert peek(value) == shown
+    assert len(shown) - 1 <= len(value) / 5
 
 
 async def test_approval_refuses_a_stale_presets_snapshot(harness: Harness) -> None:
@@ -282,7 +290,7 @@ async def test_rename_refuses_a_name_with_a_leftover_policy_or_still_in_use(harn
     config_path = harness.data_dir / "config.yaml"
     config_path.write_text(config_path.read_text().replace("secrets: {", "secrets: {LEFTOVER_KEY: {approval: session, max_session: 24h}, "))
     broker.reload()
-    with pytest.raises(RequestError, match="config.yaml still has a policy for LEFTOVER_KEY"):
+    with pytest.raises(RequestError, match="config.yaml still has settings for LEFTOVER_KEY"):
         broker.rename_secret("DATABASE_URL", "LEFTOVER_KEY")
     broker.request_run({"VAR": "TEAM_OPENROUTER_KEY"}, [], "why", ("x",), harness.provenance())
     broker.vault.remove("TEAM_OPENROUTER_KEY")
@@ -320,3 +328,47 @@ def test_check_rename_changes_nothing(harness: Harness) -> None:
     assert config.policy_for("MY_OPENAI").max_session == timedelta(hours=1)
     assert {path.name: path.read_bytes() for path in harness.data_dir.iterdir()} == files_before
     assert "OPENAI_API_KEY" in broker.vault and broker.config.presets["team"].env["OPENAI_API_KEY"].secret == "OPENAI_API_KEY"
+
+
+def test_save_presets_checks_the_whole_file_before_writing_it(harness: Harness) -> None:
+    presets_path = harness.data_dir / "presets.yaml"
+    before = presets_path.read_text()
+    with pytest.raises(ConfigError, match="not in the vault"):
+        harness.broker.save_presets({"broken": {"env": {"A": "NOT_STORED"}}})
+    assert presets_path.read_text() == before
+    harness.broker.save_presets({"solo": {"max_session": "30m", "env": {"DB": {"secret": "DATABASE_URL", "approval": "per-run"}}}})
+    assert list(harness.broker.config.presets) == ["solo"]
+    assert load_config(harness.data_dir, set(harness.broker.vault.names())).presets["solo"].env["DB"].approval == "per-run"
+    assert any("presets_saved" in line and "dbwork" in line and "solo" in line for line in harness.echoed)
+
+
+def test_saving_settings_or_renaming_refuses_a_config_changed_on_disk(harness: Harness) -> None:
+    config_path = harness.data_dir / "config.yaml"
+    config_path.write_text(config_path.read_text().replace("max_session: 2h", "max_session: 3h"))
+    with pytest.raises(RequestError, match="changed on disk"):
+        harness.broker.save_settings(harness.broker.config.settings)
+    with pytest.raises(RequestError, match="changed on disk"):
+        harness.broker.check_rename("OPENAI_API_KEY", "MY_OPENAI")
+    assert "3h" in config_path.read_text()
+
+
+def test_settings_saved_from_the_console_are_what_the_broker_loads(harness: Harness) -> None:
+    settings = harness.broker.config.settings
+    entries = {**settings.secrets, "DATABASE_URL": SecretEntry(approval="per-run", description="Production, read-only")}
+    harness.broker.save_settings(replace(settings, notify=False, secrets=entries))
+    reloaded = load_config(harness.data_dir, set(harness.broker.vault.names()))
+    assert reloaded.notify is False and harness.broker.config.notify is False
+    assert reloaded.policy_for("DATABASE_URL").approval == "per-run"
+    assert reloaded.description_for("DATABASE_URL") == "Production, read-only"
+    assert harness.broker.list_payload()["secrets"][0] == {"name": "DATABASE_URL", "approval": "per-run", "max_session": "2h", "description": "Production, read-only"}
+
+
+def test_removing_a_secret_takes_its_settings_and_refuses_one_a_preset_uses(harness: Harness) -> None:
+    broker = harness.broker
+    with pytest.raises(RequestError, match="used by presets dbwork, team"):
+        broker.remove_secret("OPENAI_API_KEY")
+    broker.save_presets({"db": {"env": {"DB": "DATABASE_URL"}}})
+    broker.remove_secret("OPENAI_API_KEY")
+    assert "OPENAI_API_KEY" not in Vault.open(harness.data_dir / "vault.age", PASSPHRASE).names()
+    assert "OPENAI_API_KEY" not in broker.config.settings.secrets
+    assert "OPENAI_API_KEY" not in (harness.data_dir / "config.yaml").read_text()

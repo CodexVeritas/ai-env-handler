@@ -1,7 +1,12 @@
+import os
+import shlex
+import subprocess
+import sys
+
 import pytest
 
 from envh import platform
-from envh.platform import PlatformError, passwordless_sudo_entries, preflight_problems
+from envh.platform import PeerCredentials, PlatformError, passwordless_sudo_entries, preflight_problems
 
 PASSWORD_ONLY_LISTING = """Matching Defaults entries for alice on host:
     env_reset, mail_badpass, secure_path=/usr/local/sbin\\:/usr/local/bin\\:/usr/sbin\\:/usr/bin, use_pty
@@ -43,3 +48,20 @@ def test_preflight_reports_unreadable_sudo_rules_and_skips_them_without_an_invok
     [problem] = preflight_problems("alice")
     assert "could not check the sudo rules of alice" in problem and "a password is required" in problem
     assert preflight_problems(None) == []
+
+
+def test_a_command_line_shows_where_each_argument_starts_and_ends() -> None:
+    argv = [sys.executable, "-c", "import time; print('started', flush=True); time.sleep(30)", "--reason", "fix the build -- then rm -rf ~", "", "it's"]
+    process = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout is not None and process.stdout.readline() == "started\n"
+        shown = PeerCredentials(pid=process.pid, uid=os.getuid(), gid=os.getgid()).cmdline()
+    finally:
+        process.kill()
+        process.wait()
+    assert shown == shlex.join(argv) and shlex.split(shown) == argv
+    assert "--reason 'fix the build -- then rm -rf ~' ''" in shown
+
+
+def test_a_command_line_that_cannot_be_read_says_so() -> None:
+    assert PeerCredentials(pid=2**31 - 1, uid=0, gid=0).cmdline() == "(command line unavailable)"

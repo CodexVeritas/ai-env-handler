@@ -10,19 +10,25 @@ Your API keys stop living in `.env` files. They move into a vault owned by a sep
 envh session start weekly-report --minutes 90 --reason "forecast digest: research step"
 ```
 
-**2. The envh console shows the request.** It runs in its own window, as its own user:
+**2. The envh console shows the request.** It runs full screen in its own window, as its own user:
 
 ```
-SESSION REQUEST #3   pid 51234
-   reason:   "forecast digest: research step"
-   preset:   weekly-report
-   OPENAI_API_KEY      <- OPENAI_API_KEY
-   OPENROUTER_API_KEY  <- PERSONAL_OPENROUTER_KEY
-   duration: 1h (capped from 90m)
-   [amber basil cedar] vault passphrase to approve #3 (hidden), or n to deny:
+╭─ Session request #3 ───────────────────────────────────── waiting 0:12 ─╮
+│ ben asks for a 1h session with weekly-report                             │
+│                                                                          │
+│ Reason    "forecast digest: research step"                               │
+│ Keys      OPENAI_API_KEY     ← OPENAI_API_KEY                            │
+│           OPENROUTER_API_KEY ← PERSONAL_OPENROUTER_KEY  Personal account │
+│ Duration  1h  (asked for 90m; key and preset limits cap it)              │
+│ Command   envh session start weekly-report --minutes 90 --reason '…'     │
+│ Process   pid 51234 · /usr/bin/python3 /usr/local/bin/envh session …     │
+│                                                                          │
+│ › Approve  [amber basil cedar] Vault passphrase: (hidden)                │
+│   Deny                                                                   │
+╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
-**3. You type your vault passphrase on the console** (hidden), or `n` to deny. Back in the terminal, the request returns:
+**3. You type your vault passphrase on the console** (hidden) and press Enter; ↓ then Enter denies. Back in the terminal, the request returns:
 
 ```
 session 3f9c... approved, expires 15:02:11
@@ -86,7 +92,7 @@ The boundaries, in words:
 
 **What a key use means:** the approved command receives the real value in its environment. It is visible to that process, to everything it imports, and to every other process running as you while it runs. A malicious dependency no longer gets every key on disk whenever it likes; it gets the values of the one approved run it is part of, and you see that run in the log.
 
-**While you are not at the console, nothing is approved or changed.** Approving a request, and `add`, `rm`, `preset rm`, `edit`, `passphrase` and the first rename in `keys` on the console, all ask for your vault passphrase, typed hidden. A wrong passphrase is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with that passphrase, which is stored nowhere. The exception is a session you already approved: it keeps working until it expires.
+**While you are not at the console, nothing is approved or changed.** Approving a request always asks for your vault passphrase, typed hidden, and so does changing the passphrase. Other changes on the console (to keys, presets or settings) ask for it once, then only for a confirmation for the next hour; `/lock` ends that hour early. A wrong passphrase is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with that passphrase, which is stored nowhere. The exception is a session you already approved: it keeps working until it expires.
 
 **One passphrase, on purpose.** The vault passphrase both unlocks the vault and approves requests, so approving is one thing to type. That costs some security, and you should know what: you type the passphrase often, so on X11 a program running as you has many chances to record it; and anyone who learns it can approve at your console and also decrypt any copy of `vault.age`, such as a backup. To make a fake prompt easy to spot, every approval prompt shows your console phrase: type the passphrase only where you see it. See [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console).
 
@@ -109,7 +115,35 @@ The helper chowns the terminal device to the service user for the duration and r
 - **The notification comes from the program that asked.** That program runs as you, in your desktop session, and reminds you only while it is still waiting. A request from a script with no desktop session (cron, SSH) only rings the bell.
 - **The chime is envh's own**, a short rising bell, so it isn't mistaken for another app. envh generates it and keeps it in your private runtime folder (`$XDG_RUNTIME_DIR`).
 - **Its text is fixed.** It never shows the requester's reason, so a request can't use it to show you instructions.
-- **To turn off the notifications, the chime and the bell, set `notify: false` in `config.yaml`.** Use `edit config` on the console.
+- **To turn off the notifications, the chime and the bell, turn off Notifications under `/settings` on the console.** That sets `notify: false` in `config.yaml`.
+
+## The console
+
+The console is one full-screen terminal app, modeled on Claude Code's. The home screen lists what happened (requests, approvals, runs, changes), newest at the bottom, with a command line under it.
+
+- **Type `/` for commands.** A list appears as you type; ↑↓ pick one, Tab completes it, Enter runs it. **↑ on an empty command line brings back earlier commands.** `?` shows every shortcut.
+- **A request takes over the screen when it arrives**, with everything it would grant: who asked, the reason, the variables and keys, the duration, the command line and the process. Type your vault passphrase and press Enter to approve, or press ↓ (or Esc) and then Enter to deny. If something is being typed when it arrives, such as a key name, it waits until you finish (Enter or Esc); the status line says so. A request that is withdrawn while you type stays on screen and ignores what you type until Enter, so the rest of a passphrase never lands anywhere else.
+- **Letters typed on the home screen do nothing and are not shown.** Only `/` starts a command, so a passphrase typed when no request is on screen never appears there.
+- **A change asks for your vault passphrase once; for the next hour, changes ask only to be confirmed.** The header shows the time left, the console warns five minutes before it locks again, and `/lock` locks it at once. Approving a request and changing the passphrase always ask. A wrong passphrase is logged and stops typing for two seconds.
+
+| Command | What it is for |
+|---|---|
+| `/keys` | every key with the first and last few characters of its value (fewer for short values, at most a fifth, nothing under 12 characters), where it is used, how it is approved and its description. Enter opens a key: show or copy its value, rename it, describe it, replace its value, give it its own approval rule, or remove it. F2 renames and Del removes from the list too. |
+| `/add` | store a new key; the value is typed or pasted hidden |
+| `/presets` | create, rename and remove presets, and change their variables: the key each reads, its approval, and the preset's longest session. Edits stay in a draft; Ctrl-S shows every change and asks for the passphrase once, and leaving with unsaved edits asks what to do with them. |
+| `/settings` | every option in `config.yaml` with its value and what it does: notifications, allowed users, the default approval and longest session, and rules for single keys. Saved like presets. |
+| `/sessions` | live sessions and the commands running with keys; Enter ends a session early |
+| `/passphrase` | change the vault passphrase; the vault is encrypted again with it |
+| `/lock` | end the unlocked hour now; the next change asks for the passphrase again |
+| `/edit-config`, `/edit-presets` | open the file in `$VISUAL`, `$EDITOR`, nano or vi; what you save is checked and shown before it is used |
+| `/reload` | read `config.yaml` and `presets.yaml` again, after root changed them |
+| `/quit` | stop the console (so does Ctrl-C twice); live sessions end |
+
+**Showing and copying a value.** Show puts the whole value on screen, where you can also select it with the mouse, and hides it again after 30 seconds or at Esc. Copy hands it to your terminal, which puts it on the clipboard, and envh clears the clipboard 30 seconds later; terminals that don't let programs set the clipboard (OSC 52), such as GNOME Terminal and other VTE-based ones, ignore it, so use Show there. Both are logged; see [What envh does not do](#what-envh-does-not-do) for what they expose.
+
+**Descriptions.** A key's description says what it is for ("Personal OpenAI account, news bot"). `envh list` shows it, so scripts and agents can pick the right key. Never put the key itself in it.
+
+**A rename follows the key** everywhere envh refers to it: the vault, its rule and description in `config.yaml`, presets, live sessions and waiting requests. Two things keep the old name: the `# VAR -> envh secret NAME` comments in `.env` files you imported, and any command or script that names the key itself (`--with VAR=OLD_NAME`). A new name is refused while `config.yaml` still has settings for it, or while a live session or waiting request still uses it, since either would quietly attach to the renamed key. Removing a key removes its rule and description too.
 
 ## Move your `.env` files over
 
@@ -118,7 +152,7 @@ envh import --dry-run ~/code            # scan a directory (depth 3) and show th
 envh import ~/code                      # or give specific files: envh import ~/code/bot/.env
 ```
 
-Import one project now and others whenever you like; an import never overwrites what is stored. Keys are named `<PROJECT>_<NAME>`, where the project is the folder that holds the `.env` (`news-bot/.env` gives `NEWS_BOT_OPENAI_API_KEY`). A key whose value is already in the vault is reused under its stored name instead of being stored twice. If a name is already taken by a different value, the new one gets a number (`NEWS_BOT_OPENAI_API_KEY_2`). The console shows the final names before you approve, and the presets and the rewritten `.env` comments use them. To rename a key later, see [See and rename your keys](#see-and-rename-your-keys); to replace a stored value, use `add NAME` on the console.
+Import one project now and others whenever you like; an import never overwrites what is stored. Keys are named `<PROJECT>_<NAME>`, where the project is the folder that holds the `.env` (`news-bot/.env` gives `NEWS_BOT_OPENAI_API_KEY`). A key whose value is already in the vault is reused under its stored name instead of being stored twice. If a name is already taken by a different value, the new one gets a number (`NEWS_BOT_OPENAI_API_KEY_2`). The console shows the final names before you approve, and the presets and the rewritten `.env` comments use them. To rename a key, describe it or replace a stored value later, use `/keys` on the console (see [The console](#the-console)).
 
 The wizard walks through six steps and writes nothing until the last one:
 
@@ -175,18 +209,10 @@ What it can and cannot identify:
 
 The scan stays separate from the import wizard on purpose: the wizard moves values out of files you chose, the scan is a read-only audit of everything else. The wizard prints a reminder to run it.
 
-## See and rename your keys
-
-Type `keys` in the console. Arrow keys move through your keys, each shown with the presets that use it. **F2** renames the selected key: the field starts with the current name (Ctrl-U clears it), type the new name, press Enter. The first rename asks for your vault passphrase; later renames in the same visit do not. Esc goes back, and any request that arrived meanwhile is shown then. Other keys do nothing while you browse, so a passphrase typed there by mistake is dropped.
-
-A rename follows the key everywhere envh refers to it: the vault, its policy in `config.yaml` (your comments stay), presets, live sessions and waiting requests. Two things keep the old name: the `# VAR -> envh secret NAME` comments in `.env` files you imported, and any command or script that names the key itself (`--with VAR=OLD_NAME`). A new name is refused while `config.yaml` still has a policy for it (left behind by `rm`; remove it with `edit config`), or while a live session or waiting request still uses it, since either would quietly attach to the renamed key.
-
-Asking once per visit costs a little: until you press Esc, something that can type into the console window could rename more keys without the passphrase (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)). It cannot read a value that way, but by swapping two names it can change which key a name refers to, and so which value a command naming that key receives.
-
 ## Daily use
 
 ```bash
-envh list                                                        # secrets (names, policy), presets, live sessions
+envh list                                                        # secrets (names, policy, descriptions), presets, live sessions
 envh manage                                                      # how to add, change or remove secrets and presets
 
 # one command, one approval
@@ -215,25 +241,26 @@ Both policy files are owned by the `envh` user with mode 0600. Nothing running a
 
 | File | Who can change it | How |
 |---|---|---|
-| `config.yaml` (defaults, per-secret policy) | you, on the console | `edit config` opens it in an editor; the result is validated and shown as a diff before it is saved. A rename in `keys` moves a key's policy to its new name |
-| `presets.yaml` | you, on the console | `edit presets`, `preset rm NAME`, the import wizard, approving an agent's `envh preset propose` (shown as a diff, approved with your passphrase), or a rename in `keys` |
-| the vault | you, on the console | `add`, `rm`, the import wizard, a rename in `keys` |
+| `config.yaml` (defaults, per-key rules and descriptions) | you, on the console | `/settings`, or descriptions and rules from `/keys`; `/edit-config` opens it in an editor and checks the result. Saving from `/settings` rewrites the file in envh's layout, with a comment on each option, so comments you add by hand are not kept |
+| `presets.yaml` | you, on the console | `/presets` or `/edit-presets`, the import wizard, approving an agent's `envh preset propose` (shown as changes, approved with your passphrase), or a rename in `/keys` |
+| the vault | you, on the console | `/keys` and `/add`, the import wizard |
 
 `envh manage` lists the console commands for these changes and says whether the console is running.
 
-An agent can only *propose*: `envh preset validate draft.yaml` checks a draft without changing anything, `envh preset propose draft.yaml --reason "..."` puts the diff on your console. A proposal that maps a variable to a secret the agent should not have is just a diff you deny. Root can of course edit the files directly; the console `reload` command picks that up.
+An agent can only *propose*: `envh preset validate draft.yaml` checks a draft without changing anything, `envh preset propose draft.yaml --reason "..."` puts the diff on your console. A proposal that maps a variable to a secret the agent should not have is just a diff you deny. Root can of course edit the files directly; the console's `/reload` picks that up, and a save from the console refuses to overwrite a `config.yaml` changed on disk since.
 
 `config.yaml`:
 
 ```yaml
-users: [alice]           # login names allowed to talk to the broker; the installer fills in yours
-notify: true             # desktop notification with a sound, and the console's bell, when a request needs your passphrase
-defaults:
-  approval: session      # session: one approval opens a session | per-run: ask on every run, never in sessions
-  max_session: 1h        # hard cap 24h
-secrets:
-  DATABASE_URL: { approval: per-run }
-  OPENAI_API_KEY: { max_session: 8h }
+# envh settings. Change them on the console with /settings; saving there rewrites this file.
+users: [alice]            # logins whose scripts and agents may ask for keys
+notify: true              # notification, chime and console bell while a request waits
+defaults:                 # for every key without its own setting below
+  approval: session       # session: one approval opens a session | per-run: ask on every run
+  max_session: 1h         # longest session that may include a key; hard cap 24h
+secrets:                  # per key: approval, max_session, description; the rest follows the defaults
+  DATABASE_URL: {approval: per-run, description: "Production database, read-only user"}
+  OPENAI_API_KEY: {max_session: 8h}
 ```
 
 `/var/lib/envh/presets.yaml` is written only by the broker (import wizard, proposals, console):
@@ -253,7 +280,7 @@ presets:
 
 The same variable can point at different secrets in different presets; that replaces commenting lines in and out. Unknown fields, bad durations, caps over 24h and secrets missing from the vault are rejected, never warned about.
 
-On the console, requests appear on their own, one at a time: type the vault passphrase to approve the one on screen, or `n` to deny it; others wait their turn. When no request is waiting, the console shows an `envh>` prompt for commands: `keys` (browse and rename keys; see [See and rename your keys](#see-and-rename-your-keys)), `add SECRET` (value typed hidden), `rm SECRET`, `secrets`, `presets`, `sessions`, `runs`, `preset rm NAME`, `edit config`, `edit presets` (add an editor name to override `$VISUAL`/`$EDITOR`/nano/vi), `passphrase` (change the vault passphrase; the vault is re-encrypted), `reload`, `help`, `quit`. `add`, `rm`, `preset rm`, `edit`, `passphrase` and the first rename in `keys` ask for the vault passphrase too.
+Everything on the console is described in [The console](#the-console).
 
 ## Using it with Claude Code
 
@@ -287,7 +314,7 @@ What differs from Claude Code:
 - Start the console in its own window. Never inside an agent's terminal pane.
 - Keep `NOPASSWD` out of sudoers and stay out of the `docker` group.
 - Read the whole prompt before typing the passphrase: the reason, the variables, the duration, the command line.
-- Type the vault passphrase only where your console phrase is shown. If you typed it on an X11 desktop while something untrusted was running, change it with `passphrase` from a text console.
+- Type the vault passphrase only where your console phrase is shown. If you typed it on an X11 desktop while something untrusted was running, change it with `/passphrase` from a text console.
 - Do not paste secrets into chats, commits, logs or command lines.
 - Treat `/var/lib/envh` as secret material if you ever copy or back it up. Back up `vault.age` only to encrypted media; recovering it needs only the standard `age` tool: `age -d vault.age`.
 - Approve only where nothing running as you can see or type. On X11, or with `/dev/uinput` writable by you, a desktop terminal window does not qualify; see the next section.
@@ -302,7 +329,7 @@ The console is only as safe as the screen you read it on and the keyboard you ty
 
 What does not fix it:
 
-- **The passphrase, on X11.** It stops anything that can type but cannot see or record, such as a virtual keyboard on Wayland or a text console. On X11, a program running as you can record it the first time you type it, and approve on its own after that. If that may have happened, change it with `passphrase` from a text console.
+- **The passphrase, on X11.** It stops anything that can type but cannot see or record, such as a virtual keyboard on Wayland or a text console. On X11, a program running as you can record it the first time you type it, and approve on its own after that. If that may have happened, change it with `/passphrase` from a text console.
 - **One-time codes** (backup codes, an authenticator app). A recorded code cannot be replayed. But a program that can draw over and type into your windows can show you a fake request, or change the request as you type, so your code approves its request.
 - **The Claude Code or Cursor hook.** It sees only the command text, so a few lines of Python that talk to the display get past it, and so does a script file. It also covers only the agent's shell commands, not MCP servers, other agents, or a package inside a script you run.
 
@@ -314,6 +341,9 @@ What does:
 
 ## What envh does not do
 
+- **For an hour after you type the passphrase for a change, changes are unlocked.** Anything that can type into the console window during that hour (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)) can rename, replace, show, copy or remove keys and change presets and settings without knowing the passphrase. It still cannot approve a request or change the passphrase. `/lock` ends the hour early, and stopping the console ends it too.
+- **Showing or copying a value puts the whole key where others can get it.** Shown, it is on screen for up to 30 seconds. Copied, it sits on your clipboard for 30 seconds, where every program running as you, agents included, can read it, and a clipboard manager may keep it longer. The copy also passes through your terminal, so a terminal session recording would hold it. Both are written to the audit log.
+- **The console shows the ends of each key.** `/keys` shows the first and last few characters of every value (at most a fifth of it, and nothing of a value under 12 characters), so a key can be matched with a provider's dashboard. Anyone who can see the console's screen sees those characters too; the rest stays hidden.
 - **It does not hide a value from the command that receives it.** Values are visible to that process, everything it imports, and every other process running as you for the duration of the run. envh cannot revoke a value once delivered, cannot undo a copy the command made (a log line, a file, a cache), and a session expiring does not stop a running command. It does end the run cleanly: processes the command left behind are terminated when it exits.
 - **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent; see the [Roadmap](#roadmap). On the host, your agent's own permission rules and classifier are the only control over what else it reads.
 - **A session id is a bearer capability within your own account.** Anything running as you that obtains it, for example from a process environment, can use it until it expires. Keep sessions short and specific. Other local accounts cannot use it: the broker checks the kernel-reported uid of every connection against the session's owner.
@@ -373,10 +403,10 @@ Layout, in review order. The directory tree states the trust boundaries and a te
 | Package | Side of the boundary | Contents |
 |---|---|---|
 | `src/envh/core/` | trusted logic, no sockets or terminals | `config.py` policy files, `durations.py`, `vault.py` (age encryption), `state.py` (requests, sessions, runs), `broker.py` (decisions and their side effects), `audit.py` |
-| `src/envh/server/` | the trusted process, runs as user `envh` | `control.py` (Unix-socket protocol, peer uid), `console.py` (prompts, admin commands), `keys_view.py` (the `keys` screen), `hardening.py`, `serve.py` (startup), `init_cmd.py` |
+| `src/envh/server/` | the trusted process, runs as user `envh` | `control.py` (Unix-socket protocol, peer uid), `console/` (the full-screen console: `app.py`, the request card, the keys, presets, settings and sessions screens, and `tui.py`, its standard-library terminal toolkit), `hardening.py`, `serve.py` (startup), `init_cmd.py` |
 | `src/envh/client/` | the untrusted side, runs as you or an agent, standard library only | `transport.py` (socket client), `commands.py` (`envh run`, `session`, `list`, …) |
 | `src/envh/tools/` | set-aside utilities, standard library only | `importer.py` (the `.env` wizard), `scanner.py` (`envh scan`); deleting the package removes two subcommands and nothing else |
 | `src/envh/install/` | root-only system setup | `command.py` (`envh install` / `uninstall`, the console helper and launcher) |
 | `src/envh/platform.py`, `common.py`, `cli.py` | shared | OS facts (uid, socket path, prctl, preflight), the value fingerprint, command dispatch |
 
-The security argument lives in `core/` and `server/`, about 1,200 lines; the rest cannot touch a secret except through the socket like any other client.
+The security argument lives in `core/` and `server/`. In the console, `app.py` and `request_card.py` decide what a typed passphrase can do and what a request shows; the other screens change things only through the broker, after the passphrase. The rest cannot touch a secret except through the socket like any other client.

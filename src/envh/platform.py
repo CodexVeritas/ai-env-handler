@@ -6,6 +6,7 @@ import ctypes
 import grp
 import os
 import pwd
+import shlex
 import socket
 import struct
 import subprocess
@@ -31,12 +32,16 @@ class PeerCredentials:
     gid: int
 
     def cmdline(self) -> str:
+        """The process's arguments, shell-quoted so the approver sees where each starts and ends; one argument holding
+        spaces or `--` could otherwise pass for several. Empty arguments stay, as ''."""
         try:
             raw = Path(f"/proc/{self.pid}/cmdline").read_bytes()
         except OSError:
             return "(command line unavailable)"
-        parts = [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
-        return " ".join(parts) if parts else "(empty command line)"
+        arguments = raw.rstrip(b"\0")
+        if not arguments:
+            return "(empty command line)"
+        return shlex.join(part.decode("utf-8", "replace") for part in arguments.split(b"\0"))
 
 
 def socket_path() -> Path:

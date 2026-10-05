@@ -90,7 +90,7 @@ class Connection:
     async def serve(self) -> None:
         if self.provenance.uid not in self.broker.config.allowed_uids:
             self.broker.audit.event("rejected_uid", uid=self.provenance.uid, pid=self.provenance.pid, cmdline=self.provenance.cmdline)
-            raise RequestError(f"uid {self.provenance.uid} is not in the broker's users list; a listed user can add it on the console with `edit config`")
+            raise RequestError(f"uid {self.provenance.uid} is not in the broker's users list; a listed user can add it on the console under /settings")
         line = await self.reader.readline()
         if not line:
             return
