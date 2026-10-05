@@ -139,7 +139,7 @@ The console is one full-screen terminal app, modeled on Claude Code's. The home 
 | `/reload` | read `config.yaml` and `presets.yaml` again, after root changed them |
 | `/quit` | stop the console (so does Ctrl-C twice); live sessions end |
 
-**Showing a value.** Show puts the whole value on screen, where you can also select it with the mouse, and hides it again after 30 seconds or at Esc. It is logged; see [What envh does not do](#what-envh-does-not-do) for what it exposes.
+**Showing a value.** Show puts the whole value on screen, where you can also select it with the mouse, and hides it again after 30 seconds or at Esc. The audit log records which key was shown; see [What envh does not do](#what-envh-does-not-do) for what it exposes.
 
 **Descriptions.** A key's description says what it is for ("Personal OpenAI account, news bot"). `envh list` shows it, so scripts and agents can pick the right key. Never put the key itself in it.
 
@@ -342,7 +342,7 @@ What does:
 ## What envh does not do
 
 - **For an hour after you type the passphrase for a change, changes are unlocked.** Anything that can type into the console window during that hour (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)) can rename, replace, show or remove keys and change presets and settings without knowing the passphrase. It still cannot approve a request or change the passphrase. `/lock` ends the hour early, and stopping the console ends it too.
-- **Showing a value puts the whole key where others can get it.** It is on screen for up to 30 seconds, and it passes through your terminal, so a terminal session recording would hold it. Selecting it with the mouse puts it on your selection or clipboard, where every program running as you, agents included, can read it. It is written to the audit log.
+- **Showing a value puts the whole key where others can get it.** It is on screen for up to 30 seconds, and it passes through your terminal, so a terminal session recording would hold it. Selecting it with the mouse puts it on your selection or clipboard, where every program running as you, agents included, can read it. The audit log records which key was shown, not its value.
 - **The console shows the ends of each key.** `/keys` shows the first and last few characters of every value (at most a fifth of it, and nothing of a value under 12 characters), so a key can be matched with a provider's dashboard. Anyone who can see the console's screen sees those characters too; the rest stays hidden.
 - **It does not hide a value from the command that receives it.** Values are visible to that process, everything it imports, and every other process running as you for the duration of the run. envh cannot revoke a value once delivered, cannot undo a copy the command made (a log line, a file, a cache), and a session expiring does not stop a running command. It does end the run cleanly: processes the command left behind are terminated when it exits.
 - **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent; see the [Roadmap](#roadmap). On the host, your agent's own permission rules and classifier are the only control over what else it reads.
