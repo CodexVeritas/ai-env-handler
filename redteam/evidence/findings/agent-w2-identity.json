@@ -1,0 +1,38 @@
+{
+  "agent_id": "w2-identity",
+  "surface": "F6 peer-creds / identity",
+  "candidates": [
+    {
+      "id": "w2-identity-1",
+      "title": "pid/cmdline shown on the console request card are an attacker-controlled claim (requester picks its own argv, or recycles a pid via exit-before-read so /proc/<pid>/cmdline shows another process's command line) - but this is the acknowledged 'pid/cmdline are unverified claims' AND in this arena it surfaces no value: cmdline/pid are read once at connect and NEVER returned to any client, only rendered on the (nonexistent) approver's card and written to the envhsvc-owned audit log",
+      "win_condition": "APPROVAL BYPASS/FORGERY (attempted)",
+      "repro_cmds": [
+        "# control.py:77-79 reads SO_PEERCRED + /proc/<pid>/cmdline ONCE in Connection.__init__ (eagerly, right after accept); cmdline is used only at request_card.py:93 (console) and control.py:92 (rejection audit).",
+        "grep -n 'cmdline' /home/user/ai-env-handler/src/envh/server/control.py",
+        "# -> 79: Provenance(...cmdline=credentials.cmdline())   (construction)",
+        "# -> 92: audit.event('rejected_uid', ... cmdline=self.provenance.cmdline)   (rejection audit)",
+        "# cmdline is NEVER placed in any reply to the client (list/status/run/preset/import replies carry no cmdline)."
+      ],
+      "observed_output": "grep shows cmdline only at construction (line 79) and rejection-audit (line 92); no reply path returns it. The request card (request_card.py:93) renders 'pid {pid} . {cmdline}' to the console only.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "NOT novel. README/SECURITY.md and CHARTER already acknowledge pid/cmdline as unverified claims. Additionally it is a no-op in this arena (no approver; cmdline never reaches a client). Recorded so Wave-3 does not re-chase it.",
+      "severity": "LOW",
+      "self_assessment": "KNOWN",
+      "notes": "Read timing is actually the SAFE end: cmdline is captured once in __init__ immediately after accept(), never re-read at decision/approval time, so the spoof window is only connect()->accept-callback and it can never diverge later. No §4 win condition is reachable through it here."
+    }
+  ],
+  "negative_results": [
+    "AUTHORIZATION KEYS ONLY ON SO_PEERCRED uid. control.py:77-79 builds Provenance exclusively from peer_credentials(sock) (SO_PEERCRED); NO op reads uid/pid/cmdline from the client's JSON message (verified by grep of all Provenance()/provenance usages). Every authz decision keys on self.provenance.uid: the allowed_uids gate (control.py:91), session ownership owned_session (broker.py:202), session_wait owner check (control.py:180), end_session uid (control.py:197), resolve_run_in_session uid (control.py:205), list/status for_uid filter (control.py:249/252), MAX_PENDING_PER_USER (state.py:118). pid is used ONLY for audit/display, never for authz.",
+    "uid CANNOT BE SPOOFED by a non-root user. Proven: outsider (uid 30034) -> '{\"ok\": false, \"error\": \"uid 30034 is not in the broker's users list...\"}'; redteam (uid 30033) -> accepted (status/list returned). The uid in the rejection equals the client's real euid, i.e. the kernel's SO_PEERCRED value.",
+    "SO_PEERCRED IS FROZEN AT connect() AND IMMUNE TO SCM_RIGHTS fd-passing. CASE A: an outsider process connect()s then passes the live broker fd (sendmsg/SCM_RIGHTS) to a redteam process; the broker still read uid=30034 at connect and the redteam holder reads back the rejection '{\"ok\": false, \"error\": \"uid 30034 is not in the broker's users list...\"}'. CASE B: a redteam process connect()s and passes the fd to an outsider process; the outsider holder successfully runs op=status -> '{\"ok\": true, \"pending\": [], \"runs\": [], \"sessions\": []}'. Conclusion: identity binds to the connect()ing process and cannot be changed by whoever later holds/drives the fd. An unlisted user therefore cannot borrow a listed identity via fd-passing (the connection it can open is rejected at accept); handing a redteam-connected fd to an outsider only lets it act as the complicit redteam, which redteam can already do (analogous to acknowledged same-user bearer reuse) - NOT an escalation.",
+    "No SCM_CREDENTIALS path: the broker never sets SO_PASSCRED nor reads ancillary SCM_CREDENTIALS; SO_PEERCRED is the sole credential source and is kernel-enforced, so a client cannot assert forged creds.",
+    "redteam CANNOT change its uid: `sudo -u redteam sudo -n -l` -> 'a password is required' (no passwordless sudo); no setuid helper exists under /opt/ctf or /usr/local that connects to the socket (find -perm -4000 empty); the envh client runs as the calling user. So 'connect as a different uid via setuid/exec' is not available to a normal user (any that were would be root-flavored / out of scope).",
+    "cmdline/pid NOT leaked to the client: provenance.cmdline appears in control.py only at construction (line 79) and in the rejection audit (line 92); status_payload/session_payload echo pid+uid but filtered by for_uid=self.provenance.uid, so a client only ever sees its OWN pid/uid, never another user's, and never any cmdline.",
+    "pid-reuse / exit-before-read cmdline spoof is real-in-principle but read ONCE eagerly in __init__ (tiny connect->accept window, never re-read at approval), reaches no client, and only misleads the (nonexistent) approver + envhsvc-owned audit -> no §4 value surfaced; KNOWN ('unverified claims')."
+  ],
+  "out_of_scope_observations": [
+    "A client's own connected socket reveals the broker's pid and uid via SO_PEERCRED: redteam reads pid=2592 uid=996(envhsvc) gid=995 off its client socket. This is mild info disclosure (the broker pid is also discoverable via ps/pgrep; uid 996 is in /etc/passwd) and surfaces no secret value. Its only use would be to TARGET the broker pid for the acknowledged root-only /proc/<pid>/mem|environ|ptrace attacks, which are OUT OF SCOPE (CHARTER §3.2/§3.3). Not claimed as a finding.",
+    "PeerCredentials.cmdline() does Path('/proc/<pid>/cmdline').read_bytes() synchronously on the single asyncio loop inside Connection.__init__; a connecting process with a pathologically large argv could add read latency per connection. This is a DoS-flavored angle (F9) and must be exercised only against the ISOLATED broker /run/envh-dos/ctl.sock per the Wave-2 rules; NOT tested against the shared arena broker. Noted for the DoS agent, not claimed here."
+  ]
+}
