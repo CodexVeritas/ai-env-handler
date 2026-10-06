@@ -12,7 +12,9 @@ from typing import Any, Callable
 from envh.common import fingerprint
 from envh.core.audit import Audit
 from envh.core.config import (
+    AUTO,
     CONFIG_FILE,
+    KEY_APPROVALS,
     PRESETS_FILE,
     SECRET_NAME,
     VAR_NAME,
@@ -81,6 +83,10 @@ class Broker:
         self.request_listeners: list[Callable[[Request], None]] = []
 
     def _announce(self, request: Request) -> None:
+        self._log_request(request)
+        self._show(request)
+
+    def _log_request(self, request: Request, **extra: Any) -> None:
         self.audit.event(
             "request",
             id=request.id,
@@ -89,8 +95,16 @@ class Broker:
             reason=request.reason or "(no reason given)",
             presets=list(request.presets),
             vars=sorted(request.mapping),
+            **extra,
         )
-        self._show(request)
+
+    def _announce_or_grant(self, request: Request, presets: list[Preset]) -> None:
+        """Put the request on the console, or approve it at once when none of its keys needs approval."""
+        if self.needs_approval(request.mapping, presets):
+            self._announce(request)
+        else:
+            self._log_request(request, approval=AUTO)
+            self.approve(request, by=AUTO)
 
     def _show(self, request: Request) -> None:
         for listener in self.request_listeners:
@@ -143,10 +157,12 @@ class Broker:
         return mapping
 
     def policy_for_var(self, var: str, secret: str, presets: list[Preset]) -> SecretPolicy:
-        """When several presets supply the variable, per-run wins over session."""
+        """When several presets supply the variable, the strictest approval wins."""
         policies = [self.config.effective_policy(preset.env[var]) for preset in presets if var in preset.env and preset.env[var].secret == secret]
-        per_run = [policy for policy in policies if policy.approval == "per-run"]
-        return (per_run or policies or [self.config.policy_for(secret)])[0]
+        return max(policies or [self.config.policy_for(secret)], key=lambda policy: KEY_APPROVALS.index(policy.approval))
+
+    def needs_approval(self, mapping: dict[str, str], presets: list[Preset]) -> bool:
+        return any(self.policy_for_var(var, secret, presets).approval != AUTO for var, secret in mapping.items())
 
     def split_per_run(self, mapping: dict[str, str], presets: list[Preset]) -> tuple[dict[str, str], dict[str, str]]:
         sessionable: dict[str, str] = {}
@@ -197,7 +213,7 @@ class Broker:
             granted=granted,
             summary={"excluded_per_run": sorted(per_run)},
         )
-        self._announce(request)
+        self._announce_or_grant(request, presets)
         return request
 
     def owned_session(self, session_id: str, uid: int) -> Session:
@@ -220,6 +236,10 @@ class Broker:
         _, per_run = self.split_per_run(mapping, presets)
         if per_run:
             raise RequestError(f"approval is now per-run for {', '.join(sorted(per_run))}; run without --session")
+        if session.auto_granted:
+            needing = sorted(var for var, secret in mapping.items() if self.policy_for_var(var, secret, presets).approval != AUTO)
+            if needing:
+                raise RequestError(f"approval is now needed for {', '.join(needing)}; start a new session, or run without --session")
         return session, mapping
 
     def request_run(
@@ -238,7 +258,7 @@ class Broker:
             command=command,
             presets=tuple(preset.name for preset in presets),
         )
-        self._announce(request)
+        self._announce_or_grant(request, presets)
         return request
 
     def validate_preset_yaml(self, text: str) -> dict[str, Any]:
@@ -386,7 +406,7 @@ class Broker:
 
     def approve(self, request: Request, by: str = "console") -> None:
         if request.kind == "session":
-            session = self.state.create_session(request)
+            session = self.state.create_session(request, auto_granted=by == AUTO)
             request.result = {"session_id": session.id, "expires_at": session.expires_at.isoformat(timespec="seconds")}
             self.audit.event("session_start", session=session.id, presets=list(session.presets), vars=sorted(session.mapping), expires=request.result["expires_at"], pid=request.provenance.pid)
         elif request.kind == "preset":

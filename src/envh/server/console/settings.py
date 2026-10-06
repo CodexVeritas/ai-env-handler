@@ -9,7 +9,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from envh.core.broker import RequestError
-from envh.core.config import CONFIG_FILE, ConfigError, SecretEntry, Settings, parse_config_for_broker, parse_settings, render_config
+from envh.core.config import AUTO, CONFIG_FILE, ConfigError, SecretEntry, Settings, parse_config_for_broker, parse_settings, render_config
 from envh.core.durations import DurationError, format_duration, parse_duration
 from envh.server.console.dialogs import Choice, KeyPicker, Prompt, View, text_lines
 from envh.server.console.presets import check_duration
@@ -27,8 +27,9 @@ EXPLANATIONS = {
     "approval": "session: one approval opens a session that many runs share. per-run: every run asks you.",
     "max_session": "The longest session that may include a key; a key's own rule or a preset can lower it. Up to 24h.",
     "rule": "This key's own rule; what it doesn't set follows the defaults.",
-    "add": "Give one key its own approval or session limit, such as per-run for a production database.",
+    "add": "Give one key its own approval or session limit, such as per-run for a production database, or auto for a key that needs no approval.",
 }
+AUTO_TEXT = "auto: runs get it without asking you"
 LOGIN_SEPARATORS = re.compile(r"[\s,]+")
 
 
@@ -247,8 +248,9 @@ class RuleView(View):
                 (f"Follow the default: {defaults.approval}", lambda: self._set(approval=None)),
                 ("session: one approval opens a session", lambda: self._set(approval="session")),
                 ("per-run: every run asks you", lambda: self._set(approval="per-run")),
+                (AUTO_TEXT, lambda: self._set(approval=AUTO)),
             ]
-            self.app.open(Choice(self.app, f"Approval for {self.name}", options, selected={None: 0, "session": 1, "per-run": 2}[self.entry.approval]))
+            self.app.open(Choice(self.app, f"Approval for {self.name}", options, selected={None: 0, "session": 1, "per-run": 2, AUTO: 3}[self.entry.approval]))
         elif key == "enter" and action == "max_session":
             hint = f"Like 30m or 8h, up to 24h. Empty follows the default ({format_duration(defaults.max_session)})."
             initial = format_duration(self.entry.max_session) if self.entry.max_session else ""

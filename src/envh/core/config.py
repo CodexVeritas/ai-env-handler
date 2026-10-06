@@ -17,7 +17,9 @@ from envh.core.durations import MAX_SESSION, DurationError, format_duration, par
 
 CONFIG_FILE = "config.yaml"
 PRESETS_FILE = "presets.yaml"
+AUTO = "auto"
 APPROVALS = ("session", "per-run")
+KEY_APPROVALS = (AUTO, *APPROVALS)  # least strict first; auto is for a key's own rule only, never the defaults or a preset
 SECRET_FIELDS = ("approval", "max_session", "description")
 VAR_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PLAIN_SCALAR = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -156,9 +158,9 @@ def _reject_unknown(mapping: dict[str, Any], allowed: tuple[str, ...], where: st
         raise ConfigError(f"{where}: unknown field(s) {', '.join(unknown)}; allowed: {', '.join(allowed)}")
 
 
-def _parse_approval(value: Any, where: str) -> str:
-    if value not in APPROVALS:
-        raise ConfigError(f"{where}: approval must be one of {', '.join(APPROVALS)}, got {_describe(value)}")
+def _parse_approval(value: Any, where: str, allowed: tuple[str, ...] = APPROVALS) -> str:
+    if value not in allowed:
+        raise ConfigError(f"{where}: approval must be one of {', '.join(allowed)}, got {_describe(value)}")
     return value
 
 
@@ -225,7 +227,7 @@ def parse_config(text: str) -> tuple[Defaults, dict[str, SecretPolicy], tuple[st
         _reject_unknown(fields, SECRET_FIELDS, where)
         if "description" in fields:
             _parse_description(fields["description"], where)
-        approval = _parse_approval(fields.get("approval", defaults.approval), where)
+        approval = _parse_approval(fields.get("approval", defaults.approval), where, KEY_APPROVALS)
         max_session = _parse_session_duration(fields.get("max_session", format_duration(defaults.max_session)), where)
         if "approval" in fields or "max_session" in fields:
             policies[name] = SecretPolicy(name=name, approval=approval, max_session=max_session)

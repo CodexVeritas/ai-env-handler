@@ -38,6 +38,8 @@ Secrets are not in `.env` files and not in your environment. A human approves ev
 
 Always run directly, without a session, when `envh list` marks a secret `per-run` (sessions never cover those) or when the human asked to approve every request.
 
+Secrets marked `auto` in `envh list` need no approval: `envh run --with <VAR> --reason "..." -- <command>` starts at once, so no session is needed for them. Still give a reason; every run is logged.
+
 ## Always include a reason
 
 The console shows your `--reason` first. Write what a careful colleague would want to read: the task, the step, and anything unusual (new provider, large spend, writes to an external system). "testing" is not a reason.

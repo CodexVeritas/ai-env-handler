@@ -7,6 +7,9 @@ newline, inside `$(...)`, backticks, `bash -c` or `eval`, behind wrappers like `
 prefix. envh inside an argument, a quoted string, a comment or a heredoc body is a mention and never asks, though a
 `$(...)` or backticks that bash expands there still count. If a quote never closes, text that looks like such a
 request asks.
+For `envh run` and `envh session start` it first asks the broker whether those keys need approval at all. Keys marked
+auto don't, so it stays quiet for them. It asks anyway when it can't be sure what it asked about: the broker can't
+say, bash rewrites an option first (a `$(...)`, backticks or a `$`), or the script sets ENVH_SOCKET.
 A script file, an interpreter one-liner, a pipe into a shell or a variable-built command gets around it, and
 nothing depends on it: a disguised session-less `envh run` still prompts on the envh console and a disguised
 `envh session start` still needs the passphrase typed there. The hook is attention plus a second chance to deny, not
@@ -18,8 +21,10 @@ Install: see settings.snippet.json and cursor/hooks.snippet.json.
 from __future__ import annotations
 
 import json
+import os
 import posixpath
 import re
+import socket
 import sys
 from dataclasses import dataclass, field
 from typing import Any
@@ -72,6 +77,16 @@ PROPOSE_REASON = "envh: proposing a preset change; review the diff on the envh c
 IMPORT_REASON = "envh: importing secrets; this is an interactive wizard meant for a human"
 RUN_REASON = "envh: running one command with secrets; approve it on the envh console with your vault passphrase"
 UNREADABLE_REASON = "envh: this command's quoting could not be read, and it may start an envh request that needs your passphrase"
+KIND_BY_REASON = {RUN_REASON: "run", SESSION_REASON: "session"}
+SOCKET_ENV_VAR = "ENVH_SOCKET"
+DEFAULT_SOCKET = "/run/envh/ctl.sock"
+BROKER_TIMEOUT_SECONDS = 2
+# per request kind: the options that take a value, with the list the value goes in, and the flags
+VALUE_OPTIONS: dict[str, dict[str, str | None]] = {
+    "run": {"--preset": "presets", "--with": "with", "--reason": None},
+    "session": {"--with": "with", "--minutes": None, "--reason": None},
+}
+FLAG_OPTIONS = {"run": {"--keep-background"}, "session": {"--quiet"}}
 
 OPERATORS = ("<<<", "<<-", "&>>", ";;&", "&&", "||", ";;", ";&", "|&", ">>", ">|", ">&", "<&", "<>", "<<", "&>", ";", "&", "|", "<", ">", "(", ")", "\n")
 SEPARATORS = {";", "&", "&&", "||", "|", "|&", ";;", ";&", ";;&", "(", ")", "\n"}
@@ -103,10 +118,23 @@ def run_in_session(arguments: list[str], session_assigned: bool) -> tuple[bool, 
     return session_assigned or bool(session_value), saw_help
 
 
+def socket_and_arguments(arguments: list[str], script_sets_socket: bool) -> tuple[str | None, list[str]]:
+    """The broker socket an envh invocation talks to, and its arguments after --socket. The socket is None when the hook
+    can't tell which broker that is: the script sets ENVH_SOCKET, or the path is relative or rewritten by bash."""
+    socket_path = None if script_sets_socket else os.environ.get(SOCKET_ENV_VAR) or DEFAULT_SOCKET
+    while arguments[:1] and arguments[0].startswith("--socket"):
+        if "=" in arguments[0]:
+            word, value = arguments[0], arguments[0].partition("=")[2]
+            arguments = arguments[1:]
+        else:
+            word = value = (arguments[1:2] or [""])[0]
+            arguments = arguments[2:]
+        socket_path = None if isinstance(word, Expanded) else value
+    return (socket_path if socket_path and posixpath.isabs(socket_path) else None), arguments
+
+
 def passphrase_reason(arguments: list[str], session_assigned: bool) -> str | None:
     """Why the envh console will ask for the vault passphrase for this invocation, or None when it will not."""
-    while arguments[:1] and arguments[0].startswith("--socket"):
-        arguments = arguments[1:] if "=" in arguments[0] else arguments[2:]
     match arguments:
         case ["session", "start", *rest] if not HELP & set(rest):
             return SESSION_REASON
@@ -118,6 +146,63 @@ def passphrase_reason(arguments: list[str], session_assigned: bool) -> str | Non
             in_session, saw_help = run_in_session(rest, session_assigned)
             return None if in_session or saw_help else RUN_REASON
     return None
+
+
+def key_request(kind: str, arguments: list[str]) -> dict[str, Any] | None:
+    """The presets and variables an `envh run` or `envh session start` asks for, as the client sends them; None when an
+    argument isn't one the hook reads exactly, such as an abbreviated option or one bash rewrites."""
+    request: dict[str, Any] = {"op": "needs_approval", "kind": kind, "presets": [], "with": []}
+    index = 0
+    while index < len(arguments):
+        word = arguments[index]
+        if isinstance(word, Expanded):
+            return None
+        option, has_value, value = word.partition("=")
+        if kind == "run" and (word == "--" or not word.startswith("-")):
+            break
+        if kind == "session" and not word.startswith("-"):
+            request["presets"].append(word)
+        elif option in VALUE_OPTIONS[kind]:
+            if not has_value:
+                index += 1
+                if index == len(arguments) or isinstance(arguments[index], Expanded):
+                    return None
+                value = arguments[index]
+            target = VALUE_OPTIONS[kind][option]
+            if target is not None:
+                request[target].append(value)
+        elif word not in FLAG_OPTIONS[kind]:
+            return None
+        index += 1
+    for target in ("presets", "with"):
+        request[target] = [part.strip() for value in request[target] for part in value.split(",") if part.strip()]
+    return request
+
+
+def broker_needs_approval(request: dict[str, Any], socket_path: str) -> bool:
+    """What the broker says about the request; True whenever it can't say, such as when it isn't running."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(BROKER_TIMEOUT_SECONDS)
+            connection.connect(socket_path)
+            connection.sendall(json.dumps(request).encode() + b"\n")
+            with connection.makefile("rb") as replies:
+                reply = json.loads(replies.readline())
+    except (OSError, ValueError):
+        return True
+    return not (isinstance(reply, dict) and reply.get("ok") is True and reply.get("needs_approval") is False)
+
+
+def granted_at_once(reason: str, arguments: list[str], socket_path: str | None) -> bool:
+    """True when the broker grants this run or session start without the console, since none of its keys needs approval."""
+    kind = KIND_BY_REASON.get(reason)
+    request = key_request(kind, arguments[2 if kind == "session" else 1 :]) if kind else None
+    return request is not None and socket_path is not None and not broker_needs_approval(request, socket_path)
+
+
+class Expanded(str):
+    """A word bash rewrites before the command gets it, since it holds a $(...), backticks or a $. It reads as the text
+    the lexer kept, so the parsing treats it like any other word; only what needs a word's exact value checks for it."""
 
 
 @dataclass
@@ -311,7 +396,7 @@ def split_commands(tokens: list[Word | str]) -> list[Command]:
         elif token.heredoc is not None:
             command.stdin.append(token.heredoc)
         elif not redirect:
-            command.words.append(token.value)
+            command.words.append(Expanded(token.value) if token.substitutions or "$" in token.value else token.value)
         redirect = ""
     return commands
 
@@ -473,7 +558,10 @@ def commands_in(tokens: list[Word | str], nesting: int) -> list[list[str]]:
             if nested is not None:
                 if nesting + 1 > MAX_NESTING:
                     raise _TooDeeplyNested
-                commands += simple_commands(nested, nesting + 1)
+                inner = simple_commands(nested, nesting + 1)
+                if any(isinstance(word, Expanded) for word in command.words):
+                    inner = [[Expanded(word) for word in words] for words in inner]
+                commands += inner
     return commands
 
 
@@ -482,7 +570,7 @@ def decide(command: str) -> tuple[str, str] | None:
         commands = simple_commands(command)
     except (ValueError, RecursionError):
         return ("ask", UNREADABLE_REASON) if PASSPHRASE_FORM.search(command) else None
-    session_set = False
+    session_set = socket_set = False
     for words in commands:
         name_and_arguments = command_words(words)
         if name_and_arguments[:1] == ["export"]:
@@ -490,9 +578,11 @@ def decide(command: str) -> tuple[str, str] | None:
         elif name_and_arguments and posixpath.basename(name_and_arguments[0]) == "envh":
             prefix = words[: len(words) - len(name_and_arguments)]
             in_session = session_live_through(prefix, session_set)
-            reason = passphrase_reason(name_and_arguments[1:], in_session)
-            if reason is not None:
+            socket_path, arguments = socket_and_arguments(name_and_arguments[1:], socket_set or any(SOCKET_ENV_VAR in word for word in prefix))
+            reason = passphrase_reason(arguments, in_session)
+            if reason is not None and not granted_at_once(reason, arguments, socket_path):
                 return "ask", reason
+        socket_set = socket_set or any(SOCKET_ENV_VAR in word for word in words)
     return None
 
 
