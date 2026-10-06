@@ -56,7 +56,7 @@ def describe(event: AuditEvent) -> tuple[str, str] | None:
         "admin_add": ("ok", lambda: f"Stored {fields.get('secret')}"),
         "admin_replace": ("ok", lambda: f"Replaced the value of {fields.get('secret')}"),
         "admin_rm": ("ok", lambda: f"Removed {fields.get('secret')}"),
-        "secret_revealed": ("warn", lambda: f"Copied {fields.get('secret')} to the clipboard" if fields.get("how") == "copied" else f"Showed the value of {fields.get('secret')}"),
+        "secret_revealed": ("warn", lambda: f"Showed the value of {fields.get('secret')}"),
         "secret_renamed": ("ok", lambda: f"Renamed {fields.get('old')} to {fields.get('new')}"),
         "presets_saved": ("ok", lambda: f"Saved presets: {names(fields.get('presets', []))}"),
         "presets_updated": ("ok", lambda: f"Presets updated: {names(fields.get('presets', []))}"),

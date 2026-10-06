@@ -529,10 +529,10 @@ class Broker:
             entries = {other: entry for other, entry in self.config.settings.secrets.items() if other != name}
             self.save_settings(replace(self.config.settings, secrets=entries))
 
-    def reveal_secret(self, name: str, how: str) -> str:
-        """A secret's value, for the console to show or copy at the human's request; each time is audited."""
+    def reveal_secret(self, name: str) -> str:
+        """A secret's value, for the console to show at the human's request; each time is audited."""
         value = self.vault.get(name)
-        self.audit.event("secret_revealed", secret=name, how=how)
+        self.audit.event("secret_revealed", secret=name)
         return value
 
     def change_passphrase(self, new_passphrase: str) -> None:

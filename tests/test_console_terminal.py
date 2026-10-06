@@ -14,9 +14,6 @@ from envh.server.console.app import ConsoleApp
 from envh.server.console.tui import ENTER_FULL_SCREEN, LEAVE_FULL_SCREEN, Terminal
 from tests.conftest import PASSPHRASE, Harness
 
-COPY_OF_DATABASE_URL = "\x1b]52;c;cG9zdGdyZXM6Ly94\a"
-CLEAR_CLIPBOARD = "\x1b]52;c;\a"
-
 
 @dataclass
 class Session:
@@ -86,19 +83,3 @@ async def test_the_console_runs_full_screen_and_puts_the_terminal_back(harness: 
     assert session.text.rindex(LEAVE_FULL_SCREEN) > session.text.rindex(ENTER_FULL_SCREEN)
     assert PASSPHRASE not in session.text
     assert session.app.quit_requested.is_set()
-
-
-async def test_stopping_the_console_right_after_a_copy_clears_the_clipboard(harness: Harness) -> None:
-    async with console_on_a_terminal(harness) as session:
-        session.type(b"/keys\r")
-        await session.wait_for("Description")
-        session.type(b"\r")
-        await session.wait_for("Copy the value")
-        session.type(b"\x1b[B\r")
-        await session.wait_for("Copy the value of DATABASE_URL")
-        session.type(PASSPHRASE.encode() + b"\r")
-        await session.wait_for(COPY_OF_DATABASE_URL)
-        session.type(b"\x03\x03\x03\x03")
-        await asyncio.wait_for(session.task, 5)
-        await asyncio.sleep(0.05)
-    assert session.text.rindex(CLEAR_CLIPBOARD) > session.text.index(COPY_OF_DATABASE_URL)

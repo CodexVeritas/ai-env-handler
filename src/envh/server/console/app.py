@@ -9,7 +9,6 @@ Enter after it, so a passphrase typed at the wrong moment never opens a field th
 from __future__ import annotations
 
 import asyncio
-import base64
 import codecs
 import math
 import time
@@ -34,7 +33,6 @@ QUIT_CONFIRM_SECONDS = 2
 HISTORY_KEPT = 100
 UNLOCK_SECONDS = 3600
 LOCK_WARNING_SECONDS = 300
-CLIPBOARD_SECONDS = 30
 MIN_COLUMNS = 50
 MIN_ROWS = 14
 
@@ -75,7 +73,6 @@ class ConsoleApp:
         self._quit_armed_until = 0.0
         self._typed_while_browsing = False
         self._lock_warned = False
-        self._clear_clipboard_at = 0.0
         self._reminder: tuple[Request, float, Iterator[float]] | None = None
         self._last_failure = ""
         self.views.append(HomeView(self))
@@ -171,12 +168,6 @@ class ConsoleApp:
         self.unlocked_until = 0.0
         self.activity.note("info", note)
 
-    def copy_to_clipboard(self, value: str) -> None:
-        """Ask the terminal to put value on the clipboard (OSC 52), and to clear it after CLIPBOARD_SECONDS. Terminals
-        that don't allow programs to set the clipboard ignore both."""
-        self._write(f"\x1b]52;c;{base64.b64encode(value.encode()).decode()}\a")
-        self._clear_clipboard_at = self.clock() + CLIPBOARD_SECONDS
-
     def _change(self, action: Callable[[], None]) -> None:
         working = ("info", "Saving…")
         self.message = working
@@ -268,10 +259,8 @@ class ConsoleApp:
 
     def tick(self) -> None:
         """Timed work: ring again, with growing gaps, while the oldest request waits; warn before changes lock again and
-        lock them; clear a copied value from the clipboard; close dialogs whose time is up."""
+        lock them; close dialogs whose time is up."""
         self._lock_on_time()
-        if self._clear_clipboard_at and self.clock() >= self._clear_clipboard_at:
-            self._clear_clipboard()
         for dialog in [dialog for dialog in self.dialogs if dialog.expired()]:
             self.close(dialog)
         if self.card is not None and not self.card.withdrawn:
@@ -286,15 +275,6 @@ class ConsoleApp:
         elif self.clock() >= self._reminder[1]:
             self.ring()
             self._reminder = (target, self.clock() + next(self._reminder[2]), self._reminder[2])
-
-    def _clear_clipboard(self) -> None:
-        """Ask the terminal to empty the clipboard a copy filled. A terminal that has gone away can't be asked; that is
-        logged."""
-        self._clear_clipboard_at = 0.0
-        try:
-            self._write("\x1b]52;c;\a")
-        except OSError as error:
-            self.broker.audit.event("error", where="console", detail=f"could not clear the clipboard: {error}")
 
     def _lock_on_time(self) -> None:
         if not self.unlocked_until:
@@ -412,7 +392,5 @@ class ConsoleApp:
         finally:
             if reading is not None:
                 reading.cancel()
-            if self._clear_clipboard_at:
-                self._clear_clipboard()
             self.terminal = None
             self.stop()
