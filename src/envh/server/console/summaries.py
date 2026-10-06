@@ -42,7 +42,7 @@ def plural(count: int, word: str) -> str:
 
 def approval_text(config: Config, name: str) -> str:
     policy = config.policy_for(name)
-    return "per-run" if policy.approval == "per-run" else f"session · {format_duration(policy.max_session)}"
+    return f"session · {format_duration(policy.max_session)}" if policy.approval == "session" else policy.approval
 
 
 def rule_text(entry: SecretEntry) -> str | None:

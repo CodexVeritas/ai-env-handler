@@ -7,8 +7,9 @@ import pytest
 from envh.common import peek
 from envh.core.broker import RequestError, fingerprint
 from envh.core.config import ConfigError, SecretEntry, load_config
+from envh.core.state import Request
 from envh.core.vault import Vault
-from tests.conftest import PASSPHRASE, Harness
+from tests.conftest import PASSPHRASE, Harness, make_auto
 
 
 def test_mapping_from_with(harness: Harness) -> None:
@@ -110,6 +111,46 @@ async def test_preset_proposal(harness: Harness) -> None:
         broker.request_preset("presets: {x: {env: {A: NOPE}}}", None, harness.provenance())
     with pytest.raises(ConfigError):
         broker.validate_preset_yaml("presets: {x: {env: {}}}")
+
+
+async def test_a_request_for_keys_that_need_no_approval_is_granted_without_the_console(harness: Harness) -> None:
+    broker = harness.broker
+    make_auto(harness, "TEAM_OPENROUTER_KEY")
+    shown: list[Request] = []
+    broker.request_listeners.append(shown.append)
+    run = broker.request_run({"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY"}, [], "fetch", ("x",), harness.provenance())
+    assert run.decision.result().outcome == "approved" and run.decision.result().by == "auto"
+    mapping, presets = broker.mapping_from_presets(["team"], ["OPENROUTER_API_KEY"])
+    session = broker.request_session(mapping, presets, 30, "fetch", (), harness.provenance())
+    assert broker.state.session(session.result["session_id"]).mapping == {"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY"}
+    assert shown == [] and broker.state.pending() == []
+    assert sum("approval=auto" in line for line in harness.echoed if "] request " in line) == 2
+    mixed = broker.request_run({"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY", "OPENAI_API_KEY": "OPENAI_API_KEY"}, [], "fetch", ("x",), harness.provenance())
+    assert mixed.pending and shown == [mixed]
+
+
+async def test_a_session_nobody_approved_stops_covering_a_key_that_now_needs_approval(harness: Harness) -> None:
+    broker = harness.broker
+    uid = harness.provenance().uid
+    make_auto(harness, "TEAM_OPENROUTER_KEY")
+    mapping, presets = broker.mapping_from_presets(["team"], [])
+    approved = broker.request_session(mapping, presets, 30, "work", (), harness.provenance())
+    broker.approve(approved)
+    granted = broker.request_session({"OPENROUTER_API_KEY": "TEAM_OPENROUTER_KEY"}, presets, 30, "work", (), harness.provenance())
+    settings = broker.config.settings
+    broker.save_settings(replace(settings, secrets={name: entry for name, entry in settings.secrets.items() if name != "TEAM_OPENROUTER_KEY"}))
+    broker.resolve_run_in_session(approved.result["session_id"], ["OPENROUTER_API_KEY"], uid)
+    with pytest.raises(RequestError, match="approval is now needed for OPENROUTER_API_KEY"):
+        broker.resolve_run_in_session(granted.result["session_id"], [], uid)
+
+
+def test_the_strictest_approval_wins_over_a_key_that_needs_none(harness: Harness) -> None:
+    broker = harness.broker
+    make_auto(harness, "TEAM_OPENROUTER_KEY")
+    broker.write_presets({**broker.config.presets_raw, "strict": {"env": {"OPENROUTER_API_KEY": {"secret": "TEAM_OPENROUTER_KEY", "approval": "session"}}}})
+    for names in (["team"], ["team", "strict"], ["strict", "team"]):
+        mapping, presets = broker.mapping_from_presets(names, ["OPENROUTER_API_KEY"])
+        assert broker.needs_approval(mapping, presets) is (names != ["team"]), names
 
 
 def test_list_payload_and_fingerprint(harness: Harness) -> None:

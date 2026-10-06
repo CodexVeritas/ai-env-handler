@@ -70,6 +70,7 @@ class Session:
     reason: str | None
     provenance: Provenance
     ended_at: datetime | None = None
+    auto_granted: bool = False
 
     def live(self, now: datetime) -> bool:
         return self.ended_at is None and now < self.expires_at
@@ -172,7 +173,7 @@ class StateTable:
             del self.runs[rid]
         return len(stale_requests) + len(stale_sessions) + len(stale_runs)
 
-    def create_session(self, request: Request) -> Session:
+    def create_session(self, request: Request, auto_granted: bool = False) -> Session:
         if request.granted is None:
             raise StateError("session request has no granted duration")
         now = self.now()
@@ -184,6 +185,7 @@ class StateTable:
             expires_at=now + request.granted,
             reason=request.reason,
             provenance=request.provenance,
+            auto_granted=auto_granted,
         )
         self.sessions[session.id] = session
         return session
