@@ -194,6 +194,22 @@ async def hook_against_broker(socket_path: Path, payload: dict) -> dict | None:
         ("envh run --wi OPENAI_API_KEY -- true", "ask"),
         ("envh run --preset nope -- true", "ask"),
         ("envh preset propose draft.yaml", "ask"),
+        # options bash rewrites before envh reads them
+        ("envh run --with OPENAI_API_KEY$(printf ,DATABASE_URL) -- true", "ask"),
+        ('envh run --with "OPENAI_API_KEY$(printf ,DATABASE_URL)" -- true', "ask"),
+        ("envh run --with OPENAI_API_KEY $(printf -- --with=DATABASE_URL) -- true", "ask"),
+        ("envh run --with OPENAI_API_KEY $EXTRA -- true", "ask"),
+        ("envh run --with OPENAI_API_KEY --reason $WHY -- true", "ask"),
+        ("envh session start dbwork --minutes `echo 5`", "ask"),
+        ('eval "envh run --with OPENAI_API_KEY$(printf ,DATABASE_URL) -- true"', "ask"),
+        ('envh run --with OPENAI_API_KEY -- python x.py --since "$(date +%F)" $HOME', None),
+        # a broker the hook can't be sure the command reaches
+        ("ENVH_SOCKET=/tmp/strict.sock envh run --with OPENAI_API_KEY -- true", "ask"),
+        ("export ENVH_SOCKET=/tmp/strict.sock && envh run --with OPENAI_API_KEY -- true", "ask"),
+        ("env ENVH_SOCKET=/tmp/strict.sock envh run --with OPENAI_API_KEY -- true", "ask"),
+        ("envh --socket ctl.sock run --with OPENAI_API_KEY -- true", "ask"),
+        ('envh --socket "$SOCK" run --with OPENAI_API_KEY -- true', "ask"),
+        ("envh run --with OPENAI_API_KEY -- true; export ENVH_SOCKET=/tmp/strict.sock", None),
     ],
 )
 async def test_hook_stays_quiet_for_keys_that_need_no_approval(control: Path, harness: Harness, command: str, expected: str | None) -> None:
@@ -209,5 +225,6 @@ async def test_hook_asks_the_broker_the_command_names_and_cursor_gets_the_same_a
     make_auto(harness, "OPENAI_API_KEY")
     command = f"envh --socket {control} run --with OPENAI_API_KEY -- true"
     assert await hook_against_broker(Path(NO_BROKER), claude_payload(command)) is None
+    assert await hook_against_broker(Path(NO_BROKER), claude_payload(f"ENVH_SOCKET=/tmp/strict.sock {command}")) is None
     assert await hook_against_broker(control, {"hook_event_name": "beforeShellExecution", "command": "envh run --with OPENAI_API_KEY -- true"}) is None
     assert harness.broker.state.requests == {}
