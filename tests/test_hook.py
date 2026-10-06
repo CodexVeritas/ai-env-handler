@@ -1,4 +1,6 @@
+import asyncio
 import json
+import os
 import re
 import subprocess
 import sys
@@ -6,18 +8,25 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import Harness, make_auto
+
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "claude" / "hooks" / "envh_ask.py"
 CURSOR_MATCHER = json.loads((ROOT / "cursor" / "hooks.snippet.json").read_text())["hooks"]["beforeShellExecution"][0]["matcher"]
+NO_BROKER = "/nonexistent/envh/ctl.sock"
+
+
+def claude_payload(command: str, tool: str = "Bash") -> dict:
+    return {"tool_name": tool, "tool_input": {"command": command}, "hook_event_name": "PreToolUse"}
 
 
 def run_hook_raw(payload: dict) -> dict | None:
-    result = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True, check=True)
+    result = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True, check=True, env={**os.environ, "ENVH_SOCKET": NO_BROKER})
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
 def run_hook(command: str, tool: str = "Bash") -> dict | None:
-    output = run_hook_raw({"tool_name": tool, "tool_input": {"command": command}, "hook_event_name": "PreToolUse"})
+    output = run_hook_raw(claude_payload(command, tool))
     return None if output is None else output["hookSpecificOutput"]
 
 
@@ -35,8 +44,8 @@ DECISIONS = pytest.mark.parametrize(
         ("envh run --with OPENAI_API_KEY -- python x.py", "ask"),
         ("envh run --with A python x.py --session abc", "ask"),
         ("PYTHONPATH=. envh run --with KEY -- python x.py", "ask"),
-        ("envh --socket /tmp/envh-dev/ctl.sock session start p --minutes 5", "ask"),
-        ("envh --socket=/tmp/envh-dev/ctl.sock run --with A -- true", "ask"),
+        ("envh --socket /nonexistent/envh-dev/ctl.sock session start p --minutes 5", "ask"),
+        ("envh --socket=/nonexistent/envh-dev/ctl.sock run --with A -- true", "ask"),
         ("envh run --session abc --reason y -- python x.py", None),
         ("ENVH_SESSION=abc envh run -- python x.py", None),
         ("env ENVH_SESSION=abc envh run -- python x.py", None),
@@ -160,3 +169,45 @@ def test_hook_falls_back_to_the_word_match_when_nested_too_deeply_to_parse() -> 
 
 def test_hook_ignores_other_tools() -> None:
     assert run_hook("envh session start p --minutes 5", tool="Read") is None
+
+
+async def hook_against_broker(socket_path: Path, payload: dict) -> dict | None:
+    """The hook's output with the broker listening, so it can answer the hook while the hook waits."""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, str(HOOK), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, env={**os.environ, "ENVH_SOCKET": str(socket_path)}
+    )
+    stdout, _ = await asyncio.wait_for(process.communicate(json.dumps(payload).encode()), timeout=20)
+    return json.loads(stdout) if stdout.strip() else None
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("envh run --with OPENAI_API_KEY --reason x -- python x.py", None),
+        ("envh run --with=OPENAI_API_KEY --keep-background -- python x.py", None),
+        ("envh session start dbwork --minutes 5 --reason x --quiet", None),
+        ("cd repo && envh run --with OPENAI_API_KEY -- true; envh list", None),
+        ("envh run --preset dbwork -- python x.py", "ask"),
+        ("envh run --with OPENAI_API_KEY,DATABASE_URL -- true", "ask"),
+        ("envh run --with OPENAI_API_KEY -- true && envh run --with DATABASE_URL -- true", "ask"),
+        ("envh session start team --minutes 5", "ask"),
+        ("envh run --wi OPENAI_API_KEY -- true", "ask"),
+        ("envh run --preset nope -- true", "ask"),
+        ("envh preset propose draft.yaml", "ask"),
+    ],
+)
+async def test_hook_stays_quiet_for_keys_that_need_no_approval(control: Path, harness: Harness, command: str, expected: str | None) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    output = await hook_against_broker(control, claude_payload(command))
+    if expected is None:
+        assert output is None, output
+    else:
+        assert output is not None and output["hookSpecificOutput"]["permissionDecision"] == expected
+
+
+async def test_hook_asks_the_broker_the_command_names_and_cursor_gets_the_same_answer(control: Path, harness: Harness) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    command = f"envh --socket {control} run --with OPENAI_API_KEY -- true"
+    assert await hook_against_broker(Path(NO_BROKER), claude_payload(command)) is None
+    assert await hook_against_broker(control, {"hook_event_name": "beforeShellExecution", "command": "envh run --with OPENAI_API_KEY -- true"}) is None
+    assert harness.broker.state.requests == {}

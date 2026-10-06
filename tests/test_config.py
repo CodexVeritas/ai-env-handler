@@ -48,6 +48,13 @@ secrets:
     assert policies["OPENAI_API_KEY"].max_session == timedelta(hours=8)
 
 
+def test_a_key_rule_can_need_no_approval() -> None:
+    text = "secrets: {FRED_API_KEY: {approval: auto}}\n"
+    _, policies, _, _ = parse_config(text)
+    assert policies["FRED_API_KEY"].approval == "auto"
+    assert parse_settings(text).secrets["FRED_API_KEY"] == SecretEntry(approval="auto")
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -58,6 +65,7 @@ secrets:
         "secrets: {lower_case: {}}",
         "secrets: {KEY: {mode: proxy}}",
         "secrets: {KEY: {max_session: 2d}}",
+        "defaults: {approval: auto}",
         "extra: 1",
         "- a list",
         "users: alice",
@@ -94,6 +102,7 @@ presets:
         "presets: {p: {env: {'1bad': A}}}",
         "presets: {p: {env: {A: lower}}}",
         "presets: {p: {env: {A: {approval: per-run}}}}",
+        "presets: {p: {env: {A: {secret: A, approval: auto}}}}",
         "presets: {p: {env: {A: {secret: A, mode: x}}}}",
         "presets: {p: {ttl: 1h, env: {A: A}}}",
         "presets: {p: {max_session: 48h, env: {A: A}}}",

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import subprocess
 import sys
 from dataclasses import replace
@@ -8,7 +9,7 @@ from pathlib import Path
 from envh.client.commands import CONSOLE_COMMANDS
 from envh.core.config import SecretEntry
 from envh.server.console.home import COMMANDS
-from tests.conftest import Harness, approve_next
+from tests.conftest import Harness, approve_next, make_auto
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -171,3 +172,18 @@ async def test_the_approver_sees_where_each_argument_of_the_requester_starts_and
     harness.broker.approve(request)
     code, _, err = await asyncio.wait_for(task, timeout=20)
     assert code == 0, err
+
+
+async def test_keys_that_need_no_approval_run_at_once_and_show_in_list(control: Path, harness: Harness) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    code, out, err = await run_cli(control, "run", "--with", "OPENAI_API_KEY", "--reason", "free", "--", sys.executable, "-c", "import os; print(os.environ['OPENAI_API_KEY'])")
+    assert code == 0, err
+    assert out.strip() == "sk-openai" and "waiting for approval" not in err
+    code, out, err = await run_cli(control, "session", "start", "dbwork", "--minutes", "5", "--reason", "free", "--quiet")
+    assert code == 0, err
+    assert harness.broker.state.session(out.strip()).mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
+    assert "not covered by sessions: DATABASE_URL" in err and "waiting for approval" not in err
+    code, out, err = await run_cli(control, "list")
+    assert code == 0, err
+    assert re.search(r"^  OPENAI_API_KEY +auto ", out, re.MULTILINE)
+    assert re.search(r"OPENAI_API_KEY +<- OPENAI_API_KEY   \[auto\]", out)

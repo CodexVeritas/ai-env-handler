@@ -354,6 +354,22 @@ async def test_a_key_gets_its_own_rule_from_its_screen(harness: Harness) -> None
     assert harness.broker.config.policy_for("DATABASE_URL").approval == "per-run"
 
 
+async def test_a_key_set_to_need_no_approval_is_granted_without_a_card(harness: Harness) -> None:
+    console = new_console(harness)
+    console.command("keys")
+    console.press("down", "enter", *["down"] * 5, "enter")
+    console.press("enter", "down", "down", "down", "enter", "ctrl_s")
+    assert "~ Rule for OPENAI_API_KEY: up to 1h → auto · up to 1h" in console.screen()
+    console.type(PASSPHRASE)
+    console.press("enter", "escape", "escape")
+    assert "auto: runs get it without asking you" in console.screen()
+    console.press("escape", "escape")
+    request = run_request(harness)
+    assert request.decision.result().outcome == "approved" and console.app.card is None and console.written == []
+    assert f'Run request #{request.id} · "why" · granted, its keys need no approval' in console.screen()
+    assert f"Approved #{request.id}" not in console.screen()
+
+
 async def test_a_live_session_can_be_ended_from_the_console(harness: Harness) -> None:
     mapping, presets = harness.broker.mapping_from_presets(["team"], [])
     request = harness.broker.request_session(mapping, presets, 30, "work", ("x",), harness.provenance())

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import getpass
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -12,7 +12,7 @@ import pytest
 
 from envh.core.audit import Audit
 from envh.core.broker import Broker
-from envh.core.config import load_config, render_config_template
+from envh.core.config import SecretEntry, load_config, render_config_template
 from envh.server.control import ControlServer
 from envh.core.state import Provenance, StateTable
 from envh.core.vault import Vault
@@ -124,6 +124,12 @@ class Client:
         line = await asyncio.wait_for(self.reader.readline(), timeout=5)
         assert line, "connection closed"
         return json.loads(line)
+
+
+def make_auto(harness: Harness, *names: str) -> None:
+    settings = harness.broker.config.settings
+    entries = {name: replace(settings.secrets.get(name, SecretEntry()), approval="auto") for name in names}
+    harness.broker.save_settings(replace(settings, secrets={**settings.secrets, **entries}))
 
 
 async def approve_next(harness: Harness) -> None:

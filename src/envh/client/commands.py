@@ -131,7 +131,7 @@ def cmd_session_start(args: argparse.Namespace, sock: Path) -> int:
         reply = conn.recv_ok()
         if reply.get("excluded_per_run"):
             print(f"envh: per-run secrets are not covered by sessions: {', '.join(reply['excluded_per_run'])}", file=sys.stderr, flush=True)
-        with waiting_notice(reply, f"envh session wait {reply['request_id']}"):
+        with waiting_notice(reply, f"envh session wait {reply['request_id']}") if reply.get("pending") else nullcontext():
             final = conn.recv_ok()
     return print_session(final, args.quiet)
 
@@ -177,8 +177,8 @@ def cmd_list(args: argparse.Namespace, sock: Path) -> int:
         print(f"  {preset['name']}   (max session {preset['max_session']})")
         for entry in preset["env"]:
             flags = []
-            if entry["approval"] == "per-run":
-                flags.append("per-run")
+            if entry["approval"] in ("per-run", "auto"):
+                flags.append(entry["approval"])
             if not entry["in_vault"]:
                 flags.append("MISSING FROM VAULT")
             suffix = f"   [{', '.join(flags)}]" if flags else ""

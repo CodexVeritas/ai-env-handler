@@ -2,8 +2,10 @@ import asyncio
 import os
 from pathlib import Path
 
+import pytest
+
 from envh.server.control import ControlServer
-from tests.conftest import Client, Harness, approve_next
+from tests.conftest import Client, Harness, approve_next, make_auto
 
 
 async def test_session_lifecycle(control: Path, harness: Harness) -> None:
@@ -207,3 +209,42 @@ async def test_session_combines_several_presets(control: Path, harness: Harness)
         await client.send(op="session_start", presets="team", minutes=5)
         reply = await client.recv()
         assert reply["ok"] is False and "list of preset names" in reply["error"]
+
+
+async def test_keys_that_need_no_approval_come_without_waiting(control: Path, harness: Harness) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    async with Client(control) as client:
+        await client.send(op="run", **{"with": ["OPENAI_API_KEY"]}, reason="free", command=["python", "x.py"])
+        assert (await client.recv())["env"] == {"OPENAI_API_KEY": "sk-openai"}
+    async with Client(control) as client:
+        await client.send(op="session_start", presets=["dbwork"], minutes=30, reason="free")
+        first = await client.recv()
+        assert first["pending"] is False and first["excluded_per_run"] == ["DATABASE_URL"]
+        final = await client.recv()
+        assert final["ok"] is True and harness.broker.state.session(final["session_id"]).mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
+    assert harness.broker.state.pending() == []
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ({"kind": "run", "with": ["OPENAI_API_KEY"]}, False),
+        ({"kind": "run", "with": ["OPENAI_API_KEY", "DATABASE_URL"]}, True),
+        ({"kind": "run", "presets": ["dbwork"]}, True),
+        ({"kind": "session", "presets": ["dbwork"]}, False),
+        ({"kind": "session", "presets": ["team"]}, True),
+    ],
+)
+async def test_needs_approval_says_whether_a_request_would_wait_for_the_console(control: Path, harness: Harness, message: dict, expected: bool) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    async with Client(control) as client:
+        await client.send(op="needs_approval", **message)
+        assert await client.recv() == {"ok": True, "needs_approval": expected}
+    assert harness.broker.state.requests == {}
+
+
+async def test_needs_approval_refuses_what_a_request_would_refuse(control: Path) -> None:
+    async with Client(control) as client:
+        await client.send(op="needs_approval", kind="run", presets=["nope"])
+        reply = await client.recv()
+        assert reply["ok"] is False and "unknown preset" in reply["error"]

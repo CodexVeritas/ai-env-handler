@@ -152,8 +152,8 @@ class Connection:
                 return False
 
     def _pending(self, request: Request, **extra: Any) -> dict[str, Any]:
-        """The first reply to a request that waits for the console; notify tells the client to alert the human."""
-        return {"ok": True, "request_id": request.id, "pending": True, "notify": self.broker.config.notify, **extra}
+        """The first reply to a request: pending says whether it waits for the console, notify whether to alert the human."""
+        return {"ok": True, "request_id": request.id, "pending": request.pending, "notify": self.broker.config.notify, **extra}
 
     async def _reply_decision(self, request: Request) -> None:
         decision = request.decision.result()
@@ -208,9 +208,10 @@ class Connection:
             return
         mapping, presets = self._mapping(message)
         request = self.broker.request_run(mapping, presets, reason, command, self.provenance)
-        await self.send(self._pending(request))
-        if not await self._decided_or_withdrawn(request):
-            return
+        if request.pending:
+            await self.send(self._pending(request))
+            if not await self._decided_or_withdrawn(request):
+                return
         if request.decision.result().outcome != "approved":
             await self._reply_decision(request)
             return
@@ -244,6 +245,13 @@ class Connection:
                 exit_code=exit_code if exit_code is not None else "client gone",
                 lingering_terminated=lingering_terminated if lingering_terminated is not None else "unknown",
             )
+
+    async def op_needs_approval(self, message: dict[str, Any]) -> None:
+        """Whether a run, or a session start, asking for these variables would wait for the console."""
+        mapping, presets = self._mapping(message)
+        if message.get("kind") == "session":
+            mapping, _ = self.broker.split_per_run(mapping, presets)
+        await self.send({"ok": True, "needs_approval": self.broker.needs_approval(mapping, presets)})
 
     async def op_list(self, message: dict[str, Any]) -> None:
         await self.send({"ok": True, **self.broker.list_payload(for_uid=self.provenance.uid)})

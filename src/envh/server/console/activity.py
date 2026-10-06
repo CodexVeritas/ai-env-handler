@@ -37,7 +37,10 @@ def describe(event: AuditEvent) -> tuple[str, str] | None:
         presets = names(fields.get("presets") or [])
         reason = fields.get("reason")
         text = f"{KIND_NAMES.get(str(fields.get('kind')), 'Request')} #{fields.get('id')}" + (f" · {presets}" if presets else "")
-        return "warn", text + (f' · "{reason}"' if reason and reason != NO_REASON else " · no reason given")
+        text += f' · "{reason}"' if reason and reason != NO_REASON else " · no reason given"
+        return ("ok", f"{text} · granted, its keys need no approval") if fields.get("approval") == "auto" else ("warn", text)
+    if event.name == "decision" and fields.get("by") == "auto":
+        return None
     if event.name == "decision":
         approved = fields.get("outcome") == "approved"
         return ("ok", f"Approved #{fields.get('id')}") if approved else ("error", f"Denied #{fields.get('id')}")

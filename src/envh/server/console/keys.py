@@ -11,7 +11,7 @@ from envh.common import SECRET_NAME, peek
 from envh.core.config import DESCRIPTION_LIMIT, SecretEntry
 from envh.core.durations import format_duration
 from envh.server.console.dialogs import Prompt, View, text_lines
-from envh.server.console.settings import open_rule
+from envh.server.console.settings import AUTO_TEXT, open_rule
 from envh.server.console.summaries import approval_text, plural, rule_text
 from envh.server.console.tui import ACCENT, BOLD, CYAN, DIM, POINTER, YELLOW, Key, Line, Selection, Span, box, styled, typed_character, wrap_line
 from envh.server.control import HandledErrors
@@ -312,7 +312,7 @@ class KeyDetailView(View):
         entry = config.settings.secrets.get(self.name, SecretEntry())
         policy = config.policy_for(self.name)
         source = "its own rule" if rule_text(entry) else "the defaults"
-        approval = "per-run: every run asks you" if policy.approval == "per-run" else f"session, up to {format_duration(policy.max_session)}"
+        approval = {"per-run": "per-run: every run asks you", "auto": AUTO_TEXT}.get(policy.approval, f"session, up to {format_duration(policy.max_session)}")
         rows_shown = [
             ("Value", value_text(broker.vault.get(self.name))),
             ("Description", config.description_for(self.name) or "none"),
