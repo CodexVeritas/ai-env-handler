@@ -71,6 +71,18 @@ async def test_prune_history() -> None:
     assert decided.id not in table.requests and pending.id in table.requests and run.id not in table.runs
 
 
+async def test_request_and_run_ids_are_unique_and_not_a_global_sequence() -> None:
+    # Ids must not be a monotonic counter: a sequential id lets a client that sees its own id infer
+    # how many requests/runs other users allocated (a cross-user activity-count leak).
+    table = StateTable(FakeClock())
+    requests = [table.new_request("run", {"A": "A"}, PROVENANCE, None) for _ in range(10)]
+    runs = [table.start_run({"A": "A"}, None, None, (), PROVENANCE) for _ in range(20)]
+    ids = [request.id for request in requests] + [run.id for run in runs]
+    assert len(set(ids)) == len(ids)  # all unique across requests and runs
+    assert all(identifier > 0 for identifier in ids)
+    assert sorted(ids) != list(range(min(ids), min(ids) + len(ids)))  # not a contiguous sequence
+
+
 async def test_pending_requests_are_capped_per_user() -> None:
     table = StateTable(FakeClock())
     requests = [table.new_request("run", {"A": "A"}, PROVENANCE, None) for _ in range(MAX_PENDING_PER_USER)]

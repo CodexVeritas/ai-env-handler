@@ -51,7 +51,8 @@ DECISIONS = pytest.mark.parametrize(
         ("env ENVH_SESSION=abc envh run -- python x.py", None),
         ("export ENVH_SESSION=abc && envh run -- python x.py", None),
         ("export ENVH_SESSION=abc; echo $(envh run -- python x.py)", None),
-        ("ENVH_SESSION=abc; envh run -- python x.py", None),
+        # a bare (unexported) assignment is NOT inherited by the envh child, so the run is session-less
+        ("ENVH_SESSION=abc; envh run -- python x.py", "ask"),
         ("grep ENVH_SESSION= README.md && envh run --with A -- true", "ask"),
         ("envh run --with A -- true  # ENVH_SESSION= later", "ask"),
         ("envh run --with A -- env ENVH_SESSION=abc true", "ask"),
@@ -132,6 +133,47 @@ DECISIONS = pytest.mark.parametrize(
         ("ls /opt/envh/bin", None),
         ("git status", None),
         ("python -c 'print(1)'", None),
+        # --- regressions for red-team hook-bypass findings (each really starts a passphrase request) ---
+        # runner value-options must not be read as the command name (uv/poetry)
+        ("uv run --with rich envh run --reason r -- echo hi", "ask"),
+        ("uv run --with=rich envh run --reason r -- echo hi", "ask"),
+        ("uv run --python 3.12 envh session start p --minutes 5", "ask"),
+        ("uv run -p 3.13 envh run --reason r -- echo hi", "ask"),
+        ("uv run --project /tmp envh preset propose d.yaml", "ask"),
+        ("uv run --directory /tmp envh import ~/code", "ask"),
+        ("poetry run --directory /tmp envh run --with A -- true", "ask"),
+        # a runner value-option before a NON-envh command must still not over-ask
+        ("uv run --with rich python script.py", None),
+        ("uv run --python 3.12 pytest -q", None),
+        # an empty session (env var or flag) is not a session -> session-less run prompts
+        ("ENVH_SESSION= envh run --reason r -- echo hi", "ask"),
+        ('ENVH_SESSION="" envh run --reason r -- cmd', "ask"),
+        ("envh run --session= -- true", "ask"),
+        ("envh run --session '' -- true", "ask"),
+        # a session that is set then stripped by env before envh runs is not a session
+        ("ENVH_SESSION=deadbeef env -i envh run --reason r -- echo hi", "ask"),
+        ("ENVH_SESSION=deadbeef env -u ENVH_SESSION envh run --reason r -- echo hi", "ask"),
+        ("export ENVH_SESSION=abc && env -i envh run --reason r -- echo hi", "ask"),
+        # env --split-string / -S runs a nested command the hook must read
+        ('env --split-string="envh run --reason r -- echo hi"', "ask"),
+        ("env -S'envh session start p --minutes 5'", "ask"),
+        ("env --split-string='envh import ~/code'", "ask"),
+        # value-taking shell options before -c must not hide the script
+        ("bash -O extglob -c 'envh session start p --minutes 5'", "ask"),
+        ("bash --rcfile /tmp/rc -c 'envh run --with A -- true'", "ask"),
+        ("bash -o pipefail -c 'envh run --with A -- true'", "ask"),
+        ("bash --init-file /tmp/i -c 'envh import ~/code'", "ask"),
+        # eval drops a leading -- before running the rest
+        ("eval -- 'envh run --reason r -- echo hi'", "ask"),
+        ("eval -- 'envh session start p --minutes 5'", "ask"),
+        # nesting deeper than the parser's cap falls back to the word-match (still asks)
+        ("eval eval eval eval envh run --reason r -- echo hi", "ask"),
+        ("bash -c 'eval eval eval envh session start p --minutes 5'", "ask"),
+        # ...but benign deep nesting without an envh request does not ask
+        ("eval eval eval eval echo hi", None),
+        ("bash -c 'eval eval eval echo hi'", None),
+        # the word-match fallback also catches an --socket option before the subcommand
+        ("eval eval eval eval envh --socket=/tmp/x run --with A -- true", "ask"),
     ],
 )
 

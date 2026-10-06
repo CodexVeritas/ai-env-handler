@@ -235,6 +235,30 @@ async def test_import_skips_numbers_that_are_taken(harness: Harness) -> None:
     assert request.summary["added"] == ["OPENAI_API_KEY_2", "OPENAI_API_KEY_3"]
 
 
+async def test_import_does_not_leak_whether_a_submitted_value_matches_a_stored_secret(harness: Harness) -> None:
+    # The import flow classifies a submitted value by equality with the stored one and invents a
+    # rename target (NAME_2) for a value that differs. Validating the renamed result before approval
+    # let a client point a preset at that target and read the equality bit from error-vs-pending — an
+    # unapproved value oracle on any stored secret. The pre-approval outcome must now be identical
+    # whether or not the submitted value matches the stored one (both refused: the client never
+    # submitted OPENAI_API_KEY_2 and it is not in the vault).
+    broker = harness.broker
+    preset = {"p": {"env": {"X": "OPENAI_API_KEY_2"}}}
+    with pytest.raises(RequestError, match="OPENAI_API_KEY_2 is not in the vault"):
+        broker.request_import({"OPENAI_API_KEY": "sk-openai"}, preset, "correct guess", harness.provenance())
+    with pytest.raises(RequestError, match="OPENAI_API_KEY_2 is not in the vault"):
+        broker.request_import({"OPENAI_API_KEY": "wrong-value"}, preset, "wrong guess", harness.provenance())
+    assert broker.state.pending() == []
+
+
+def test_oversized_preset_document_is_refused_before_parsing(harness: Harness) -> None:
+    huge = "presets:\n  p:\n    env:\n      A: OPENAI_API_KEY\n# " + "x" * (64 * 1024) + "\n"
+    with pytest.raises(RequestError, match="larger than"):
+        harness.broker.validate_preset_yaml(huge)
+    with pytest.raises(RequestError, match="larger than"):
+        harness.broker.request_preset(huge, "big", harness.provenance())
+
+
 async def test_session_runs_refuse_secrets_that_became_per_run(harness: Harness) -> None:
     broker = harness.broker
     mapping, presets = broker.mapping_from_presets(["team"], [])

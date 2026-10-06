@@ -1,0 +1,106 @@
+{
+  "grader": "grade-hook",
+  "verdicts": [
+    {
+      "candidate": "w1-hook-1",
+      "verdict": "CONFIRMED",
+      "severity": "MEDIUM",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for `uv run --with rich envh run --reason r -- echo hi`, `uv run --python 3.12 envh session start ...`, `uv run -p 3.13 envh run ...`, `uv run --project /tmp envh preset propose ...`, `uv run --directory /tmp envh import ~/code` (all 5). Controls ASK: `uv run --with=rich envh run ...` (equals form) and `uv run envh run ...` (no option) both -> permissionDecision=ask. uv 0.8.17 `uv run --help` confirms -w/--with, -p/--python, --directory, --project, -i/--index-url, --with-requirements all take a separate-word <VALUE>. Real pass-through: `uv run --directory /tmp --python <py> envh run --reason r -- echo hi` and `uv run --python <py> envh session start ...` BOTH execed the real envh client, which reached the broker-connect stage ('envh: broker not running (/run/envh/ctl.sock...)') -> request-start path reached.",
+      "novelty": "NOVEL",
+      "reasoning": "Root cause: RUNNERS (uv/poetry) have no value-option table, so command_words() does WRAPPERS.get('uv', set())==set() and treats a space-separated value option as a valueless flag (index+=1), landing on the option's VALUE ('rich'/'3.12'/'/tmp') as the command name; basename!='envh' so passphrase_reason() is never called. Not one of the README's four acknowledged classes (script file / python -c / pipe-into-shell / variable-built). On the contrary, README line 290 and the hook docstring ADVERTISE `uv run` as a handled wrapper, so this is a false-negative in an explicitly-claimed capability. Most realistic of the 10: `uv run --with <pkg> envh run ...` is a construction a benign agent could legitimately emit, so a human relying on the in-app ask would silently miss it. MEDIUM per CHARTER §6 (hook bypass baseline), capped because README (line 292) states the hook is attention/not the boundary and the console still prompts."
+    },
+    {
+      "candidate": "w1-hook-2",
+      "verdict": "CONFIRMED",
+      "severity": "MEDIUM",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for `ENVH_SESSION= envh run ...`, `ENVH_SESSION=\"\" envh run ...`, `export ENVH_SESSION=; envh run ...`. Control `envh run --reason r -- echo hi` -> ask. Shell proof (fake envh on PATH): `ENVH_SESSION= envh run ...` -> envh sees ENVH_SESSION=<> exported=yes (empty string). Client commands.py:45 `session_id = args.session or os.environ.get('ENVH_SESSION')` = None or '' = ''; server control.py:204 `if session_id:` with '' is FALSE -> request_run (session-less) -> console prompt.",
+      "novelty": "NOVEL",
+      "reasoning": "decide() sets in_session via `word.startswith('ENVH_SESSION=')`, which an EMPTY assignment satisfies, so passphrase_reason returns None -- but the client/broker treat '' as no session. Plain one-liner, none of the four acknowledged classes; README treats ENVH_SESSION as a bearer token and never says an empty one is ignored. Distinct code path from w2-hook-2 (that is the CLI --session flag in passphrase_reason) and w2-hook-3 (non-exported bare assignment). Severity MEDIUM per §6 but real-world impact is lower than w1-hook-1: no benign agent emits an empty ENVH_SESSION=, so it is an evasion-only gadget and the console still prompts."
+    },
+    {
+      "candidate": "w1-hook-3",
+      "verdict": "CONFIRMED",
+      "severity": "MEDIUM",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for `env --split-string=\"envh run --reason r -- echo hi\"` and `env -S'envh session start weekly --minutes 5 --reason r'`. Shell proof (GNU coreutils 9.4, fake envh on PATH): `env --split-string=\"envh run ...\"` -> FAKE_ENVH_INVOKED argv=[run --reason r -- echo hi]; `env -S'envh session start ...'` -> argv=[session start weekly --minutes 5 --reason r]. So env splits the string into argv and execs envh (session-less run -> prompt; session start always prompts).",
+      "novelty": "NOVEL",
+      "reasoning": "`env` is an advertised handled wrapper and the hook knows env's value-options {-u,--unset,-C,--chdir}, but it models neither -S/--split-string (which takes a value AND re-parses it into a whole command) nor recurses into that string. command_words() sees the single token '--split-string=envh run ...' as an unknown flag (index+=1) and returns []. Not a script file / python -c / pipe / variable-built: it is a coreutils wrapper feature the hook ignores. (Adversarial note: -S re-lexes a string like bash -c, so it is conceptually adjacent to the eval/shell family, but it is a distinct, specific, unmodeled wrapper option and env is explicitly claimed as handled -- graded NOVEL.) Realistic enough that -S is a known idiom in shebang lines; MEDIUM."
+    },
+    {
+      "candidate": "w1-hook-4",
+      "verdict": "CONFIRMED",
+      "severity": "MEDIUM",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for `eval eval eval eval envh run ...` (4 levels) and `bash -c 'eval eval eval envh session start ...'` (bash-c=1 + 3 evals = level 4). Control `eval eval eval envh run ...` (exactly 3, within MAX_NESTING) -> ask. Shell proof (fake envh): `eval eval eval eval envh run ...` -> argv=[run --reason r -- echo hi]; `bash -c 'eval eval eval envh session start ...'` -> argv=[session start ...]. Chain collapses and execs envh.",
+      "novelty": "NOVEL",
+      "reasoning": "commands_in() recurses into nested bash -c/eval scripts only while nesting < MAX_NESTING (=3); a 4th level is never parsed, so the envh inside it is missed. The docstring claims the hook reads inside bash -c/eval. The depth cap is not one of the four acknowledged classes. Distinct from w2-hook-4 (single-level `eval --` token mis-parse). MEDIUM; clean construction, though a 4-deep eval chain is itself an evasion-shaped command."
+    },
+    {
+      "candidate": "w1-hook-5",
+      "verdict": "CONFIRMED",
+      "severity": "LOW",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for `ENVH_SESSION=deadbeef env -i envh run ...`, `ENVH_SESSION=deadbeef env -u ENVH_SESSION envh run ...`, `export ENVH_SESSION=abc && env -i envh run ...`. Control `env -u ENVH_SESSION envh run ...` with NO prior assignment -> ask. Shell proof (fake envh, PATH preserved through env -i): all three -> FAKE_ENVH_INVOKED argv=[run ...] ENVH_SESSION=<UNSET>, i.e. env -i/-u strips the var so envh runs session-less -> prompt.",
+      "novelty": "NOVEL",
+      "reasoning": "The hook records in_session=True from an inline `ENVH_SESSION=<nonempty>` prefix or prior `export`, but does not model `env -i` (clear env) or `env -u ENVH_SESSION` removing the var before envh runs. Genuine false-negative, not an acknowledged class. Graded LOW (not MEDIUM): it requires a contrived set-then-strip-in-the-same-command gadget whose only purpose is evasion -- a bare `env -u ENVH_SESSION envh run` correctly ASKS -- so real-world impact is minimal and the console still prompts. Most contrived of the w1 set."
+    },
+    {
+      "candidate": "w2-hook-1",
+      "verdict": "CONFIRMED",
+      "severity": "MEDIUM",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for `bash -O extglob -c 'envh run ...'`, `bash --rcfile /dev/null -c 'envh session start ...'`, `bash --init-file /dev/null -c 'envh import ~/code'`, `dash -o noglob -c 'envh run ...'`. Control `bash -c 'envh run ...'` -> ask. Shell proof (fake envh): all four execed the -c script -> argv=[run ...] / [session start ...] / [import /root/code]. dash IS installed here and ran it.",
+      "novelty": "NOVEL",
+      "reasoning": "nested_script() recognizes `<shell> -c` by scanning for the first short option containing 'c', but returns None on the FIRST non-dash word that is not the -c value (line 322-323). Shell options that take a SEPARATE-WORD value before -c -- bash -O/+O <shopt>, --rcfile <file>, --init-file <file>, and dash/ksh/zsh -o <optname> -- put a non-dash value word before -c, so nested_script bails and the -c script (with its envh) is never parsed. This is a plain `<shell> -c '<script>'`, exactly the form the docstring claims to read; not a pipe-into-shell (that is `echo ... | bash`), not a script file / python -c / variable-built. NOVEL. MEDIUM."
+    },
+    {
+      "candidate": "w2-hook-2",
+      "verdict": "CONFIRMED",
+      "severity": "MEDIUM",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for `envh run --session= --reason r -- echo hi` and `envh run --session '' --reason r -- echo hi`. Control `envh run --reason r -- echo hi` -> ask. Real envh argparse (build_parser) with ENVH_SESSION unset: argv ['run','--session=','--reason','r','--','echo','hi'] and ['run','--session','',...] both give args.session='' ; `args.session or os.environ.get('ENVH_SESSION')` = None -> server control.py:204 `if session_id:` FALSE -> session-less -> prompt.",
+      "novelty": "NOVEL",
+      "reasoning": "Distinct from w1-hook-2 (that is the ENVH_SESSION env assignment in decide()). This defect is in passphrase_reason(): `in_session = ... or any(option=='--session' or option.startswith('--session=') ...)`. An empty CLI value -- `--session=` (matches startswith) or `--session ''` (run_options appends bare '--session', skips the empty value) -- sets in_session=True, but the client treats '' as no session. Separate code location, separate fix from w1-hook-2. Not an acknowledged class. Precondition: ENVH_SESSION not already exported (the common bare-run case). MEDIUM."
+    },
+    {
+      "candidate": "w2-hook-3",
+      "verdict": "CONFIRMED",
+      "severity": "MEDIUM",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for `ENVH_SESSION=abc123; envh run ...` and the newline-separated variant. Control `envh run ...` -> ask. Shell proof (fake envh): `ENVH_SESSION=abc123; envh run ...` -> FAKE_ENVH_INVOKED argv=[run ...] ENVH_SESSION=<UNSET> exported=no, i.e. a bare non-exported assignment statement is a shell variable the child never sees, so envh runs session-less -> prompt.",
+      "novelty": "NOVEL",
+      "reasoning": "decide() treats ANY command whose command_words() is empty as a session-setter via `any(word.startswith('ENVH_SESSION=') ...)` -- so a standalone `ENVH_SESSION=abc` statement is handled identically to `export ENVH_SESSION=abc` and sets session_set=True for the rest of the line. But bash only passes a variable to a child when it is EXPORTED or an INLINE prefix; a bare `VAR=...;` statement does not reach envh. Different from w1-hook-2 (empty value, inline) and w1-hook-5 (env -i/-u stripping a real session): here the value is arbitrary/non-empty and the defect is mis-modeling non-exported assignments as sessions. Not an acknowledged class. MEDIUM; clean one-liner."
+    },
+    {
+      "candidate": "w2-hook-4",
+      "verdict": "CONFIRMED",
+      "severity": "MEDIUM",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for `eval -- 'envh run ...'` and `eval -- 'envh session start ...'`. Control `eval 'envh run ...'` (no --) -> ask. Shell proof (fake envh): `bash -c \"eval -- 'envh run ...'\"` -> argv=[run --reason r -- echo hi]; `eval -- 'envh session start ...'` -> argv=[session start ...]. bash's eval strips the leading -- and execs envh.",
+      "novelty": "NOVEL",
+      "reasoning": "nested_script() for eval returns ' '.join(words[1:]), i.e. for `eval -- 'envh run ...'` it yields the script '-- envh run ...' WITHOUT removing the --. Re-lexed, command_words() does not strip a LEADING -- (it only consumes -- as an option terminator inside a wrapper's option loop), so name_and_arguments[0]=='--' and the `== 'envh'` test fails. Meanwhile bash's eval treats the leading -- as end-of-options and runs envh. Single-level mis-parse, distinct from w1-hook-4 (depth cap). Not an acknowledged class. MEDIUM."
+    },
+    {
+      "candidate": "w2-hook-5",
+      "verdict": "CONFIRMED",
+      "severity": "LOW",
+      "reproduced": true,
+      "really_starts_request": true,
+      "repro_output": "Hook (CC + Cursor) prints NOTHING for 500-deep `$(...)` wrapping `envh --socket=/run/envh-ctf/ctl.sock run --reason r -- echo hi`. Contrast: same depth around PLAIN `envh run ...` -> ask (UNREADABLE_REASON via regex fallback); shallow (depth 5) --socket form -> ask (parsed normally). Confirmed branch: envh_ask.simple_commands(deep) raises RecursionError -> decide() falls back to PASSPHRASE_FORM.search(), which returns None for the --socket form ('envh --socket=... run') but matches 'envh run'. bash executes the innermost $() (MARK500 file created at depth 500). Real client: `python -m envh --socket=/run/envh-ctf/ctl.sock run ...` connected to the broker (returned a broker-side users-list message), and argparse resolves it to a session-less run.",
+      "novelty": "NOVEL",
+      "reasoning": "Two compounded defects: (1) decide() falls back to a plain regex on RecursionError, and deep $() exceeds Python's recursion limit in the lexer; (2) PASSPHRASE_FORM requires `envh\\s+(session start|preset propose|import|run)` with nothing between, so it misses `envh --socket=<path> run ...` (the normal path strips --socket, the fallback does not). Neither is an acknowledged class; README only acknowledges the unclosed-quote fallback. Graded LOW: requires ~500-deep $() nesting (highly contrived; no benign trigger), though it genuinely reproduces and starts a request. The transferable insight is defect (2): the fallback regex ignores options-before-subcommand."
+    }
+  ],
+  "class_summary": "All 10 claimed hook bypasses INDEPENDENTLY REPRODUCED (NO-ASK on both Claude Code tool_name:Bash and Cursor beforeShellExecution shapes; all controls correctly ASK) and all 10 verified to REALLY start a passphrase request via shell-behavior proofs (fake-envh argv/ENVH_SESSION capture, real envh argparse+control.py:204 session-less logic, real uv/env/eval/bash execution). All 10 are NOVEL -- none matches the README's four acknowledged classes (script file / python -c one-liner / pipe-into-shell / variable-built); several defeat capabilities the hook/README explicitly ADVERTISE as handled (uv run, env, bash -c, eval). VERDICT: 10 CONFIRMED-novel, 0 KNOWN/dup, 0 failed-to-reproduce. Severity (capped per CHARTER §6 and because README line 292 states the hook is attention + a second chance, NOT the security boundary -- the console always re-prompts): 8 MEDIUM (w1-hook-1,2,3,4; w2-hook-1,2,3,4) and 2 LOW (w1-hook-5 contrived set-then-strip gadget; w2-hook-5 needs ~500-deep $() nesting). Highest real-world impact is w1-hook-1 (uv run with a space-separated value option is a construction a benign agent could legitimately emit, so a human relying on the in-app ask silently misses it). The empty/non-exported-session gadgets (w1-hook-2, w2-hook-2, w2-hook-3) and the eval/shell-option parser gaps are distinct code paths needing distinct fixes, not duplicates of one another."
+}

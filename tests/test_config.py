@@ -151,6 +151,30 @@ def test_dump_presets_round_trip() -> None:
     assert parse_presets(PRESETS_TEMPLATE, set()) == ({}, {})
 
 
+def test_a_yaml_alias_bomb_in_a_preset_is_a_bounded_error_not_a_huge_string() -> None:
+    import time
+
+    # YAML aliases let a tiny document describe a width**depth object graph. safe_load keeps those as
+    # shared references (cheap), but repr() of them would materialise the full expansion — so an error
+    # message that repr()'d the parsed value exploded to many megabytes and wedged/killed the broker.
+    def inner(level: int, width: int = 6) -> str:
+        if level == 0:
+            return '&a0 "x"'
+        return f"&a{level} [" + inner(level - 1, width) + f",*a{level - 1}" * (width - 1) + "]"
+
+    bomb = f"presets:\n  p:\n    max_session: {inner(7)}\n    env:\n      X: A\n"
+    start = time.monotonic()
+    with pytest.raises(ConfigError) as excinfo:
+        parse_presets(bomb, {"A"})
+    assert time.monotonic() - start < 5
+    assert len(str(excinfo.value)) < 500  # describes "a list", never the expanded graph
+
+
+def test_an_absurd_duration_in_a_preset_is_a_config_error() -> None:
+    with pytest.raises(ConfigError):
+        parse_presets("presets: {p: {max_session: '" + "9" * 500 + "h', env: {A: A}}}", {"A"})
+
+
 @pytest.mark.parametrize("text", ["presets: {bad: [", "defaults: {approval: session"])
 def test_yaml_syntax_errors_are_config_errors(text: str) -> None:
     with pytest.raises(ConfigError, match="not valid YAML"):

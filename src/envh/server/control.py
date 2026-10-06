@@ -17,6 +17,14 @@ from envh.core.vault import VaultError
 
 MAX_LINE = 1024 * 1024
 MAX_SOCKET_PATH = 100
+MAX_REASON = 1000
+# A client that has passed the uid check but sends no request is dropped after this long, so idle
+# connections cannot be held open to exhaust the broker's file descriptors.
+FIRST_LINE_TIMEOUT_SECONDS = 30
+# Caps on concurrently open connections, overall and per user, so one listed user cannot pin every
+# descriptor (idle-hold, or holding many waits) and wedge the broker and console for everyone.
+MAX_CONNECTIONS = 256
+MAX_CONNECTIONS_PER_UID = 32
 HandledErrors = (RequestError, StateError, ConfigError, VaultError)
 
 
@@ -27,6 +35,7 @@ class ControlServer:
         self.socket_mode = socket_mode
         self._server: asyncio.AbstractServer | None = None
         self._open_writers: set[asyncio.StreamWriter] = set()
+        self._per_uid: dict[int, int] = {}
 
     async def start(self) -> None:
         if len(str(self.socket_path).encode()) > MAX_SOCKET_PATH:
@@ -46,8 +55,15 @@ class ControlServer:
         self.socket_path.unlink(missing_ok=True)
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        self._open_writers.add(writer)
         connection = Connection(self.broker, reader, writer)
+        uid = connection.provenance.uid
+        if len(self._open_writers) >= MAX_CONNECTIONS or self._per_uid.get(uid, 0) >= MAX_CONNECTIONS_PER_UID:
+            self.broker.audit.event("connection_rejected", uid=uid, pid=connection.provenance.pid, open=len(self._open_writers))
+            await connection.send({"ok": False, "error": "the broker has too many open connections; close some and retry"})
+            await self._shut(writer)
+            return
+        self._open_writers.add(writer)
+        self._per_uid[uid] = self._per_uid.get(uid, 0) + 1
         try:
             await connection.serve()
         except HandledErrors as error:
@@ -59,11 +75,18 @@ class ControlServer:
             await connection.send({"ok": False, "error": "internal error in the broker; see its console"})
         finally:
             self._open_writers.discard(writer)
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except (ConnectionError, OSError):
-                pass
+            self._per_uid[uid] = max(self._per_uid.get(uid, 1) - 1, 0)
+            if not self._per_uid[uid]:
+                self._per_uid.pop(uid, None)
+            await self._shut(writer)
+
+    @staticmethod
+    async def _shut(writer: asyncio.StreamWriter) -> None:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except (ConnectionError, OSError):
+            pass
 
 
 class Connection:
@@ -91,7 +114,11 @@ class Connection:
         if self.provenance.uid not in self.broker.config.allowed_uids:
             self.broker.audit.event("rejected_uid", uid=self.provenance.uid, pid=self.provenance.pid, cmdline=self.provenance.cmdline)
             raise RequestError(f"uid {self.provenance.uid} is not in the broker's users list; a listed user can add it on the console under /settings")
-        line = await self.reader.readline()
+        try:
+            line = await asyncio.wait_for(self.reader.readline(), FIRST_LINE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError as error:
+            self.broker.audit.event("idle_timeout", uid=self.provenance.uid, pid=self.provenance.pid)
+            raise RequestError("no request received before the idle timeout; the connection was closed") from error
         if not line:
             return
         try:
@@ -123,6 +150,8 @@ class Connection:
         reason = message.get("reason")
         if reason is not None and not isinstance(reason, str):
             raise RequestError(f"reason must be a string, got {type(reason).__name__}")
+        if isinstance(reason, str) and len(reason) > MAX_REASON:
+            raise RequestError(f"reason is too long ({len(reason)} characters); keep it under {MAX_REASON}")
         return reason
 
     async def _decided_or_withdrawn(self, request: Request) -> bool:

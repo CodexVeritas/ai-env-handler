@@ -1,0 +1,102 @@
+{
+  "grader": "grade-misc",
+  "operated_as": "non-root (redteam uid=30033, redteam2 uid=30035) via /opt/ctf/envh-rt[2] and sudo -u redteam[2] python; main socket /run/envh-ctf/ctl.sock",
+  "verdicts": [
+    {
+      "candidate": "I2",
+      "finding_id": "w2-crossuser-1",
+      "title": "Global sequential _next_id counter (shared by requests AND runs) leaks another listed user's broker-activity COUNT across the per-user isolation boundary",
+      "verdict": "CONFIRMED",
+      "severity": "LOW",
+      "win_condition": "CROSS-USER (aggregate activity-count info leak)",
+      "reproduced": true,
+      "in_scope": true,
+      "repro_cmds": [
+        "rid(){ timeout 3 /opt/ctf/envh-rt run --with GITHUB_TOKEN --reason \"$1\" -- true 2>&1 | grep -oE 'request #[0-9]+' | grep -oE '[0-9]+'; }",
+        "rid2(){ timeout 3 /opt/ctf/envh-rt2 run --with GITHUB_TOKEN --reason \"$1\" -- true >/dev/null 2>&1; }",
+        "# Phase1 baseline: A=$(rid A1); B=$(rid A2)   -> gap B-A-1",
+        "# Phase2 K=3:  C=$(rid C1); rid2 x1; rid2 x2; rid2 x3; D=$(rid D1)  -> D-C-1",
+        "# Phase3 K=5:  E=$(rid E1); for i in 1 2 3 4 5; do rid2 y$i; done; F=$(rid F1)  -> F-E-1"
+      ],
+      "observed_output": "Phase1 (no redteam2 activity): redteam A=31 B=32  gap(B-A-1)=0 (consecutive ids). Phase2 (K=3 redteam2 ops in between): redteam C=33 D=37  inferred others-ops(D-C-1)=3 (exact). Phase3 (K=5): redteam E=38 F=44  inferred others-ops(F-E-1)=5 (exact). The id gap between two of redteam's own requests equals the number of id allocations other users made in between.",
+      "flag_or_value_obtained": null,
+      "mechanism_confirmed_in_code": "state.py:93 StateTable._next_id=1 (single counter); state.py:101-104 _allocate_id increments it; used by BOTH new_request (state.py:121) and start_run (state.py:229). The id is returned to the client in every pending reply (control.py:156 _pending -> request_id) and the official client prints it on stderr (transport.py:76 'request #N'). status_payload/list_payload are strictly uid-filtered (broker.py:561-577, confirmed by code read) so another user's pending/runs/sessions are invisible -- yet the sequential counter discloses their allocation COUNT. In this no-approver arena each op allocates exactly one id (runs only start after an approval that never comes / in a session that can never exist), so the gap is a clean per-user op count.",
+      "novelty_check": "NOVEL. README line 79 ('Per-user sessions') acknowledges only that a session/pending request can be used/waited/listed/ended solely by its owner and that 'only the console sees everything'. It does NOT disclose that the request/run id is a single global monotonic counter whose value is returned to every client, from which a listed user can infer other listed users' allocation counts -- the very cross-user activity the uid-filtering of status/list is built to hide. Not in README or SECURITY.md; not a prior Wave finding. README line 357 'Not provided: rate limits' is unrelated (this is an info leak, not a rate limit).",
+      "reasoning": "Meets all four §6(CONFIRMED) criteria: (a) in scope -- reproduced by me as non-root listed users, no root/ptrace/broker-file access; (b) independently reproduced with exact counts (0,3,5); (c) real §4 impact -- a genuine CROSS-USER leak: information about another listed user's broker activity crosses the per-user boundary the broker otherwise enforces; (d) novel per §5. Adversarial caveat and why it is LOW, not higher: the ONLY thing disclosed is an aggregate integer count of (request+run) allocations; no secret value, no secret/var name, no reason, no pid, no timestamp, and no ability to read/use/wait-on/end/corrupt another user's request or session (all those paths are uid-checked and hold -- independently re-confirmed by the finder's negatives and the status_payload code). It is a side-channel/hardening-grade metadata leak. A stricter grader could argue it sits just below the §4 'reading another user's request' bar since no request content is read; I keep it CONFIRMED-LOW because it is a reproduced, novel, non-root violation of the isolation the broker actively enforces. Fix: hand clients an opaque/random per-request id, or don't echo the raw global counter. Finder self-assessment CONFIRMED/LOW is CORRECT.",
+      "finder_self_assessment": "CONFIRMED (LOW)",
+      "finder_assessment_correct": true
+    },
+    {
+      "candidate": "L1",
+      "finding_id": "w1-session-1",
+      "title": "Detached session_start/session_wait requests linger pending for the 10-min DETACHED_GRACE after client disconnect (unlike run/preset/import, which withdraw on disconnect), so a same-uid process can fill its own 20-slot MAX_PENDING_PER_USER quota and lock itself out of new sessions ~10 min",
+      "verdict": "KNOWN",
+      "severity": "LOW",
+      "win_condition": "DoS/INTEGRITY (per-uid self-lockout only)",
+      "reproduced": true,
+      "in_scope": true,
+      "repro_cmds": [
+        "# As redteam, open a run and a session_start over raw sockets, read the first (pending) reply, then DROP the connection:",
+        "oneshot(run{op:run,with:[GITHUB_TOKEN],reason:L1-run-drop,command:[true]})  -> close",
+        "oneshot(session_start{op:session_start,with:[GITHUB_TOKEN],minutes:5,reason:L1-sess-drop}) -> close",
+        "# then: /opt/ctf/envh-rt status   (both connections already closed)"
+      ],
+      "observed_output": "RUN reply: {\"ok\": true, \"request_id\": 48, \"pending\": true, ...}; SESS reply: {\"ok\": true, \"request_id\": 49, \"pending\": true, \"excluded_per_run\": []}. After both connections dropped, `status` shows pending count=1 -> only id 49 (kind=session, reason=L1-sess-drop) survives; the run (id 48) was withdrawn immediately on disconnect. Confirms the asymmetry: session requests linger, run requests do not.",
+      "flag_or_value_obtained": null,
+      "mechanism_confirmed_in_code": "op_run/op_preset_propose/op_import call _decided_or_withdrawn (control.py:128-134) which withdraws on client disconnect and frees the slot. op_session_start/op_session_wait call _attend (control.py:186-194) which on disconnect calls state.mark_detached (state.py:151-153) setting abandon_at = now + DETACHED_GRACE (10 min, state.py:11), leaving the Request pending. new_request enforces MAX_PENDING_PER_USER=20 PER-UID (state.py:118-119, keyed on provenance.uid). sweep_abandoned (state.py:155-160) only withdraws after the 10-min grace.",
+      "novelty_check": "The specific detached-vs-withdrawn asymmetry is an undocumented internal detail, BUT the resulting impact -- a user exhausting its own pending quota / no rate limiting -- is explicitly acknowledged: README line 357 'Not provided: ... rate limits', and line 357 'Several local users can be listed ... each gets their own sessions' (cap is per-uid). So the real-world effect is an acknowledged limitation.",
+      "reasoning": "Reproduced and real, but NOT a novel confirmed win. Two independent reasons it does not survive as CONFIRMED: (1) Impact fails the §4 DoS bar -- §4 DoS = 'a client crashing the BROKER, wedging its event loop, exhausting IT, or corrupting its state'. MAX_PENDING_PER_USER is per-uid, so this locks out only OTHER PROCESSES OF THE SAME uid; the broker keeps serving every other user and itself. It is self-harm, not a broker DoS and not cross-user. (2) Even framed as availability, 'no rate limits' is explicitly in README's 'Not provided' list (§5 -> KNOWN). Graded KNOWN (reproduced+real+acknowledged), LOW. The finder's self_assessment of KNOWN/borderline-LOW is CORRECT -- this is correctly kept OUT of the confirmed-wins list. Note: the single pending request #49 I created is the demonstration itself; it auto-withdraws via the 10-min sweep and consumes 1 of redteam's 20 slots.",
+      "finder_self_assessment": "KNOWN (LOW)",
+      "finder_assessment_correct": true
+    },
+    {
+      "candidate": "R1",
+      "finding_id": "w2-clientrun-1",
+      "title": "terminate_lingering() catches only ProcessLookupError; an os.kill EPERM from a pid-reuse TOCTOU propagates uncaught and crashes the attacker's OWN client (no cross-user signal)",
+      "verdict": "REJECTED",
+      "severity": "LOW",
+      "win_condition": "none (client-side self-harm)",
+      "reproduced": true,
+      "in_scope": true,
+      "validation_question": "Is the finder's REJECTED self-assessment correct?",
+      "finder_assessment_correct": true,
+      "repro_cmds": [
+        "sudo -u redteam2 env HOME=/home/redteam2 sh -c 'exec sleep 60' &   # cross-user victim pid",
+        "VPID=$(pgrep -u redteam2 -f 'sleep 60')",
+        "# as redteam, confirm EPERM then drive the real client function with the pid forced into the kill list:",
+        "sudo -u redteam /opt/ctf/venv/bin/python -c \"import os; os.kill($VPID,0)\"   # -> PermissionError",
+        "sudo -u redteam /opt/ctf/venv/bin/python -c \"import sys,envh.client.commands as c; c.processes_with_marker=lambda m:[int(sys.argv[1])]; c.terminate_lingering('fakemarker')\" $VPID"
+      ],
+      "observed_output": "os.kill(VPID,0) as redteam -> PermissionError [Errno 1] Operation not permitted (EPERM). terminate_lingering with the cross-user pid forced into the list -> 'UNCAUGHT PermissionError propagated out of terminate_lingering: PermissionError(1, Operation not permitted)'. The redteam2-owned victim stayed ALIVE ('victim 12471 STILL ALIVE (not signalled by redteam)').",
+      "flag_or_value_obtained": null,
+      "mechanism_confirmed_in_code": "commands.py:100-118 terminate_lingering wraps os.kill (SIGTERM at 107, SIGKILL at 115) ONLY in `except ProcessLookupError`. A PermissionError (EPERM) is not caught and propagates up through cmd_run, crashing the client. Note the enumeration gate (processes_with_marker, commands.py:85-97) reads /proc/<pid>/environ which for another uid's process is mode 0400 -> OSError -> that pid is never listed; a cross-user pid can only appear via a pid-reuse race between enumerate and kill. I forced it via monkeypatch to exercise the generous (best-case-for-attacker) version of the gap.",
+      "reasoning": "REJECTED is CORRECT (CHARTER §4: none of FLAG EXFIL / APPROVAL / POLICY / CROSS-USER / broker-DoS / HOOK / SUPPLY is met). EPERM means the signal is NOT delivered, so there is zero cross-user effect -- the other user's process is never touched. The only consequence is the ATTACKER'S OWN client raising an unhandled exception (self-harm), and the broker is never involved. It further requires an unreliable pid-reuse TOCTOU. A real hardening fix would also `except PermissionError`, but this is a client robustness nit, not a charter win. Validation answer: YES, the finder's REJECTED is correct.",
+      "finder_self_assessment": "REJECTED (LOW)"
+    },
+    {
+      "candidate": "R2",
+      "finding_ids": ["w2-supply-1", "w2-supply-2"],
+      "title": "(a) envh import crashes with an unhandled UnicodeDecodeError on a non-UTF-8 .env; (b) scan/import have no aggregate memory cap -> a single under-25MB crafted file amplifies to hundreds of MB / >1GB RSS",
+      "verdict": "REJECTED",
+      "severity": "LOW",
+      "win_condition": "none (client-side only; no broker/exfil/approval impact)",
+      "reproduced": true,
+      "in_scope": true,
+      "validation_question": "Are the finder's REJECTED self-assessments correct?",
+      "finder_assessment_correct": true,
+      "repro_cmds": [
+        "# (a) non-UTF-8 .env:",
+        "mkdir -p /tmp/rt_r2/envfiles (redteam-owned); write b'API_KEY=' + bytes([0xff,0xfe,0xff]) + b'value12345\\n' to .env",
+        "printf 'all\\n\\n\\n\\n\\n\\n' | /opt/ctf/envh-rt import --dry-run /tmp/rt_r2/envfiles",
+        "# (b) amplification on a 2.05MB file of maximal named assignments (AWS_SECRET_KEY=<20 chars> x57000):",
+        "measure peak child RSS of `python -m envh scan FILE` and `scan --json FILE` via getrusage(RUSAGE_CHILDREN)"
+      ],
+      "observed_output": "(a) UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 8: invalid start byte -- raw traceback through run_wizard (importer.py:517) -> parse_env_file (importer.py:155) -> Path.read_text(); exit 1; nothing written, no broker op reached. (b) 2.05MB file: baseline python child peakRSS ~19.2MB; `scan` ~57.0MB (net ~38MB, ~19x file size); `scan --json` ~140.4MB (net ~121MB, ~59x file size). Extrapolating linearly to a file just under the 25MB per-file cap: `scan` ~0.47GB, `scan --json` ~1.47GB (matches the finder's measured 440MB / 1379MB); N such files add with no total cap, and `envh import` has no size cap at all.",
+      "flag_or_value_obtained": null,
+      "mechanism_confirmed_in_code": "(a) importer.py:154-155 parse_env_file -> parse_env_text(path, path.read_text()) with NO encoding/errors arg = strict UTF-8; contrast scanner.py:158 read_if_text which decodes errors='replace'. The crash is at run_wizard line 517, BEFORE confirm_rewrites/apply_plan (lines 533-538), and import --dry-run returns at line 532 before apply regardless. (b) scanner accumulates all Hits in memory and --json materializes the whole structure; scanner never opens the broker socket; importer contacts the broker only in apply_plan, which is approval-gated and unreachable with no approver.",
+      "novelty_check": "Partly novel as robustness gaps (README line 196 acknowledges only the scanner's 25MB per-file cap and skipped folders, not the RSS amplification, not the missing total cap, and not that `import` has no size cap; the non-UTF-8 crash is undocumented), but novelty is moot because neither meets a §4 win condition.",
+      "reasoning": "REJECTED is CORRECT for both. Both are purely client-side on the invoking user's OWN process: (a) crashes the import wizard before any broker interaction or file write -- no exfil, no state change, no broker impact; (b) exhausts the user's own scan/import RSS (OOM-killer reaps that process), while the broker runs as a separate user in a separate process and is never contacted by scan and only post-approval by import. §4 DoS specifically requires crashing/wedging/exhausting/corrupting THE BROKER from the socket; these do none of that. scan's report discloses only first-4-chars + length + sha256 fingerprint by design (no value). Even though the files are agent-plantable (the threat envh targets), the worst case is a recoverable crash/OOM of the user's own tool, no privilege or secret gain. Validation answer: YES, both finder REJECTED/LOW self-assessments are correct; recommend keeping them only as hardening notes (add errors='replace'/clean error to parse_env_file; add a --max-size to import and a total hit/output cap to scan).",
+      "finder_self_assessment": "REJECTED (LOW) for both w2-supply-1 and w2-supply-2"
+    }
+  ]
+}

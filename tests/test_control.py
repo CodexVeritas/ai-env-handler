@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import envh.server.control as control_mod
 from envh.server.control import ControlServer
 from tests.conftest import Client, Harness, approve_next, make_auto
 
@@ -193,6 +194,41 @@ async def test_a_waiting_request_tells_the_client_whether_to_notify(control: Pat
     async with Client(control) as client:
         await client.send(op="session_start", presets=["team"], minutes=5, reason="quiet")
         assert (await client.recv())["notify"] is False
+
+
+async def test_an_overlong_reason_is_refused_before_any_request_exists(control: Path, harness: Harness) -> None:
+    async with Client(control) as client:
+        await client.send(op="run", **{"with": ["OPENAI_API_KEY"]}, reason="x" * (control_mod.MAX_REASON + 1))
+        reply = await client.recv()
+        assert reply["ok"] is False and "too long" in reply["error"]
+    assert harness.broker.state.pending() == []
+
+
+async def test_an_idle_connection_is_dropped(control: Path, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(control_mod, "FIRST_LINE_TIMEOUT_SECONDS", 0.2)
+    async with Client(control) as client:
+        # connect but send nothing; the broker closes us after the idle timeout instead of holding the fd
+        reply = await asyncio.wait_for(client.recv(), timeout=5)
+        assert reply["ok"] is False and "idle" in reply["error"]
+
+
+async def test_one_user_cannot_hold_more_than_the_connection_cap(control: Path, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(control_mod, "MAX_CONNECTIONS_PER_UID", 2)
+    held: list[Client] = []
+    try:
+        for _ in range(2):
+            client = Client(control)
+            await client.__aenter__()
+            await client.send(op="run", **{"with": ["OPENAI_API_KEY"]})  # waits for a decision, holding the connection
+            assert (await client.recv())["pending"] is True
+            held.append(client)
+        async with Client(control) as extra:
+            await extra.send(op="list")
+            reply = await extra.recv()
+            assert reply["ok"] is False and "too many open connections" in reply["error"]
+    finally:
+        for client in held:
+            await client.__aexit__()
 
 
 async def test_session_combines_several_presets(control: Path, harness: Harness) -> None:

