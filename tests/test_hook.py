@@ -203,6 +203,12 @@ async def hook_against_broker(socket_path: Path, payload: dict) -> dict | None:
         ("envh session start dbwork --minutes `echo 5`", "ask"),
         ('eval "envh run --with OPENAI_API_KEY$(printf ,DATABASE_URL) -- true"', "ask"),
         ('envh run --with OPENAI_API_KEY -- python x.py --since "$(date +%F)" $HOME', None),
+        # a $ bash leaves as text
+        ('envh run --with OPENAI_API_KEY --reason "costs ~\\$1-2" -- python x.py > /tmp/x.log 2>&1; echo "exit: $?"', None),
+        ("envh run --with OPENAI_API_KEY --reason 'costs ~$2' -- python x.py", None),
+        ("envh run --with OPENAI_API_KEY --reason \\$2 -- python x.py", None),
+        ('envh run --with OPENAI_API_KEY --reason "$WHY" -- true', "ask"),
+        ('eval "envh run --with OPENAI_API_KEY --reason \\$R -- true"', "ask"),
         # a broker the hook can't be sure the command reaches
         ("ENVH_SOCKET=/tmp/strict.sock envh run --with OPENAI_API_KEY -- true", "ask"),
         ("export ENVH_SOCKET=/tmp/strict.sock && envh run --with OPENAI_API_KEY -- true", "ask"),
