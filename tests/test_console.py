@@ -656,10 +656,13 @@ async def test_logs_scroll_and_stay_put_while_new_events_arrive(harness: Harness
     assert "Removed FRESH_KEY" in console.screen(80, 24)
 
 
-async def test_logs_say_when_older_events_are_left_out(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_logs_say_when_older_events_are_left_out_and_where_to_ask_for_them(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(logs, "LOGS_KEPT", 3)
-    write_audit(harness, *stored(range(5)))
+    write_audit(harness, *stored(range(3)))
     console = new_console(harness)
     console.command("logs")
-    screen = console.screen()
-    assert "Only the latest 3 events are shown" in screen and "KEY_1" not in screen and "KEY_4" in screen
+    assert "Older events" not in console.screen() and "Stored KEY_0" in console.screen()
+    write_audit(harness, *stored(range(3, 5)))
+    screen = console.screen(200, 34)
+    assert "KEY_1" not in screen and "Stored KEY_4" in screen
+    assert f"Older events are only in {harness.data_dir / 'audit.jsonl'}." in screen and logs.FEATURE_REQUESTS in screen

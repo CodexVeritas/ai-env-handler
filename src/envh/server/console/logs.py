@@ -5,11 +5,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from envh.core.audit import AUDIT_FILE, AuditEvent, read_events
+from envh.core.audit import AUDIT_FILE, AuditEvent, AuditTail, read_events
 from envh.server.console.activity import Entry, describe, transcript
 from envh.server.console.dialogs import View
 from envh.server.console.summaries import plural
-from envh.server.console.tui import DIM, Key, Line, mark, scrolled, styled
+from envh.server.console.tui import DIM, Key, Line, mark, scrolled, styled, wrap
 
 if TYPE_CHECKING:
     from envh.server.console.app import ConsoleApp
@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 LOGS_KEPT = 2000
 PAGE = 10
 MARKERS = {"broker_start": "Console started", "broker_stop": "Console stopped"}
+FEATURE_REQUESTS = "https://github.com/CodexVeritas/ai-env-handler/issues"
 
 
 def log_entry(event: AuditEvent) -> Entry | None:
@@ -33,7 +34,7 @@ class LogsView(View):
         self.entries: list[Entry] = []
         self.loaded_size = -1
         self.unreadable = 0
-        self.capped = False
+        self.older = False
         self.problem = ""
         self.offset = 0
         self.below = 0
@@ -61,15 +62,13 @@ class LogsView(View):
             return mark("error", self.problem)
         if self.unreadable:
             return mark("warn", f"{plural(self.unreadable, 'line')} of audit.jsonl could not be read; the rest are shown.")
-        if self.capped and self.offset == 0:
-            return styled(f"Only the latest {LOGS_KEPT} events are shown; older ones stay in audit.jsonl.", DIM)
         return styled("↓ newer events below · End shows the latest", DIM) if self.below else None
 
     def body(self, columns: int, rows: int) -> list[Line]:
         self._load()
-        if not self.entries:
+        lines = self._older_note(columns) + transcript(self.entries, columns)
+        if not lines:
             return [styled("  Nothing logged yet.", DIM)]
-        lines = transcript(self.entries, columns)
         if self.following:
             self.offset = len(lines)
         visible, self.offset, self.below = scrolled(lines, rows, self.offset)
@@ -78,17 +77,24 @@ class LogsView(View):
             visible = [styled(f"  ↑ {plural(self.offset + 1, 'earlier line')} · PgUp", DIM), *visible[1:]]
         return visible
 
+    def _older_note(self, columns: int) -> list[Line]:
+        if not self.older:
+            return []
+        sentences = (f"Older events are only in {self.path}.", f"Want to see them here too? Ask for it at {FEATURE_REQUESTS}")
+        return [*(styled("  " + part, DIM) for sentence in sentences for part in wrap(sentence, columns - 2)), []]
+
     def _load(self) -> None:
         """Read the audit file again when it has grown."""
         try:
             size = self.path.stat().st_size if self.path.exists() else 0
             if size == self.loaded_size:
                 return
-            events, self.unreadable = read_events(self.path, LOGS_KEPT) if size else ([], 0)
+            tail = read_events(self.path, LOGS_KEPT) if size else AuditTail([], 0, False)
         except OSError as error:
             self.problem = f"Could not read audit.jsonl: {error}"
             return
         self.problem = ""
         self.loaded_size = size
-        self.capped = len(events) + self.unreadable >= LOGS_KEPT
-        self.entries = [entry for entry in map(log_entry, events) if entry is not None]
+        self.unreadable = tail.unreadable
+        self.older = tail.older
+        self.entries = [entry for entry in map(log_entry, tail.events) if entry is not None]

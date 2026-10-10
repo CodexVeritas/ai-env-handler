@@ -26,6 +26,13 @@ class AuditEvent:
         return f"[{self.at:%H:%M:%S}] {self.name} {details}".rstrip()
 
 
+@dataclass(frozen=True)
+class AuditTail:
+    events: list[AuditEvent]
+    unreadable: int
+    older: bool
+
+
 class Audit:
     def __init__(self, path: Path, listener: Callable[[AuditEvent], None], clock: Callable[[], datetime]) -> None:
         self._path = path
@@ -42,9 +49,9 @@ class Audit:
         self._listener(AuditEvent(event_name, fields, now))
 
 
-def read_events(path: Path, limit: int) -> tuple[list[AuditEvent], int]:
-    """The events on the last limit lines of an audit file, and how many of those lines could not be read. It reads back
-    from the end, so the time it takes does not grow with the file."""
+def read_events(path: Path, limit: int) -> AuditTail:
+    """The events on the last limit lines of an audit file, how many of those lines could not be read, and whether the
+    file has older lines. It reads back from the end, so the time it takes does not grow with the file."""
     with path.open("rb") as handle:
         position = handle.seek(0, os.SEEK_END)
         data = b""
@@ -53,15 +60,16 @@ def read_events(path: Path, limit: int) -> tuple[list[AuditEvent], int]:
             position -= step
             handle.seek(position)
             data = handle.read(step) + data
-    lines = data.splitlines()[1 if position > 0 else 0:]
+    lines = data.splitlines()
+    older = position > 0 or len(lines) > limit
     events: list[AuditEvent] = []
     unreadable = 0
-    for line in lines[-limit:]:
+    for line in lines[1 if position > 0 else 0:][-limit:]:
         try:
             events.append(_parse(line.decode("utf-8", errors="replace")))
         except (ValueError, KeyError, TypeError, AttributeError):
             unreadable += 1
-    return events, unreadable
+    return AuditTail(events, unreadable, older)
 
 
 def _parse(line: str) -> AuditEvent:

@@ -133,7 +133,7 @@ The console is one full-screen terminal app, modeled on Claude Code's. The home 
 | `/presets` | create, rename and remove presets, and change their variables: the key each reads, its approval, and the preset's longest session. Edits stay in a draft; Ctrl-S shows every change and asks for the passphrase once, and leaving with unsaved edits asks what to do with them. |
 | `/settings` | every option in `config.yaml` with its value and what it does: notifications, allowed users, the default approval and longest session, and rules for single keys. Saved like presets. |
 | `/sessions` | live sessions and the commands running with keys; Enter ends a session early |
-| `/logs` | what happened, by day, newest at the bottom, including earlier runs of the console; ↑↓, PgUp/PgDn, Home and End scroll. It reads the last 2000 lines of `/var/lib/envh/audit.jsonl`, which keeps every event in full. |
+| `/logs` | what happened, by day, newest at the bottom, including earlier runs of the console; ↑↓, PgUp/PgDn, Home and End scroll. It reads the last 2000 lines of `/var/lib/envh/audit.jsonl`, which keeps every event in full and is never trimmed; the top of the list says when the file has older events. |
 | `/passphrase` | change the vault passphrase; the vault is encrypted again with it |
 | `/lock` | end the unlocked hour now; the next change asks for the passphrase again |
 | `/edit-config`, `/edit-presets` | open the file in `$VISUAL`, `$EDITOR`, nano or vi; what you save is checked and shown before it is used |
