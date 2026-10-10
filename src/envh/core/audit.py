@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,26 @@ class Audit:
         with self._path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
         self._listener(AuditEvent(event_name, fields, now))
+
+
+def read_events(path: Path, limit: int) -> tuple[list[AuditEvent], int]:
+    """The events on the last limit lines of an audit file, and how many of those lines could not be read."""
+    with path.open(encoding="utf-8", errors="replace") as handle:
+        lines = deque(handle, maxlen=limit)
+    events: list[AuditEvent] = []
+    unreadable = 0
+    for line in lines:
+        try:
+            events.append(_parse(line))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            unreadable += 1
+    return events, unreadable
+
+
+def _parse(line: str) -> AuditEvent:
+    record = json.loads(line)
+    fields = {key: value for key, value in record.items() if key not in ("ts", "event")}
+    return AuditEvent(str(record["event"]), fields, datetime.fromisoformat(record["ts"]))
 
 
 def _short(value: Any) -> str:

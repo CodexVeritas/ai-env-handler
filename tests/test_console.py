@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import shlex
@@ -14,9 +15,10 @@ from envh.core.config import load_config
 from envh.core.state import Provenance, Request
 from envh.core.vault import Vault
 from envh.server.console import app as app_module
+from envh.server.console import logs
 from envh.server.console.activity import Activity
 from envh.server.console.app import ConsoleApp
-from envh.server.console.tui import Paste, text_width
+from envh.server.console.tui import Paste, plain, text_width
 from tests.conftest import PASSPHRASE, Harness
 
 PHRASE = "amber basil cedar"
@@ -67,6 +69,16 @@ def new_console(harness: Harness) -> Console:
 
 def run_request(harness: Harness, reason: str | None = "why") -> Request:
     return harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, [], reason, ("python", "x.py"), harness.provenance())
+
+
+def write_audit(harness: Harness, *records: dict | str) -> None:
+    with (harness.data_dir / "audit.jsonl").open("a") as handle:
+        for record in records:
+            handle.write((record if isinstance(record, str) else json.dumps(record)) + "\n")
+
+
+def stored(minutes: range) -> list[dict]:
+    return [{"ts": f"2026-10-01T10:{minute:02}:00", "event": "admin_add", "secret": f"KEY_{minute}"} for minute in minutes]
 
 
 async def test_typing_without_a_slash_is_not_shown_and_does_nothing(harness: Harness) -> None:
@@ -462,6 +474,10 @@ async def test_requester_text_cannot_move_the_cursor_or_restyle_the_screen(harne
     harness.broker.request_run({"DATABASE_URL": "DATABASE_URL"}, [], "backfill\x1b[1A\x1b[2K\nfake line", ("envh", "run\r--with"), provenance)
     for line in console.app.frame(110, 34):
         assert "\x1b" not in STYLES.sub("", line) and not any(char in line for char in "\r\n‮")
+    console.app.push(logs.LogsView(console.app))
+    for line in console.app.frame(110, 34):
+        assert "\x1b" not in STYLES.sub("", line) and not any(char in line for char in "\r\n‮")
+    assert any("backfill" in plain(line) for line in console.app.views[-1].body(110, 30))
 
 
 async def test_every_frame_fits_the_window(harness: Harness) -> None:
@@ -473,7 +489,7 @@ async def test_every_frame_fits_the_window(harness: Harness) -> None:
     assert "Make this window bigger" in console.screen(40, 10)
 
 
-@pytest.mark.parametrize("command", ["keys", "presets", "settings", "sessions", "help", "add", "passphrase", "quit"])
+@pytest.mark.parametrize("command", ["keys", "presets", "settings", "sessions", "logs", "help", "add", "passphrase", "quit"])
 async def test_every_screen_draws_in_the_smallest_window_and_a_big_one(harness: Harness, command: str) -> None:
     console = new_console(harness)
     console.command(command)
@@ -584,3 +600,66 @@ async def test_reload_of_a_broken_file_says_what_is_wrong_and_keeps_the_loaded_p
     assert "secret NOT_STORED is not in the vault" in console.screen()
     assert "team" in harness.broker.config.presets
     assert not any("error where=console" in line for line in harness.echoed)
+
+
+async def test_long_activity_lines_wrap_instead_of_being_cut_off(harness: Harness) -> None:
+    console = new_console(harness)
+    console.app.activity.note("info", "a long line of activity " * 8 + "THE END")
+    screen = console.screen(80, 24)
+    assert "THE END" in screen and not any(line.endswith("…") for line in screen.splitlines() if "a long line" in line)
+
+
+async def test_home_shows_that_earlier_activity_is_above(harness: Harness) -> None:
+    console = new_console(harness)
+    for number in range(40):
+        console.app.activity.note("info", f"event {number}")
+    screen = console.screen(80, 24)
+    assert "earlier lines · PgUp" in screen and "event 39" in screen and "event 0" not in screen
+    console.press("home")
+    assert "event 0" in console.screen(80, 24)
+
+
+async def test_logs_show_earlier_runs_in_full_by_day(harness: Harness) -> None:
+    write_audit(
+        harness,
+        {"ts": "2026-10-01T09:00:00", "event": "broker_start", "pid": 1},
+        {"ts": "2026-10-01T09:05:00", "event": "request", "id": 7, "kind": "run", "reason": "a long reason " * 12 + "THE END", "presets": [], "vars": ["X"]},
+        "not json",
+        {"ts": "2026-10-01T09:06:00", "event": "decision", "id": 7, "outcome": "approved", "by": "console"},
+    )
+    console = new_console(harness)
+    console.command("logs")
+    screen = console.screen(80, 24)
+    assert screen.startswith("envh console › Logs")
+    assert "Thu 1 Oct 2026" in screen and "Console started" in screen and "THE END" in screen and "Approved #7" in screen
+    assert "1 line of audit.jsonl could not be read" in screen
+    harness.broker.audit.event("admin_add", secret="FRESH_KEY")
+    screen = console.screen(80, 24)
+    assert "Fri 2 Oct 2026" in screen and "Stored FRESH_KEY" in screen
+
+
+async def test_logs_scroll_and_stay_put_while_new_events_arrive(harness: Harness) -> None:
+    write_audit(harness, *stored(range(40)))
+    console = new_console(harness)
+    console.command("logs")
+    screen = console.screen(80, 24)
+    assert "Stored KEY_39" in screen and "Stored KEY_0" not in screen and "earlier lines · PgUp" in screen
+    console.press("home")
+    screen = console.screen(80, 24)
+    assert "Stored KEY_0" in screen and "newer events below" in screen
+    console.press("page_down", "down")
+    harness.broker.audit.event("admin_add", secret="FRESH_KEY")
+    assert "Stored FRESH_KEY" not in console.screen(80, 24)
+    console.press("end")
+    assert "Stored FRESH_KEY" in console.screen(80, 24)
+    harness.broker.audit.event("admin_rm", secret="FRESH_KEY")
+    assert "Removed FRESH_KEY" in console.screen(80, 24)
+
+
+async def test_logs_say_when_older_events_are_left_out(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(logs, "LOGS_KEPT", 3)
+    write_audit(harness, *stored(range(5)))
+    console = new_console(harness)
+    console.command("logs")
+    screen = console.screen()
+    assert "Only the latest 3 events are shown" in screen and "KEY_1" not in screen and "KEY_4" in screen
