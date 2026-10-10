@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections import deque
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +12,7 @@ from typing import Any, Callable
 from envh.common import printable
 
 AUDIT_FILE = "audit.jsonl"
+TAIL_BLOCK_BYTES = 1 << 16
 
 
 @dataclass(frozen=True)
@@ -40,14 +41,22 @@ class Audit:
 
 
 def read_events(path: Path, limit: int) -> tuple[list[AuditEvent], int]:
-    """The events on the last limit lines of an audit file, and how many of those lines could not be read."""
-    with path.open(encoding="utf-8", errors="replace") as handle:
-        lines = deque(handle, maxlen=limit)
+    """The events on the last limit lines of an audit file, and how many of those lines could not be read. It reads back
+    from the end, so the time it takes does not grow with the file."""
+    with path.open("rb") as handle:
+        position = handle.seek(0, os.SEEK_END)
+        data = b""
+        while position > 0 and data.count(b"\n") <= limit:
+            step = min(TAIL_BLOCK_BYTES, position)
+            position -= step
+            handle.seek(position)
+            data = handle.read(step) + data
+    lines = data.splitlines()[1 if position > 0 else 0:]
     events: list[AuditEvent] = []
     unreadable = 0
-    for line in lines:
+    for line in lines[-limit:]:
         try:
-            events.append(_parse(line))
+            events.append(_parse(line.decode("utf-8", errors="replace")))
         except (ValueError, KeyError, TypeError, AttributeError):
             unreadable += 1
     return events, unreadable
