@@ -37,6 +37,8 @@ class Audit:
         record = {"ts": now.isoformat(timespec="seconds"), "event": event_name, **fields}
         with self._path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         self._listener(AuditEvent(event_name, fields, now))
 
 
