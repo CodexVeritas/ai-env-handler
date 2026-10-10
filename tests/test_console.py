@@ -625,6 +625,7 @@ async def test_logs_show_earlier_runs_in_full_by_day(harness: Harness) -> None:
         {"ts": "2026-10-01T09:00:00", "event": "broker_start", "pid": 1},
         {"ts": "2026-10-01T09:05:00", "event": "request", "id": 7, "kind": "run", "reason": "a long reason " * 12 + "THE END", "presets": [], "vars": ["X"]},
         "not json",
+        {"ts": "2026-10-01T09:05:30", "event": "import_applied", "added": 1},
         {"ts": "2026-10-01T09:06:00", "event": "decision", "id": 7, "outcome": "approved", "by": "console"},
     )
     console = new_console(harness)
@@ -632,7 +633,7 @@ async def test_logs_show_earlier_runs_in_full_by_day(harness: Harness) -> None:
     screen = console.screen(80, 24)
     assert screen.startswith("envh console › Logs")
     assert "Thu 1 Oct 2026" in screen and "Console started" in screen and "THE END" in screen and "Approved #7" in screen
-    assert "1 line of audit.jsonl could not be read" in screen
+    assert "2 lines of audit.jsonl could not be read" in screen
     harness.broker.audit.event("admin_add", secret="FRESH_KEY")
     screen = console.screen(80, 24)
     assert "Fri 2 Oct 2026" in screen and "Stored FRESH_KEY" in screen

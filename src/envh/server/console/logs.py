@@ -27,6 +27,21 @@ def log_entry(event: AuditEvent) -> Entry | None:
     return Entry(event.at, *described) if described else None
 
 
+def log_entries(events: list[AuditEvent]) -> tuple[list[Entry], int]:
+    """The entries for events, and how many events had fields too odd to describe."""
+    entries: list[Entry] = []
+    odd = 0
+    for event in events:
+        try:
+            entry = log_entry(event)
+        except (TypeError, ValueError, KeyError, AttributeError):
+            odd += 1
+            continue
+        if entry is not None:
+            entries.append(entry)
+    return entries, odd
+
+
 class LogsView(View):
     def __init__(self, app: ConsoleApp) -> None:
         super().__init__(app)
@@ -95,6 +110,6 @@ class LogsView(View):
             return
         self.problem = ""
         self.loaded_size = size
-        self.unreadable = tail.unreadable
+        self.entries, odd = log_entries(tail.events)
+        self.unreadable = tail.unreadable + odd
         self.older = tail.older
-        self.entries = [entry for entry in map(log_entry, tail.events) if entry is not None]
