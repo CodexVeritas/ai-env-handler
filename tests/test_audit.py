@@ -20,7 +20,7 @@ def secrets(path: Path, limit: int) -> tuple[list[str], bool]:
 
 
 @pytest.mark.parametrize("block", [7, 64, 1 << 16])
-@pytest.mark.parametrize("limit", [1, 5, 300, 599, 600, 1000])
+@pytest.mark.parametrize("limit", [0, 1, 5, 300, 599, 600, 1000])
 def test_reading_back_from_the_end_returns_exactly_the_last_lines_and_says_if_there_are_more(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, block: int, limit: int
 ) -> None:
@@ -30,13 +30,14 @@ def test_reading_back_from_the_end_returns_exactly_the_last_lines_and_says_if_th
     assert secrets(path, limit) == ([f"KEY_{number}" for number in range(max(600 - limit, 0), 600)], limit < 600)
 
 
-def test_a_torn_last_line_and_garbage_are_counted_not_dropped_silently(tmp_path: Path) -> None:
+def test_a_torn_last_line_damaged_bytes_and_garbage_are_counted_not_dropped_silently(tmp_path: Path) -> None:
     path = tmp_path / "audit.jsonl"
     write_lines(path, 3)
-    with path.open("a") as handle:
-        handle.write('["not", "an", "event"]\n{"ts": "2026-10-01T10:00:00", "event": "adm')
+    with path.open("ab") as handle:
+        handle.write(b'{"ts": "2026-10-01T10:00:00", "event": "admin_add", "secret": "KEY_\xff"}\n')
+        handle.write(b'["not", "an", "event"]\n{"ts": "2026-10-01T10:00:00", "event": "adm')
     tail = read_events(path, 10)
-    assert [event.fields["secret"] for event in tail.events] == ["KEY_0", "KEY_1", "KEY_2"] and tail.unreadable == 2
+    assert [event.fields["secret"] for event in tail.events] == ["KEY_0", "KEY_1", "KEY_2"] and tail.unreadable == 3
 
 
 def test_an_empty_file_has_no_events(tmp_path: Path) -> None:

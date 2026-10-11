@@ -64,11 +64,12 @@ def read_events(path: Path, limit: int) -> AuditTail:
             newlines += blocks[-1].count(b"\n")
     lines = b"".join(reversed(blocks)).splitlines()
     older = position > 0 or len(lines) > limit
+    complete = lines[1 if position > 0 else 0:]
     events: list[AuditEvent] = []
     unreadable = 0
-    for line in lines[1 if position > 0 else 0:][-limit:]:
+    for line in complete[max(len(complete) - limit, 0):]:
         try:
-            events.append(_parse(line.decode("utf-8", errors="replace")))
+            events.append(_parse(line.decode("utf-8")))
         except (ValueError, KeyError, TypeError, AttributeError):
             unreadable += 1
     return AuditTail(events, unreadable, older)
