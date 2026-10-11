@@ -4,14 +4,19 @@ to audit.jsonl in full; the few that only repeat another line are left out here.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from functools import lru_cache
 from typing import Any
 
+from envh.common import printable
 from envh.core.audit import AuditEvent
+from envh.server.console.summaries import plural
+from envh.server.console.tui import DIM, MARKS, Line, Span, styled, wrap
 
 ACTIVITY_KEPT = 500
+TEXT_INDENT = " " * len("  14:32  ✓ ")
 NO_REASON = "(no reason given)"
 KIND_NAMES = {"session": "Session request", "run": "Run request", "preset": "Preset proposal", "import": "Import request"}
 UNSHOWN = {"reload", "broker_start", "broker_stop", "run_auto_approved", "client_connection_lost"}
@@ -75,6 +80,30 @@ def describe(event: AuditEvent) -> tuple[str, str] | None:
 
 def lingering(count: Any) -> str:
     return f" · stopped {count} leftover process(es)" if isinstance(count, int) and count > 0 else ""
+
+
+def transcript(entries: Iterable[Entry], columns: int) -> list[Line]:
+    """Each entry in full, wrapped under its time and mark, with the day named before its first entry."""
+    lines: list[Line] = []
+    day: date | None = None
+    for entry in entries:
+        if entry.at.date() != day:
+            day = entry.at.date()
+            lines += [*([[]] if lines else []), styled(f"  {entry.at:%a} {entry.at.day} {entry.at:%b %Y}", DIM)]
+        lines += entry_lines(f"{entry.at:%H:%M}", entry.kind, entry.text, columns)
+    return lines
+
+
+@lru_cache(maxsize=4096)
+def entry_lines(time: str, kind: str, text: str, columns: int) -> tuple[Line, ...]:
+    symbol, color = MARKS[kind]
+    first, *rest = wrap(printable(text), columns - len(TEXT_INDENT))
+    return ([Span(f"  {time}  ", DIM), Span(symbol, color), Span(" " + first)], *(styled(TEXT_INDENT + part) for part in rest))
+
+
+def earlier_marker(hidden: int) -> Line:
+    """The line that takes the top row when hidden lines are above it, the row itself included."""
+    return styled(f"  ↑ {plural(hidden, 'earlier line')} · PgUp", DIM)
 
 
 class Activity:

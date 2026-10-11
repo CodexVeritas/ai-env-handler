@@ -9,10 +9,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from envh.server.console import keys, presets, sessions, settings
+from envh.server.console import keys, logs, presets, sessions, settings
+from envh.server.console.activity import earlier_marker, transcript
 from envh.server.console.dialogs import Choice, Info, View
 from envh.server.console.editor import start_edit, start_passphrase_change
-from envh.server.console.tui import ACCENT, BOLD, CYAN, DIM, MARKS, POINTER, Key, Line, Paste, Span, TextField, box, styled, text_width, wrap
+from envh.server.console.tui import ACCENT, BOLD, CYAN, DIM, POINTER, Key, Line, Paste, Span, TextField, box, styled, text_width, wrap
 
 if TYPE_CHECKING:
     from envh.server.console.app import ConsoleApp
@@ -59,6 +60,7 @@ COMMANDS = (
     Command("add", "Store a new key", keys.start_add),
     Command("passphrase", "Change the vault passphrase", start_passphrase_change),
     Command("lock", "Lock changes now; the next one asks for your passphrase", lock),
+    Command("logs", "What happened, from earlier runs of the console too", lambda app: app.push(logs.LogsView(app))),
     Command("edit-config", "Open config.yaml in a text editor", lambda app: start_edit(app, "config")),
     Command("edit-presets", "Open presets.yaml in a text editor", lambda app: start_edit(app, "presets")),
     Command("reload", "Read config.yaml and presets.yaml again", reload),
@@ -187,22 +189,22 @@ class HomeView(View):
     def body(self, columns: int, rows: int) -> list[Line]:
         bottom = [] if self.app.overlay_open() else [*self._input_box(columns), *self._suggestions(columns)]
         room = max(rows - len(bottom), 0)
-        transcript = self._transcript(columns)
-        if len(transcript) <= room:
-            return transcript + [[] for _ in range(room - len(transcript))] + bottom
-        self.scroll = min(max(self.scroll, 0), len(transcript) - room)
-        end = len(transcript) - self.scroll
-        return transcript[end - room:end] + bottom
+        lines = self._transcript(columns)
+        if len(lines) <= room:
+            return lines + [[] for _ in range(room - len(lines))] + bottom
+        self.scroll = min(max(self.scroll, 0), len(lines) - room)
+        end = len(lines) - self.scroll
+        above = end - room
+        visible = lines[above:end]
+        if above:
+            visible = [earlier_marker(above + 1), *visible[1:]]
+        return visible + bottom
 
     def status(self) -> Line | None:
         return styled("↓ newer activity below · End shows the latest", DIM) if self.scroll else None
 
     def _transcript(self, columns: int) -> list[Line]:
-        lines = welcome(columns)
-        for entry in self.app.activity.entries:
-            symbol, color = MARKS[entry.kind]
-            lines.append([Span(f"  {entry.at:%H:%M}  ", DIM), Span(symbol, color), Span(" " + entry.text)])
-        return lines
+        return welcome(columns) + transcript(self.app.activity.entries, columns)
 
     def _input_box(self, columns: int) -> list[Line]:
         if self.field.text:

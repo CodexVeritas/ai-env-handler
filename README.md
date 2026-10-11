@@ -119,7 +119,7 @@ The helper chowns the terminal device to the service user for the duration and r
 
 ## The console
 
-The console is one full-screen terminal app, modeled on Claude Code's. The home screen lists what happened (requests, approvals, runs, changes), newest at the bottom, with a command line under it.
+The console is one full-screen terminal app, modeled on Claude Code's. The home screen lists what happened (requests, approvals, runs, changes), newest at the bottom, with a command line under it. Long lines wrap, PgUp and PgDn scroll back through this run, and `/logs` goes back through earlier runs too.
 
 - **Type `/` for commands.** A list appears as you type; ↑↓ pick one, Tab completes it, Enter runs it. **↑ on an empty command line brings back earlier commands.** `?` shows every shortcut.
 - **A request takes over the screen when it arrives**, with everything it would grant: who asked, the reason, the variables and keys, the duration, the command line and the process. Type your vault passphrase and press Enter to approve, or press ↓ (or Esc) and then Enter to deny. If something is being typed when it arrives, such as a key name, it waits until you finish (Enter or Esc); the status line says so. A request that is withdrawn while you type stays on screen and ignores what you type until Enter, so the rest of a passphrase never lands anywhere else.
@@ -133,6 +133,7 @@ The console is one full-screen terminal app, modeled on Claude Code's. The home 
 | `/presets` | create, rename and remove presets, and change their variables: the key each reads, its approval, and the preset's longest session. Edits stay in a draft; Ctrl-S shows every change and asks for the passphrase once, and leaving with unsaved edits asks what to do with them. |
 | `/settings` | every option in `config.yaml` with its value and what it does: notifications, allowed users, the default approval and longest session, and rules for single keys. Saved like presets. |
 | `/sessions` | live sessions and the commands running with keys; Enter ends a session early |
+| `/logs` | what happened, by day, newest at the bottom, including earlier runs of the console; ↑↓, PgUp/PgDn, Home and End scroll. It reads the last 2000 lines of `/var/lib/envh/audit.jsonl`, which keeps every event in full and is never trimmed; the top of the list says when the file has older events. |
 | `/passphrase` | change the vault passphrase; the vault is encrypted again with it |
 | `/lock` | end the unlocked hour now; the next change asks for the passphrase again |
 | `/edit-config`, `/edit-presets` | open the file in `$VISUAL`, `$EDITOR`, nano or vi; what you save is checked and shown before it is used |
