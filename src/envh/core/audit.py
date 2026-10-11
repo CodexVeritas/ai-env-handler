@@ -54,13 +54,15 @@ def read_events(path: Path, limit: int) -> AuditTail:
     file has older lines. It reads back from the end, so the time it takes does not grow with the file."""
     with path.open("rb") as handle:
         position = handle.seek(0, os.SEEK_END)
-        data = b""
-        while position > 0 and data.count(b"\n") <= limit:
+        blocks: list[bytes] = []
+        newlines = 0
+        while position > 0 and newlines <= limit:
             step = min(TAIL_BLOCK_BYTES, position)
             position -= step
             handle.seek(position)
-            data = handle.read(step) + data
-    lines = data.splitlines()
+            blocks.append(handle.read(step))
+            newlines += blocks[-1].count(b"\n")
+    lines = b"".join(reversed(blocks)).splitlines()
     older = position > 0 or len(lines) > limit
     events: list[AuditEvent] = []
     unreadable = 0

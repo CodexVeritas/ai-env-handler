@@ -1,12 +1,13 @@
 """The Logs screen: the audit log of this and earlier runs of the console, newest at the bottom, each line in full. New
-events appear while it is open; scrolled back, the screen stays where it is."""
+events appear while the newest line is on screen; scrolled back, the screen stays as it was until you return to the bottom."""
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 from envh.core.audit import AUDIT_FILE, AuditEvent, AuditTail, read_events
-from envh.server.console.activity import Entry, describe, transcript
+from envh.server.console.activity import Entry, describe, earlier_marker, transcript
 from envh.server.console.dialogs import View
 from envh.server.console.summaries import plural
 from envh.server.console.tui import DIM, Key, Line, mark, scrolled, styled, wrap
@@ -51,9 +52,10 @@ class LogsView(View):
         self.unreadable = 0
         self.older = False
         self.problem = ""
-        self.offset = 0
+        self.offset = sys.maxsize
         self.below = 0
         self.following = True
+        self._load()
 
     def title(self) -> str:
         return "Logs"
@@ -80,16 +82,18 @@ class LogsView(View):
         return styled("↓ newer events below · End shows the latest", DIM) if self.below else None
 
     def body(self, columns: int, rows: int) -> list[Line]:
-        self._load()
+        if self.following:
+            self._load()
         lines = self._older_note(columns) + transcript(self.entries, columns)
         if not lines:
+            self.following = True
             return [styled("  Nothing logged yet.", DIM)]
         if self.following:
             self.offset = len(lines)
         visible, self.offset, self.below = scrolled(lines, rows, self.offset)
         self.following = not self.below
         if self.offset:
-            visible = [styled(f"  ↑ {plural(self.offset + 1, 'earlier line')} · PgUp", DIM), *visible[1:]]
+            visible = [earlier_marker(self.offset + 1), *visible[1:]]
         return visible
 
     def _older_note(self, columns: int) -> list[Line]:

@@ -10,10 +10,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from envh.server.console import keys, logs, presets, sessions, settings
-from envh.server.console.activity import transcript
+from envh.server.console.activity import earlier_marker, transcript
 from envh.server.console.dialogs import Choice, Info, View
 from envh.server.console.editor import start_edit, start_passphrase_change
-from envh.server.console.summaries import plural
 from envh.server.console.tui import ACCENT, BOLD, CYAN, DIM, POINTER, Key, Line, Paste, Span, TextField, box, styled, text_width, wrap
 
 if TYPE_CHECKING:
@@ -58,10 +57,10 @@ COMMANDS = (
     Command("presets", "Create and edit presets", lambda app: app.push(presets.PresetsView(app))),
     Command("settings", "Approval rules, session limits, notifications, users", lambda app: app.push(settings.SettingsView(app))),
     Command("sessions", "Live sessions and running commands; end a session", lambda app: app.push(sessions.SessionsView(app))),
-    Command("logs", "What happened, from earlier runs of the console too", lambda app: app.push(logs.LogsView(app))),
     Command("add", "Store a new key", keys.start_add),
     Command("passphrase", "Change the vault passphrase", start_passphrase_change),
     Command("lock", "Lock changes now; the next one asks for your passphrase", lock),
+    Command("logs", "What happened, from earlier runs of the console too", lambda app: app.push(logs.LogsView(app))),
     Command("edit-config", "Open config.yaml in a text editor", lambda app: start_edit(app, "config")),
     Command("edit-presets", "Open presets.yaml in a text editor", lambda app: start_edit(app, "presets")),
     Command("reload", "Read config.yaml and presets.yaml again", reload),
@@ -198,7 +197,7 @@ class HomeView(View):
         above = end - room
         visible = lines[above:end]
         if above:
-            visible = [styled(f"  ↑ {plural(above + 1, 'earlier line')} · PgUp", DIM), *visible[1:]]
+            visible = [earlier_marker(above + 1), *visible[1:]]
         return visible + bottom
 
     def status(self) -> Line | None:

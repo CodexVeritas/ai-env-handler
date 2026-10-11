@@ -667,3 +667,31 @@ async def test_logs_say_when_older_events_are_left_out_and_where_to_ask_for_them
     screen = console.screen(200, 34)
     assert "KEY_1" not in screen and "Stored KEY_4" in screen
     assert f"Older events are only in {harness.data_dir / 'audit.jsonl'}." in screen and logs.FEATURE_REQUESTS in screen
+
+
+async def test_scrolled_back_logs_stay_put_when_new_events_push_old_ones_out(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(logs, "LOGS_KEPT", 30)
+    write_audit(harness, *stored(range(40)))
+    console = new_console(harness)
+    console.command("logs")
+    console.press("home")
+    before = console.screen(80, 24)
+    harness.broker.audit.event("admin_add", secret="FRESH_KEY")
+    assert console.screen(80, 24) == before
+    console.press("end")
+    assert "Stored FRESH_KEY" in console.screen(80, 24)
+
+
+async def test_a_key_before_logs_first_draws_scrolls_from_the_newest_line(harness: Harness) -> None:
+    write_audit(harness, *stored(range(40)))
+    console = new_console(harness)
+    console.command("logs")
+    console.press("up")
+    assert "Stored KEY_39" in console.screen(80, 24)
+
+
+async def test_a_short_prefix_still_picks_lock_before_logs(harness: Harness) -> None:
+    console = new_console(harness)
+    console.type("/lo")
+    console.press("enter")
+    assert "Changes are already locked" in console.screen()
