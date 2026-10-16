@@ -1,6 +1,8 @@
-"""Record the envh demo: a development broker's console and an agent's shell, driven through two ptys, with fake keys.
+"""Record the envh demo: a development broker's console and a shell, driven through two ptys, with fake keys.
 
-Writes a JSON recording of both terminals that render.py turns into the demo video. From the repo root:
+The shell shows a plaintext .env, the console starts, `envh import` moves the keys into the vault, and an agent's
+session, run and denied request follow. Writes a JSON recording of both terminals, with named marks between the
+steps, that render.py turns into the demo video. From the repo root:
 
     uv run python scripts/demo/record.py build/demo/recording.json
 """
@@ -17,6 +19,7 @@ import pty
 import random
 import re
 import secrets
+import shutil
 import signal
 import string
 import struct
@@ -25,31 +28,23 @@ import tempfile
 import termios
 import threading
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
-from envh.core.config import CONFIG_FILE, PRESETS_FILE, Defaults, SecretEntry, Settings, render_config
+from envh.core.config import CONFIG_FILE, PRESETS_FILE, PRESETS_TEMPLATE, Defaults, SecretEntry, Settings, render_config
 from envh.core.vault import VAULT_FILE, Vault, write_private_file
 from envh.server.init_cmd import PHRASE_FILE
 
-COLUMNS, ROWS = 80, 30
+COLUMNS, ROWS = 80, 36
 WAIT_TIMEOUT_SECONDS = 20
 CONSOLE_PHRASE = "amber basil cedar"
 ANSI = re.compile(r"\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][A-Z0-9]|[=>78])")
 DOWN = "\x1b[B"
 ENTER = "\r"
 CTRL_C = "\x03"
+CLEAR_SCREEN = "\x0c"
 
-PRESETS_TEXT = """presets:
-  news-bot:
-    env:
-      OPENAI_API_KEY: NEWS_BOT_OPENAI_API_KEY
-      ASKNEWS_API_KEY: NEWS_BOT_ASKNEWS_API_KEY
-"""
-ENV_TEXT = """# OPENAI_API_KEY -> envh secret NEWS_BOT_OPENAI_API_KEY (presets: news-bot)
-# ASKNEWS_API_KEY -> envh secret NEWS_BOT_ASKNEWS_API_KEY (presets: news-bot)
-LOG_LEVEL=info
-"""
 FETCH_SCRIPT = """import os
 import time
 
@@ -66,6 +61,7 @@ from envh.cli import main
 
 sys.exit(main())
 """
+IMPORT_PROMPTS = ("Import which?", "Flip any of these", "Rename any?", "Drop any preset?", "Rename any preset?")
 
 
 class Clock:
@@ -135,10 +131,18 @@ class Pane:
     def send(self, text: str) -> None:
         os.write(self.descriptor, text.encode())
 
-    def type(self, text: str, seconds_per_char: float = 0.035) -> None:
+    def type(self, text: str, seconds_per_char: float = 0.04) -> None:
         for char in text:
             self.send(char)
             time.sleep(seconds_per_char * random.uniform(0.6, 1.4))
+
+    def run(self, command: str) -> int:
+        """Type a command and press Enter; returns the checkpoint from before it, to wait for its output."""
+        since = self.checkpoint()
+        self.type(command)
+        time.sleep(0.4)
+        self.send(ENTER)
+        return since
 
     def stop(self) -> None:
         try:
@@ -154,89 +158,145 @@ def fake_value(prefix: str, length: int) -> str:
 
 
 def seed(data_dir: Path, project_dir: Path) -> str:
-    """A vault of fake keys with a news-bot preset, and a project whose .env was already imported. Returns the passphrase."""
+    """A vault holding another project's key, and a news-bot project with its keys still in .env. Returns the passphrase."""
     data_dir.mkdir(mode=0o700)
     project_dir.mkdir()
     passphrase = fake_value("demo-", 16)
     vault = Vault.create(data_dir / VAULT_FILE, passphrase)
-    vault.set("NEWS_BOT_OPENAI_API_KEY", fake_value("sk-proj-DEMO", 60))
-    vault.set("NEWS_BOT_ASKNEWS_API_KEY", fake_value("DEMO", 40))
     vault.set("PROD_DATABASE_URL", f"postgresql://app:{fake_value('DEMO', 20)}@db.internal:5432/prod")
     vault.save()
     settings = Settings(
         users=(getpass.getuser(),),
         notify=False,
         defaults=Defaults(approval="session", max_session=timedelta(hours=1)),
-        secrets={
-            "NEWS_BOT_OPENAI_API_KEY": SecretEntry(description="Team OpenAI account"),
-            "NEWS_BOT_ASKNEWS_API_KEY": SecretEntry(description="Team AskNews account"),
-            "PROD_DATABASE_URL": SecretEntry(approval="per-run", description="Production database, read-write"),
-        },
+        secrets={"PROD_DATABASE_URL": SecretEntry(approval="per-run", description="Production database, read-write")},
     )
     write_private_file(data_dir / CONFIG_FILE, render_config(settings).encode())
-    write_private_file(data_dir / PRESETS_FILE, PRESETS_TEXT.encode())
+    write_private_file(data_dir / PRESETS_FILE, PRESETS_TEMPLATE.encode())
     write_private_file(data_dir / PHRASE_FILE, f"{CONSOLE_PHRASE}\n".encode())
-    (project_dir / ".env").write_text(ENV_TEXT)
+    env_text = f"OPENAI_API_KEY={fake_value('sk-proj-DEMO', 48)}\nASKNEWS_API_KEY={fake_value('DEMO', 36)}\nLOG_LEVEL=info\n"
+    (project_dir / ".env").write_text(env_text)
     (project_dir / "fetch.py").write_text(FETCH_SCRIPT)
     (project_dir / "cleanup.py").write_text(CLEANUP_SCRIPT)
     return passphrase
 
 
-def run_command(agent: Pane, command: str, clock: Clock, mark: str) -> None:
-    clock.mark(mark)
-    agent.type(command)
-    time.sleep(0.3)
-    agent.send(ENTER)
+def show_problem(shell: Pane, clock: Clock) -> None:
+    clock.mark("problem")
+    time.sleep(0.6)
+    shell.wait_for("LOG_LEVEL=info", shell.run("cat .env"))
+    clock.mark("problem_shown")
+    time.sleep(0.6)
 
 
-def perform(console: Pane, agent: Pane, passphrase: str, clock: Clock) -> None:
-    """The demo itself. The marks name the moments render.py hangs captions on."""
-    clock.mark("start")
-    time.sleep(1.2)
-    since = agent.checkpoint()
-    run_command(agent, "cat .env", clock, "env_typing")
-    agent.wait_for("LOG_LEVEL=info", since)
-    time.sleep(4.5)
+def start_console(launch: Callable[[], Pane], passphrase: str, clock: Clock) -> Pane:
+    clock.mark("console_start")
+    console = launch()
+    console.wait_for("Vault passphrase:")
+    time.sleep(0.4)
+    clock.mark("console_phrase")
+    time.sleep(0.6)
+    console.type(passphrase, seconds_per_char=0.07)
+    time.sleep(0.4)
+    console.send(ENTER)
+    console.wait_for("Console ready")
+    time.sleep(0.6)
+    clock.mark("console_ready")
+    time.sleep(0.6)
+    return console
 
-    clock.log("The agent asks for a session")
+
+def import_env(shell: Pane, console: Pane, passphrase: str, clock: Clock) -> None:
+    clock.log("Importing the .env file")
+    clock.mark("import")
+    shell.send(CLEAR_SCREEN)
+    time.sleep(0.5)
+    since = shell.run("envh import .")
+    for prompt in IMPORT_PROMPTS:
+        shell.wait_for(prompt, since)
+        time.sleep(1.4)
+        since = shell.checkpoint()
+        shell.send(ENTER)
+    shell.wait_for("as shown? [Y/n]", since)
+    clock.mark("import_plan")
+    time.sleep(0.6)
+    since = shell.checkpoint()
+    shell.send(ENTER)
+    shell.wait_for("Proceed?", since)
+    time.sleep(0.8)
     since = console.checkpoint()
-    run_command(agent, 'envh session start news-bot --minutes 60 --reason "daily news digest"', clock, "session_typing")
+    shell.run("y")
+    console.wait_for("Import request #", since)
+    time.sleep(0.6)
+    clock.mark("import_card")
+    time.sleep(0.4)
+    since = shell.checkpoint()
+    console.type(passphrase, seconds_per_char=0.07)
+    time.sleep(0.4)
+    console.send(ENTER)
+    shell.wait_for("rm -r", since)
+    time.sleep(1.5)
+    clock.mark("import_check")
+    shell.send(CLEAR_SCREEN)
+    time.sleep(0.5)
+    shell.wait_for("LOG_LEVEL=info", shell.run("cat .env"))
+    clock.mark("import_checked")
+    time.sleep(0.6)
+
+
+def agent_session(agent: Pane, console: Pane, passphrase: str, clock: Clock) -> None:
+    clock.log("The agent asks for a session")
+    clock.mark("ask")
+    agent.send(CLEAR_SCREEN)
+    time.sleep(0.5)
+    since = console.checkpoint()
+    agent.run('envh session start news-bot --minutes 60 --reason "daily news digest"')
     console.wait_for("Session request #", since)
-    clock.mark("card1")
-    time.sleep(5.0)
-    clock.mark("typing_passphrase")
+    time.sleep(0.6)
+    clock.mark("ask_card")
+    time.sleep(0.4)
+
+    clock.mark("approve")
+    time.sleep(0.4)
     since = agent.checkpoint()
     console.type(passphrase, seconds_per_char=0.07)
     time.sleep(0.4)
     console.send(ENTER)
     output = agent.wait_for("expires", since)
+    time.sleep(0.6)
     clock.mark("approved")
     session_id = re.search(r"session ([0-9a-f]+) approved", output).group(1)
-    time.sleep(2.5)
+    time.sleep(0.4)
 
     clock.log("The agent runs a script inside the session")
-    since = agent.checkpoint()
-    run_command(agent, f'envh run --session {session_id} --reason "fetch news" -- python3 fetch.py', clock, "run_typing")
-    agent.wait_for("digest.md", since)
+    clock.mark("run")
+    time.sleep(0.4)
+    agent.wait_for("digest.md", agent.run(f'envh run --session {session_id} --reason "fetch news" -- python3 fetch.py'))
+    time.sleep(0.6)
     clock.mark("ran")
-    time.sleep(3.0)
+    time.sleep(0.4)
 
+
+def denied_request(agent: Pane, console: Pane, clock: Clock) -> None:
     clock.log("The agent asks for a key it should not need")
+    clock.mark("deny")
+    time.sleep(0.4)
     since = console.checkpoint()
-    run_command(agent, "envh run --with DATABASE_URL=PROD_DATABASE_URL -- python3 cleanup.py", clock, "deny_typing")
+    agent.run("envh run --with DATABASE_URL=PROD_DATABASE_URL -- python3 cleanup.py")
     console.wait_for("Run request #", since)
-    clock.mark("card2")
-    time.sleep(5.0)
+    time.sleep(0.6)
+    clock.mark("deny_card")
+    time.sleep(0.4)
     since = agent.checkpoint()
     console.send(DOWN)
-    clock.mark("deny_chosen")
     time.sleep(1.0)
     console.send(ENTER)
     agent.wait_for("denied", since)
+    time.sleep(0.6)
     clock.mark("denied")
-    time.sleep(3.0)
-    clock.mark("activity")
-    time.sleep(4.0)
+    time.sleep(0.4)
+    clock.mark("log")
+    time.sleep(1.0)
     clock.mark("end")
 
 
@@ -244,11 +304,13 @@ def record(output: Path) -> None:
     random.seed(7)
     clock = Clock()
     venv_bin = Path(sys.executable).parent
-    with tempfile.TemporaryDirectory(prefix="envh-demo-", dir=os.environ.get("XDG_RUNTIME_DIR")) as work:
-        data_dir = Path(work) / "data"
-        project_dir = Path(work) / "news-bot"
-        bin_dir = Path(work) / "bin"
-        socket = Path(work) / "ctl.sock"
+    work = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / "envh-demo"
+    if work.exists():
+        raise SystemExit(f"{work} exists, maybe from a recording that is still running; remove it to record again")
+    work.mkdir(mode=0o700)
+    panes: dict[str, Pane] = {}
+    try:
+        data_dir, project_dir, bin_dir, socket = work / "data", work / "news-bot", work / "bin", work / "ctl.sock"
         passphrase = seed(data_dir, project_dir)
         bin_dir.mkdir()
         (bin_dir / "envh").write_text(SHORT_PATH_CLIENT)
@@ -262,35 +324,37 @@ def record(output: Path) -> None:
             "TERM": "xterm-256color",
             "TZ": "UTC",
             "ENVH_SOCKET": str(socket),
+            "XDG_STATE_HOME": str(work / "state"),
         }
-        clock.log("Starting a development broker with fake keys")
-        console = Pane("console", [str(bin_dir / "envh"), "serve", "--data-dir", str(data_dir), "--socket", str(socket)], env, data_dir, clock)
-        agent: Pane | None = None
-        try:
-            console.wait_for("Vault passphrase:")
-            console.send(passphrase + ENTER)
-            console.wait_for("Console ready")
-            clock.log("Console ready; starting the agent's shell")
-            agent_env = {**env, "PS1": r"\[\e[1;32m\]$\[\e[0m\] ", "HISTFILE": "/dev/null"}
-            agent = Pane("agent", ["bash", "--norc", "--noprofile", "-i"], agent_env, project_dir, clock)
-            agent.wait_for("$ ")
-            time.sleep(0.8)
-            perform(console, agent, passphrase, clock)
-        finally:
-            clock.log("Stopping the console and the shell")
-            console.send(CTRL_C)
+
+        def launch_console() -> Pane:
+            panes["console"] = Pane("console", [str(bin_dir / "envh"), "serve", "--data-dir", str(data_dir), "--socket", str(socket)], env, data_dir, clock)
+            return panes["console"]
+
+        clock.log("Starting the shell, with a plaintext .env of fake keys")
+        shell_env = {**env, "PS1": r"\[\e[1;32m\]$\[\e[0m\] ", "HISTFILE": "/dev/null"}
+        panes["agent"] = shell = Pane("agent", ["bash", "--norc", "--noprofile", "-i"], shell_env, project_dir, clock)
+        shell.wait_for("$ ")
+        time.sleep(0.8)
+        show_problem(shell, clock)
+        clock.log("Starting a development broker and its console")
+        console = start_console(launch_console, passphrase, clock)
+        import_env(shell, console, passphrase, clock)
+        agent_session(shell, console, passphrase, clock)
+        denied_request(shell, console, clock)
+    finally:
+        clock.log("Stopping the console and the shell")
+        if "console" in panes:
+            panes["console"].send(CTRL_C)
             time.sleep(0.3)
-            console.send(CTRL_C)
+            panes["console"].send(CTRL_C)
             time.sleep(1.5)
-            console.stop()
-            if agent is not None:
-                agent.stop()
-    missing = {"start", "end"} - set(clock.marks)
-    if missing:
-        raise RuntimeError(f"the recording stopped early; missing marks: {', '.join(sorted(missing))}")
+        for pane in panes.values():
+            pane.stop()
+        shutil.rmtree(work)
     output.parent.mkdir(parents=True, exist_ok=True)
-    panes = {"console": console.events, "agent": agent.events}
-    output.write_text(json.dumps({"columns": COLUMNS, "rows": ROWS, "marks": clock.marks, "panes": panes}))
+    events = {name: pane.events for name, pane in panes.items()}
+    output.write_text(json.dumps({"columns": COLUMNS, "rows": ROWS, "marks": clock.marks, "panes": events}))
     clock.log(f"Wrote {output}")
 
 

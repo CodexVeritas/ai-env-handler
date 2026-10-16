@@ -404,7 +404,7 @@ uv run pytest -q                       # no root, no network, no environment var
 uv run envh --help
 ```
 
-The demo GIF above is a real recording of a development broker with fake keys. After the console changes, record it again and render it (needs ffmpeg, Google Chrome, and network access to load xterm.js from jsDelivr; `--mp4` also writes the full video with captions):
+The demo GIF above is a real recording of a development broker with fake keys. After the console changes, record it again and render it (needs ffmpeg, Google Chrome, and network access to load xterm.js from jsDelivr; `--mp4` also writes the full walkthrough video):
 
 ```bash
 uv run python scripts/demo/record.py build/demo/recording.json

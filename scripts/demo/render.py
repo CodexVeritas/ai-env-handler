@@ -35,21 +35,18 @@ def gif_encoder(output: Path) -> list[str]:
     return ["ffmpeg", "-y", "-loglevel", "error", "-f", "image2pipe", "-framerate", str(GIF_FPS), "-c:v", "png", "-i", "-", "-vf", palette, "-loop", "0", str(output)]
 
 
-def open_player(page: Page, recording: dict) -> dict:
+def render(page: Page, recording: dict, cut: str, fps: int, command: list[str], label: str) -> None:
+    """Render one cut of the player: "full" is the walkthrough video, "core" the README's request, approval and run."""
     page.goto(PLAYER.as_uri())
     page.wait_for_function("typeof Terminal !== 'undefined'")
     page.evaluate("document.fonts.ready")
-    return page.evaluate("data => loadDemo(data)", recording)
-
-
-def render(page: Page, recording: dict, start: float, end: float, fps: int, command: list[str], label: str) -> None:
-    open_player(page, recording)
-    frames = int((end - start) * fps)
-    print(f"{label}: rendering {frames} frames ({end - start:.1f}s at {fps} fps)", flush=True)
+    duration = page.evaluate("([data, cut]) => loadDemo(data, cut)", [recording, cut])
+    frames = int(duration * fps)
+    print(f"{label}: rendering {frames} frames ({duration:.1f}s at {fps} fps)", flush=True)
     encoder = subprocess.Popen(command, stdin=subprocess.PIPE)
     try:
         for frame in range(frames):
-            page.evaluate("seconds => renderAt(seconds)", start + frame / fps)
+            page.evaluate("seconds => renderAt(seconds)", frame / fps)
             encoder.stdin.write(page.screenshot(type="png"))
             if frame % (fps * 10) == 0:
                 print(f"{label}: frame {frame}/{frames}", flush=True)
@@ -64,7 +61,7 @@ def render(page: Page, recording: dict, start: float, end: float, fps: int, comm
 def main() -> int:
     parser = argparse.ArgumentParser(description="Render the envh demo video and GIF")
     parser.add_argument("recording", type=Path)
-    parser.add_argument("--mp4", type=Path, help="the full video")
+    parser.add_argument("--mp4", type=Path, help="the full walkthrough video")
     parser.add_argument("--gif", type=Path, help="the README's GIF: the request, approval and run")
     args = parser.parse_args()
     if not (args.mp4 or args.gif):
@@ -77,13 +74,12 @@ def main() -> int:
         page = browser.new_page(viewport={"width": WIDTH, "height": HEIGHT})
         page.on("console", lambda message: print(f"player: {message.text}", flush=True) if message.type in ("error", "warning") else None)
         page.on("pageerror", lambda error: print(f"player error: {error}", file=sys.stderr, flush=True))
-        timing = open_player(page, recording)
         if args.mp4:
             args.mp4.parent.mkdir(parents=True, exist_ok=True)
-            render(page, recording, 0, timing["duration"], MP4_FPS, mp4_encoder(args.mp4), "mp4")
+            render(page, recording, "full", MP4_FPS, mp4_encoder(args.mp4), "mp4")
         if args.gif:
             args.gif.parent.mkdir(parents=True, exist_ok=True)
-            render(page, recording, timing["gifStart"], timing["gifEnd"], GIF_FPS, gif_encoder(args.gif), "gif")
+            render(page, recording, "core", GIF_FPS, gif_encoder(args.gif), "gif")
         browser.close()
     return 0
 

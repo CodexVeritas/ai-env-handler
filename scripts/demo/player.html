@@ -14,33 +14,59 @@
     --muted: #8b98a8;
     --agent: #58a6ff;
     --console: #e3b341;
+    --green: #3fb950;
   }
   html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--text); font-family: "Fira Sans", "DejaVu Sans", sans-serif; }
-  header { position: absolute; left: 48px; top: 26px; display: flex; align-items: baseline; gap: 18px; }
+  header { position: absolute; left: 48px; top: 24px; display: flex; align-items: baseline; gap: 18px; }
   header .brand { font-size: 38px; font-weight: 700; }
   header .tagline { font-size: 24px; color: var(--muted); }
-  #windows { position: absolute; top: 96px; left: 0; right: 0; display: flex; justify-content: center; gap: 24px; }
+  #windows { position: absolute; top: 96px; left: 0; right: 0; height: 840px; display: flex; justify-content: center; align-items: flex-start; gap: 24px; }
   .window { background: var(--window); border: 2px solid var(--border); border-radius: 12px; overflow: hidden; position: relative; }
   .titlebar { height: 46px; display: flex; align-items: center; gap: 12px; padding: 0 18px; border-bottom: 1px solid var(--border); font-size: 21px; font-weight: 600; }
   .titlebar .who { font-size: 17px; font-weight: 400; color: var(--muted); }
   .dot { width: 12px; height: 12px; border-radius: 50%; }
   #agent .dot { background: var(--agent); }
   #console .dot { background: var(--console); }
-  .term { padding: 14px 16px; }
+  .term { padding: 14px 16px; position: relative; }
+  .spot { position: absolute; border: 3px solid; border-radius: 8px; box-shadow: 0 0 0 4000px rgba(5, 8, 12, 0.6); pointer-events: none; opacity: 0; z-index: 10; }
+  .tag { position: absolute; padding: 7px 14px; border-radius: 8px; color: #0b0f14; font-size: 23px; font-weight: 600; white-space: nowrap; opacity: 0; z-index: 11; }
   .badge { position: absolute; right: 12px; top: 6px; padding: 5px 12px; border-radius: 8px; background: #2a2210; border: 1px solid var(--console); color: var(--console); font-size: 18px; opacity: 0; }
-  #caption { position: absolute; left: 80px; right: 80px; top: 872px; text-align: center; }
-  #caption .headline { font-size: 46px; font-weight: 600; }
-  #caption .detail { font-size: 29px; color: var(--muted); margin-top: 14px; line-height: 1.35; }
-  .card { position: absolute; inset: 0; background: var(--bg); display: flex; flex-direction: column; justify-content: center; }
+  #intro { position: absolute; top: 96px; left: 0; right: 0; height: 840px; display: flex; align-items: center; justify-content: center; background: rgba(8, 11, 15, 0.88); opacity: 0; }
+  #intro .panel { max-width: 1240px; text-align: center; }
+  #intro .label { font-size: 26px; font-weight: 600; letter-spacing: 3px; text-transform: uppercase; color: var(--console); }
+  #intro .headline { font-size: 64px; font-weight: 700; margin-top: 16px; line-height: 1.15; }
+  #intro .text { font-size: 36px; color: #c3cdd8; margin-top: 26px; line-height: 1.4; }
+  #steps { position: absolute; left: 0; right: 0; top: 968px; display: flex; justify-content: center; gap: 14px; opacity: 0; }
+  #steps span { font-size: 22px; padding: 8px 18px; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); }
+  #steps span.done { color: #c3cdd8; }
+  #steps span.current { color: #0b0f14; background: var(--text); border-color: var(--text); font-weight: 600; }
+  .card { position: absolute; inset: 0; background: var(--bg); display: flex; flex-direction: column; justify-content: center; opacity: 0; }
   #title { align-items: center; text-align: center; }
   #title .brand { font-size: 150px; font-weight: 700; letter-spacing: -2px; }
   #title .tagline { font-size: 52px; margin-top: 8px; }
   #title .detail { font-size: 32px; color: var(--muted); margin-top: 34px; }
-  #closing { padding: 0 200px; opacity: 0; }
+  #how { padding: 0 140px; }
+  #how h1 { font-size: 64px; margin: 0 0 56px; }
+  #how .diagram { display: grid; grid-template-columns: 470px 1fr 560px; align-items: stretch; }
+  #how .zone { border: 3px solid; border-radius: 16px; padding: 28px 32px; }
+  #how .zone h2 { font-size: 24px; letter-spacing: 2px; text-transform: uppercase; margin: 0 0 20px; }
+  #how .zone div { font-size: 33px; margin-bottom: 14px; }
+  #how .zone .note { font-size: 26px; color: var(--muted); margin-top: 22px; }
+  #how .you { border-color: var(--agent); }
+  #how .you h2 { color: var(--agent); }
+  #how .envh { border-color: var(--console); }
+  #how .envh h2 { color: var(--console); }
+  #how .envh b { color: var(--console); }
+  #how .arrows { display: flex; flex-direction: column; justify-content: center; gap: 70px; padding: 0 22px; }
+  #how .arrow { font-size: 28px; text-align: center; }
+  #how .arrow .line { font-size: 44px; color: var(--muted); line-height: 1; }
+  #how .terms { margin-top: 56px; font-size: 31px; color: var(--muted); line-height: 1.6; }
+  #how .terms b { color: var(--text); }
+  #closing { padding: 0 200px; }
   #closing h1 { font-size: 64px; margin: 0 0 40px; }
   #closing ul { list-style: none; margin: 0; padding: 0; }
   #closing li { font-size: 31px; color: var(--muted); margin-bottom: 26px; line-height: 1.35; padding-left: 44px; position: relative; }
-  #closing li::before { content: "✓"; position: absolute; left: 0; color: #3fb950; font-weight: 700; }
+  #closing li::before { content: "✓"; position: absolute; left: 0; color: var(--green); font-weight: 700; }
   #closing li b { color: var(--text); font-weight: 600; }
   #closing pre { margin: 30px 0 0; padding: 22px 28px; background: var(--window); border: 2px solid var(--border); border-radius: 12px; font: 26px/1.5 "DejaVu Sans Mono", monospace; color: var(--text); }
   #closing .footnote { margin-top: 20px; font-size: 24px; color: var(--muted); }
@@ -50,20 +76,45 @@
 <header><span class="brand">envh</span><span class="tagline">Human-approved secrets for scripts and AI agents</span></header>
 <div id="windows">
   <div class="window" id="agent">
-    <div class="titlebar"><span class="dot"></span>Your AI agent's terminal<span class="who">~/news-bot · runs as you</span></div>
-    <div class="term"></div>
+    <div class="titlebar"><span class="dot"></span><span class="name"></span><span class="who">~/news-bot · runs as you</span></div>
+    <div class="term"><div class="spot"></div><div class="tag"></div></div>
   </div>
   <div class="window" id="console">
-    <div class="titlebar"><span class="dot"></span>envh console<span class="who">its own window, runs as the envh user</span></div>
-    <div class="term"></div>
+    <div class="titlebar"><span class="dot"></span>envh console<span class="who">its own window · runs as the envh user</span></div>
+    <div class="term"><div class="spot"></div><div class="tag"></div></div>
     <div class="badge" id="badge">⌨ Typing the vault passphrase · never shown</div>
   </div>
 </div>
-<div id="caption"><div class="headline"></div><div class="detail"></div></div>
+<div id="steps"></div>
+<div id="intro"><div class="panel"><div class="label"></div><div class="headline"></div><div class="text"></div></div></div>
 <div class="card" id="title">
   <div class="brand">envh</div>
   <div class="tagline">Human-approved secrets for scripts and AI agents</div>
-  <div class="detail">Your API keys leave your .env files, and you approve every use.</div>
+  <div class="detail">Setup and daily use, in under three minutes</div>
+</div>
+<div class="card" id="how">
+  <h1>How envh works</h1>
+  <div class="diagram">
+    <div class="zone you" data-from="0">
+      <h2>Runs as you</h2>
+      <div>You</div>
+      <div>Your scripts</div>
+      <div>Your AI agents</div>
+      <div class="note">No keys stored here</div>
+    </div>
+    <div class="arrows">
+      <div class="arrow" data-from="2.5">① ask for keys, and say why<div class="line">──────────▶</div></div>
+      <div class="arrow" data-from="7.5"><div class="line">◀──────────</div>③ the keys go into that one command</div>
+    </div>
+    <div class="zone envh" data-from="0">
+      <h2>Runs as a separate Linux user</h2>
+      <div data-from="5"><b>②</b> The envh console: you approve here</div>
+      <div>The encrypted vault, with the keys</div>
+      <div>The audit log</div>
+      <div class="note">You and your agents can't read any of it</div>
+    </div>
+  </div>
+  <div class="terms" data-from="10.5"><b>Preset:</b> a named set of keys for one project, like news-bot<br><b>Session:</b> one approval that lets a preset's keys be used for a set time</div>
 </div>
 <div class="card" id="closing">
   <h1>Why use envh</h1>
@@ -78,46 +129,99 @@ python3 scripts/setup_wizard.py</pre>
   <div class="footnote">Linux only · github.com/CodexVeritas/ai-env-handler</div>
 </div>
 <script>
-  const TITLE_SECONDS = 3.5;
-  const CLOSING_SECONDS = 10;
-  const FADE_SECONDS = 0.5;
-  const CAPTION_FADE_SECONDS = 0.3;
-  const SCENES = [
-    { from: "start", focus: "agent", headline: "Your .env file no longer holds the keys", detail: "The import moved them into an encrypted vault, owned by a separate Linux user that you and your agents can't read." },
-    { from: "session_typing", focus: "agent", headline: "An agent asks for the keys it needs", detail: "It names a preset, how long it needs the keys, and why." },
-    { from: "card1", focus: "console", headline: "The request appears on your envh console", detail: "Who is asking, the reason, which keys, for how long, and the exact command." },
-    { from: "typing_passphrase", focus: "console", badge: true, headline: "You approve with your vault passphrase", detail: "You type it only here, next to your console phrase, so a fake prompt is easy to spot." },
-    { from: "approved", focus: "agent", headline: "Runs inside the session start at once", detail: "The keys go only into that command's environment: never into your shell, never into a file." },
-    { from: "deny_typing", focus: "agent", headline: "Then the agent reaches for something unexpected", detail: "The production database, with no reason given." },
-    { from: "card2", focus: "console", headline: "Not what you expected? Deny it", detail: "↓ then Enter. The agent gets nothing and stops." },
-    { from: "denied", focus: "agent", headline: "Not what you expected? Deny it", detail: "↓ then Enter. The agent gets nothing and stops." },
-    { from: "activity", focus: "console", headline: "Every request, decision and run is logged", detail: "On the console, and in an audit log that only the envh user can read." },
+  const FADE_SECONDS = 0.4;
+  const WORDS_PER_SECOND = 3.2;
+  const STEPS = ["Start the console", "Import .env", "Agent asks", "You approve", "Agent runs", "Deny", "Log"];
+  const YOUR_TERMINAL = "Your terminal";
+  const AGENT_TERMINAL = "Your AI agent's terminal";
+  const card = (name, seconds) => ({ card: name, seconds });
+  const intro = (at, label, headline, text, extra = {}) => ({ intro: { label, headline, text }, at, ...extra });
+  const play = (from, to, extra = {}) => ({ play: [from, to], ...extra });
+  const hold = (at, seconds, highlight, extra = {}) => ({ hold: seconds, at, highlight, ...extra });
+  const SEGMENTS = [
+    card("title", 3.5),
+    intro("problem", "The problem", "Today, API keys sit in plaintext .env files", "Your AI agents run as you, so they can read every one.", { solo: true }),
+    play("problem", "problem_shown", { solo: true, focus: "agent" }),
+    hold("problem_shown", 3.5, { pane: "agent", from: "OPENAI_API_KEY=", to: "ASKNEWS_API_KEY=", label: "Readable by anything running as you" }, { solo: true }),
+    card("how", 14),
+    intro("console_start", "Step 1", "Start the envh console", "It runs in its own window, as a separate Linux user, and unlocks the vault.", { step: 0 }),
+    play("console_start", "console_phrase", { step: 0, focus: "console" }),
+    hold("console_phrase", 4, { pane: "console", from: "Console phrase:", label: "Type your passphrase only where you see this phrase" }, { step: 0 }),
+    play("console_phrase", "console_ready", { step: 0, badge: true, focus: "console" }),
+    hold("console_ready", 2.5, { pane: "console", from: "Console ready", label: "Ready. Requests will appear here." }, { step: 0 }),
+    intro("import", "Step 2", "Move the keys into the vault", "envh import asks a few questions. Here we accept the defaults.", { step: 1 }),
+    play("import", "import_plan", { step: 1, focus: "agent" }),
+    hold("import_plan", 4, { pane: "agent", from: "line 1", to: "line 2", below: 1, label: "Each key's line becomes a pointer to the vault" }, { step: 1 }),
+    play("import_plan", "import_card", { step: 1, focus: "agent" }),
+    hold("import_card", 4.5, { pane: "console", from: "Import request #", to: "Deny", below: 1, label: "Approve it here. It shows names and fingerprints, not values." }, { step: 1 }),
+    play("import_card", "import_check", { step: 1, badge: true, focus: "console" }),
+    play("import_check", "import_checked", { step: 1, focus: "agent" }),
+    hold("import_checked", 3.5, { pane: "agent", from: "# OPENAI_API_KEY", to: "# ASKNEWS_API_KEY", label: "No keys left in the file" }, { step: 1 }),
+    intro("ask", "Step 3", "An AI agent asks for the keys", "It asks for a one-hour session with the news-bot keys, and says why.", { step: 2 }),
+    play("ask", "ask_card", { step: 2, focus: "agent" }),
+    hold("ask_card", 5, { pane: "console", from: "Session request #", to: "Deny", below: 1, label: "Who, why, which keys, how long" }, { step: 2 }),
+    intro("approve", "Step 4", "You approve on the console", "Type your vault passphrase. You only ever type it here.", { step: 3 }),
+    play("approve", "approved", { step: 3, badge: true, focus: "console" }),
+    hold("approved", 3, { pane: "agent", from: "approved, expires", label: "Session open for one hour" }, { step: 3 }),
+    intro("run", "Step 5", "The agent runs its script", "No new approval inside the session. Only that command gets the keys.", { step: 4 }),
+    play("run", "ran", { step: 4, focus: "agent" }),
+    hold("ran", 3, { pane: "agent", from: "envh: run #", to: "digest.md", label: "The script got the keys" }, { step: 4 }),
+    intro("deny", "Step 6", "Then something unexpected", "The agent asks for the production database key, with no reason.", { step: 5 }),
+    play("deny", "deny_card", { step: 5, focus: "agent" }),
+    hold("deny_card", 4, { pane: "console", from: "none given", to: "DATABASE_URL ←", label: "No reason, and not a news-bot key" }, { step: 5 }),
+    play("deny_card", "denied", { step: 5, focus: "console" }),
+    hold("denied", 3.5, { pane: "agent", from: "envh: denied", label: "↓ then Enter denies it. The agent gets nothing." }, { step: 5 }),
+    intro("log", "Step 7", "Everything is logged", "Every request, approval, run and denial.", { step: 6 }),
+    hold("log", 4.5, { pane: "console", from: "Console ready", to: "Denied #", label: "Kept in an audit log only envh can read" }, { step: 6 }),
+    card("closing", 11),
   ];
+
+  let recording = null;
+  let timeline = [];
+  const panes = {};
+
+  function clamp(value, low, high) { return Math.min(Math.max(value, low), high); }
+  function nextFrame() { return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); }
+  function introSeconds(segment) {
+    const words = `${segment.intro.headline} ${segment.intro.text}`.split(/\s+/).length;
+    return 1.2 + words / WORDS_PER_SECOND;
+  }
+  function segmentSeconds(segment) {
+    if (segment.card) return segment.seconds;
+    if (segment.intro) return introSeconds(segment);
+    if (segment.play) return recording.marks[segment.play[1]] - recording.marks[segment.play[0]];
+    return segment.hold;
+  }
+
+  function cutSegments(cut) {
+    if (cut === "full") return SEGMENTS;
+    if (cut !== "core") throw new Error(`unknown cut ${cut}; use full or core`);
+    const first = SEGMENTS.findIndex(segment => segment.intro && segment.at === "ask");
+    const last = SEGMENTS.findIndex(segment => segment.hold && segment.at === "ran");
+    return SEGMENTS.slice(first, last + 1).filter(segment => !segment.intro);
+  }
+
+  function loadDemo(data, cut = "full") {
+    recording = data;
+    const segments = cutSegments(cut);
+    const missing = segments.flatMap(segment => segment.play || (segment.at ? [segment.at] : [])).filter(mark => !(mark in data.marks));
+    if (missing.length) throw new Error(`the recording has no marks named ${missing.join(", ")}`);
+    let start = 0;
+    timeline = segments.map(segment => { const entry = { ...segment, start, seconds: segmentSeconds(segment) }; start += entry.seconds; return entry; });
+    for (const name of ["agent", "console"]) {
+      const terminal = new Terminal({ cols: data.columns, rows: data.rows, fontFamily: "DejaVu Sans Mono", fontSize: 18, lineHeight: 1, theme: THEME });
+      terminal.open(document.querySelector(`#${name} .term`));
+      panes[name] = { terminal, events: data.panes[name] || [], written: 0 };
+    }
+    document.getElementById("steps").innerHTML = STEPS.map(step => `<span>${step}</span>`).join("");
+    return start;
+  }
+
   const THEME = {
     background: "#10151c", foreground: "#e6edf3", cursor: "#e6edf3", cursorAccent: "#10151c",
     black: "#484f58", red: "#ff7b72", green: "#3fb950", yellow: "#e3b341", blue: "#58a6ff", magenta: "#bc8cff", cyan: "#39c5cf", white: "#b1bac4",
     brightBlack: "#6e7681", brightRed: "#ffa198", brightGreen: "#56d364", brightYellow: "#f0c75e", brightBlue: "#79c0ff", brightMagenta: "#d2a8ff", brightCyan: "#56d4dd", brightWhite: "#f0f6fc",
   };
-
-  let recording = null;
-  const panes = {};
-
-  function clamp(value, low, high) { return Math.min(Math.max(value, low), high); }
-  function nextFrame() { return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); }
-
-  function mainSeconds() { return recording.marks.end - recording.marks.start; }
-  function duration() { return TITLE_SECONDS + mainSeconds() + CLOSING_SECONDS; }
-  function videoTimeOf(mark) { return TITLE_SECONDS + recording.marks[mark] - recording.marks.start; }
-
-  function loadDemo(data) {
-    recording = data;
-    for (const name of ["agent", "console"]) {
-      const terminal = new Terminal({ cols: data.columns, rows: data.rows, fontFamily: "DejaVu Sans Mono", fontSize: 18, lineHeight: 1, theme: THEME, allowProposedApi: true });
-      terminal.open(document.querySelector(`#${name} .term`));
-      panes[name] = { terminal, events: data.panes[name], written: 0 };
-    }
-    return { duration: duration(), gifStart: videoTimeOf("start"), gifEnd: videoTimeOf("ran") + 2.5 };
-  }
 
   function writeUntil(pane, seconds) {
     let text = "";
@@ -128,41 +232,101 @@ python3 scripts/setup_wizard.py</pre>
     return text ? new Promise(resolve => pane.terminal.write(text, resolve)) : Promise.resolve();
   }
 
-  function sceneIndexAt(seconds) {
-    let index = 0;
-    SCENES.forEach((scene, position) => { if (recording.marks[scene.from] <= seconds) index = position; });
-    return index;
+  function recordingSecondsAt(index, local) {
+    for (let position = index; position >= 0; position -= 1) {
+      const segment = timeline[position];
+      if (segment.play) return recording.marks[segment.play[0]] + (position === index ? local : segment.seconds);
+      if (segment.at) return recording.marks[segment.at];
+    }
+    return 0;
   }
 
-  function captionOpacity(index, seconds) {
-    const scene = SCENES[index];
-    const sameAsPrevious = index > 0 && SCENES[index - 1].headline === scene.headline;
-    const fadeIn = sameAsPrevious ? 1 : (seconds - recording.marks[scene.from]) / CAPTION_FADE_SECONDS;
-    const next = SCENES[index + 1];
-    const sameAsNext = next && next.headline === scene.headline;
-    const fadeOut = next && !sameAsNext ? (recording.marks[next.from] - seconds) / CAPTION_FADE_SECONDS : 1;
-    return clamp(Math.min(fadeIn, fadeOut), 0, 1);
+  function fade(index, local, fadeIn = true, fadeOut = true) {
+    const seconds = timeline[index].seconds;
+    const entering = fadeIn ? local / FADE_SECONDS : 1;
+    const leaving = fadeOut ? (seconds - local) / FADE_SECONDS : 1;
+    return clamp(Math.min(entering, leaving), 0, 1);
+  }
+
+  function visibleLines(terminal) {
+    const buffer = terminal.buffer.active;
+    return Array.from({ length: terminal.rows }, (_, row) => buffer.getLine(buffer.viewportY + row).translateToString(true));
+  }
+
+  function placeHighlight(name, spec, opacity) {
+    const pane = panes[name];
+    const term = document.querySelector(`#${name} .term`);
+    const spot = term.querySelector(".spot");
+    const tag = term.querySelector(".tag");
+    if (!spec) { spot.style.opacity = tag.style.opacity = "0"; return; }
+    const lines = visibleLines(pane.terminal);
+    const first = lines.map(line => line.includes(spec.from)).lastIndexOf(true);
+    if (first < 0) throw new Error(`highlight: ${JSON.stringify(spec.from)} is not on the ${name} screen`);
+    const offset = spec.to ? lines.slice(first).findIndex(line => line.includes(spec.to)) : 0;
+    if (offset < 0) throw new Error(`highlight: ${JSON.stringify(spec.to)} is not below ${JSON.stringify(spec.from)} on the ${name} screen`);
+    const last = Math.min(first + offset + (spec.below || 0), lines.length - 1);
+    const covered = lines.slice(first, last + 1);
+    const left = Math.min(...covered.map(line => line.search(/\S/)).filter(column => column >= 0));
+    const right = Math.max(...covered.map(line => line.length));
+    const screen = term.querySelector(".xterm-screen").getBoundingClientRect();
+    const box = term.getBoundingClientRect();
+    const originX = screen.left - box.left;
+    const originY = screen.top - box.top;
+    const cellWidth = screen.width / pane.terminal.cols;
+    const cellHeight = screen.height / pane.terminal.rows;
+    const color = `var(--${name})`;
+    Object.assign(spot.style, {
+      left: `${originX + (left - 0.6) * cellWidth}px`, top: `${originY + (first - 0.25) * cellHeight}px`,
+      width: `${(right - left + 1.2) * cellWidth}px`, height: `${(last - first + 1.5) * cellHeight}px`, borderColor: color, opacity: String(opacity),
+    });
+    tag.textContent = spec.label;
+    tag.style.background = color;
+    tag.style.opacity = String(opacity);
+    const above = first >= 3;
+    const tagLeft = clamp(originX + (left - 0.6) * cellWidth, 8, term.clientWidth - tag.offsetWidth - 8);
+    tag.style.left = `${tagLeft}px`;
+    tag.style.top = above ? `${originY + (first - 0.25) * cellHeight - tag.offsetHeight - 10}px` : `${originY + (last + 1.25) * cellHeight + 10}px`;
+  }
+
+  function showCard(active, opacity, local) {
+    for (const element of document.querySelectorAll(".card")) element.style.opacity = element.id === active ? String(opacity) : "0";
+    for (const element of document.querySelectorAll(`#${active} [data-from]`)) element.style.opacity = String(clamp((local - Number(element.dataset.from)) / 0.6, 0, 1));
   }
 
   async function renderAt(videoSeconds) {
-    const seconds = clamp(recording.marks.start + videoSeconds - TITLE_SECONDS, 0, recording.marks.end);
-    await Promise.all(Object.values(panes).map(pane => writeUntil(pane, seconds)));
-    const index = sceneIndexAt(seconds);
-    const scene = SCENES[index];
-    for (const name of ["agent", "console"]) {
-      const element = document.getElementById(name);
-      const active = scene.focus === name;
-      element.style.opacity = active ? "1" : "0.45";
-      element.style.borderColor = active ? `var(--${name})` : "var(--border)";
+    const index = Math.max(0, timeline.findIndex(segment => videoSeconds < segment.start + segment.seconds));
+    const segment = timeline[index];
+    const local = videoSeconds - segment.start;
+    await Promise.all(Object.values(panes).map(pane => writeUntil(pane, recordingSecondsAt(index, local))));
+
+    if (segment.card) showCard(segment.card, fade(index, local, index > 0, index < timeline.length - 1), local);
+    else showCard(null, 0, local);
+
+    const solo = Boolean(segment.solo);
+    document.getElementById("console").style.display = solo ? "none" : "";
+    const agentName = segment.step === undefined || segment.step < 2 ? YOUR_TERMINAL : AGENT_TERMINAL;
+    document.querySelector("#agent .name").textContent = agentName;
+    document.getElementById("badge").style.opacity = segment.badge ? "1" : "0";
+    const focus = segment.highlight ? segment.highlight.pane : segment.focus;
+    for (const name of ["agent", "console"]) document.getElementById(name).style.opacity = !focus || focus === name ? "1" : "0.4";
+
+    const steps = document.getElementById("steps");
+    steps.style.opacity = segment.step === undefined ? "0" : "1";
+    Array.from(steps.children).forEach((chip, position) => {
+      chip.className = position === segment.step ? "current" : position < segment.step ? "done" : "";
+    });
+
+    const introElement = document.getElementById("intro");
+    introElement.style.opacity = segment.intro ? String(fade(index, local)) : "0";
+    if (segment.intro) {
+      introElement.querySelector(".label").textContent = segment.intro.label;
+      introElement.querySelector(".headline").textContent = segment.intro.headline;
+      introElement.querySelector(".text").textContent = segment.intro.text;
     }
-    document.getElementById("badge").style.opacity = scene.badge ? "1" : "0";
-    const caption = document.getElementById("caption");
-    caption.querySelector(".headline").textContent = scene.headline;
-    caption.querySelector(".detail").textContent = scene.detail;
-    caption.style.opacity = captionOpacity(index, seconds);
-    const closingStart = TITLE_SECONDS + mainSeconds();
-    document.getElementById("title").style.opacity = clamp((TITLE_SECONDS - videoSeconds) / FADE_SECONDS, 0, 1);
-    document.getElementById("closing").style.opacity = clamp((videoSeconds - closingStart) / FADE_SECONDS, 0, 1);
+
+    const spec = segment.highlight;
+    const opacity = spec ? clamp(local / 0.3, 0, 1) : 0;
+    for (const name of ["agent", "console"]) placeHighlight(name, spec && spec.pane === name ? spec : null, opacity);
     await nextFrame();
   }
 </script>
