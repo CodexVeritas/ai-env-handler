@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>envh demo</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" integrity="sha384-tStR1zLfWgsiXCF3IgfB3lBa8KmBe/lG287CL9WCeKgQYcp1bjb4/+mwN6oti4Co" crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous"></script>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --window: #10151c;
+    --border: #252d38;
+    --text: #e6edf3;
+    --muted: #8b98a8;
+    --agent: #58a6ff;
+    --console: #e3b341;
+  }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--text); font-family: "Fira Sans", "DejaVu Sans", sans-serif; }
+  header { position: absolute; left: 48px; top: 26px; display: flex; align-items: baseline; gap: 18px; }
+  header .brand { font-size: 38px; font-weight: 700; }
+  header .tagline { font-size: 24px; color: var(--muted); }
+  #windows { position: absolute; top: 96px; left: 0; right: 0; display: flex; justify-content: center; gap: 24px; }
+  .window { background: var(--window); border: 2px solid var(--border); border-radius: 12px; overflow: hidden; position: relative; }
+  .titlebar { height: 46px; display: flex; align-items: center; gap: 12px; padding: 0 18px; border-bottom: 1px solid var(--border); font-size: 21px; font-weight: 600; }
+  .titlebar .who { font-size: 17px; font-weight: 400; color: var(--muted); }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  #agent .dot { background: var(--agent); }
+  #console .dot { background: var(--console); }
+  .term { padding: 14px 16px; }
+  .badge { position: absolute; right: 12px; top: 6px; padding: 5px 12px; border-radius: 8px; background: #2a2210; border: 1px solid var(--console); color: var(--console); font-size: 18px; opacity: 0; }
+  #caption { position: absolute; left: 80px; right: 80px; top: 872px; text-align: center; }
+  #caption .headline { font-size: 46px; font-weight: 600; }
+  #caption .detail { font-size: 29px; color: var(--muted); margin-top: 14px; line-height: 1.35; }
+  .card { position: absolute; inset: 0; background: var(--bg); display: flex; flex-direction: column; justify-content: center; }
+  #title { align-items: center; text-align: center; }
+  #title .brand { font-size: 150px; font-weight: 700; letter-spacing: -2px; }
+  #title .tagline { font-size: 52px; margin-top: 8px; }
+  #title .detail { font-size: 32px; color: var(--muted); margin-top: 34px; }
+  #closing { padding: 0 200px; opacity: 0; }
+  #closing h1 { font-size: 64px; margin: 0 0 40px; }
+  #closing ul { list-style: none; margin: 0; padding: 0; }
+  #closing li { font-size: 31px; color: var(--muted); margin-bottom: 26px; line-height: 1.35; padding-left: 44px; position: relative; }
+  #closing li::before { content: "✓"; position: absolute; left: 0; color: #3fb950; font-weight: 700; }
+  #closing li b { color: var(--text); font-weight: 600; }
+  #closing pre { margin: 30px 0 0; padding: 22px 28px; background: var(--window); border: 2px solid var(--border); border-radius: 12px; font: 26px/1.5 "DejaVu Sans Mono", monospace; color: var(--text); }
+  #closing .footnote { margin-top: 20px; font-size: 24px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header><span class="brand">envh</span><span class="tagline">Human-approved secrets for scripts and AI agents</span></header>
+<div id="windows">
+  <div class="window" id="agent">
+    <div class="titlebar"><span class="dot"></span>Your AI agent's terminal<span class="who">~/news-bot · runs as you</span></div>
+    <div class="term"></div>
+  </div>
+  <div class="window" id="console">
+    <div class="titlebar"><span class="dot"></span>envh console<span class="who">its own window, runs as the envh user</span></div>
+    <div class="term"></div>
+    <div class="badge" id="badge">⌨ Typing the vault passphrase · never shown</div>
+  </div>
+</div>
+<div id="caption"><div class="headline"></div><div class="detail"></div></div>
+<div class="card" id="title">
+  <div class="brand">envh</div>
+  <div class="tagline">Human-approved secrets for scripts and AI agents</div>
+  <div class="detail">Your API keys leave your .env files, and you approve every use.</div>
+</div>
+<div class="card" id="closing">
+  <h1>Why use envh</h1>
+  <ul>
+    <li><b>No keys in .env files.</b> They sit in an encrypted vault owned by a separate Linux user, which you and your agents can't read.</li>
+    <li><b>You approve each use on one console.</b> Every request shows who is asking, why, which keys, for how long and the exact command.</li>
+    <li><b>One approval covers a work session.</b> Runs inside it start at once. Every request, decision and run is logged.</li>
+    <li><b>Works with Claude Code and Cursor.</b> A skill teaches the agent how to ask, and a hook tells you when the console needs you.</li>
+  </ul>
+  <pre>git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
+python3 scripts/setup_wizard.py</pre>
+  <div class="footnote">Linux only · github.com/CodexVeritas/ai-env-handler</div>
+</div>
+<script>
+  const TITLE_SECONDS = 3.5;
+  const CLOSING_SECONDS = 10;
+  const FADE_SECONDS = 0.5;
+  const CAPTION_FADE_SECONDS = 0.3;
+  const SCENES = [
+    { from: "start", focus: "agent", headline: "Your .env file no longer holds the keys", detail: "The import moved them into an encrypted vault, owned by a separate Linux user that you and your agents can't read." },
+    { from: "session_typing", focus: "agent", headline: "An agent asks for the keys it needs", detail: "It names a preset, how long it needs the keys, and why." },
+    { from: "card1", focus: "console", headline: "The request appears on your envh console", detail: "Who is asking, the reason, which keys, for how long, and the exact command." },
+    { from: "typing_passphrase", focus: "console", badge: true, headline: "You approve with your vault passphrase", detail: "You type it only here, next to your console phrase, so a fake prompt is easy to spot." },
+    { from: "approved", focus: "agent", headline: "Runs inside the session start at once", detail: "The keys go only into that command's environment: never into your shell, never into a file." },
+    { from: "deny_typing", focus: "agent", headline: "Then the agent reaches for something unexpected", detail: "The production database, with no reason given." },
+    { from: "card2", focus: "console", headline: "Not what you expected? Deny it", detail: "↓ then Enter. The agent gets nothing and stops." },
+    { from: "denied", focus: "agent", headline: "Not what you expected? Deny it", detail: "↓ then Enter. The agent gets nothing and stops." },
+    { from: "activity", focus: "console", headline: "Every request, decision and run is logged", detail: "On the console, and in an audit log that only the envh user can read." },
+  ];
+  const THEME = {
+    background: "#10151c", foreground: "#e6edf3", cursor: "#e6edf3", cursorAccent: "#10151c",
+    black: "#484f58", red: "#ff7b72", green: "#3fb950", yellow: "#e3b341", blue: "#58a6ff", magenta: "#bc8cff", cyan: "#39c5cf", white: "#b1bac4",
+    brightBlack: "#6e7681", brightRed: "#ffa198", brightGreen: "#56d364", brightYellow: "#f0c75e", brightBlue: "#79c0ff", brightMagenta: "#d2a8ff", brightCyan: "#56d4dd", brightWhite: "#f0f6fc",
+  };
+
+  let recording = null;
+  const panes = {};
+
+  function clamp(value, low, high) { return Math.min(Math.max(value, low), high); }
+  function nextFrame() { return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); }
+
+  function mainSeconds() { return recording.marks.end - recording.marks.start; }
+  function duration() { return TITLE_SECONDS + mainSeconds() + CLOSING_SECONDS; }
+  function videoTimeOf(mark) { return TITLE_SECONDS + recording.marks[mark] - recording.marks.start; }
+
+  function loadDemo(data) {
+    recording = data;
+    for (const name of ["agent", "console"]) {
+      const terminal = new Terminal({ cols: data.columns, rows: data.rows, fontFamily: "DejaVu Sans Mono", fontSize: 18, lineHeight: 1, theme: THEME, allowProposedApi: true });
+      terminal.open(document.querySelector(`#${name} .term`));
+      panes[name] = { terminal, events: data.panes[name], written: 0 };
+    }
+    return { duration: duration(), gifStart: videoTimeOf("start"), gifEnd: videoTimeOf("ran") + 2.5 };
+  }
+
+  function writeUntil(pane, seconds) {
+    let text = "";
+    while (pane.written < pane.events.length && pane.events[pane.written][0] <= seconds) {
+      text += pane.events[pane.written][1];
+      pane.written += 1;
+    }
+    return text ? new Promise(resolve => pane.terminal.write(text, resolve)) : Promise.resolve();
+  }
+
+  function sceneIndexAt(seconds) {
+    let index = 0;
+    SCENES.forEach((scene, position) => { if (recording.marks[scene.from] <= seconds) index = position; });
+    return index;
+  }
+
+  function captionOpacity(index, seconds) {
+    const scene = SCENES[index];
+    const sameAsPrevious = index > 0 && SCENES[index - 1].headline === scene.headline;
+    const fadeIn = sameAsPrevious ? 1 : (seconds - recording.marks[scene.from]) / CAPTION_FADE_SECONDS;
+    const next = SCENES[index + 1];
+    const sameAsNext = next && next.headline === scene.headline;
+    const fadeOut = next && !sameAsNext ? (recording.marks[next.from] - seconds) / CAPTION_FADE_SECONDS : 1;
+    return clamp(Math.min(fadeIn, fadeOut), 0, 1);
+  }
+
+  async function renderAt(videoSeconds) {
+    const seconds = clamp(recording.marks.start + videoSeconds - TITLE_SECONDS, 0, recording.marks.end);
+    await Promise.all(Object.values(panes).map(pane => writeUntil(pane, seconds)));
+    const index = sceneIndexAt(seconds);
+    const scene = SCENES[index];
+    for (const name of ["agent", "console"]) {
+      const element = document.getElementById(name);
+      const active = scene.focus === name;
+      element.style.opacity = active ? "1" : "0.45";
+      element.style.borderColor = active ? `var(--${name})` : "var(--border)";
+    }
+    document.getElementById("badge").style.opacity = scene.badge ? "1" : "0";
+    const caption = document.getElementById("caption");
+    caption.querySelector(".headline").textContent = scene.headline;
+    caption.querySelector(".detail").textContent = scene.detail;
+    caption.style.opacity = captionOpacity(index, seconds);
+    const closingStart = TITLE_SECONDS + mainSeconds();
+    document.getElementById("title").style.opacity = clamp((TITLE_SECONDS - videoSeconds) / FADE_SECONDS, 0, 1);
+    document.getElementById("closing").style.opacity = clamp((videoSeconds - closingStart) / FADE_SECONDS, 0, 1);
+    await nextFrame();
+  }
+</script>
+</body>
+</html>

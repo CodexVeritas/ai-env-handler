@@ -4,6 +4,8 @@ Human-approved secrets for scripts and AI coding agents, on Linux.
 
 Your API keys stop living in `.env` files. They move into a vault owned by a separate Linux user, and every use of a key is approved by you on a console that runs as that separate user. You approve a **session** (a set of variables, for a number of minutes, with a reason); scripts and agents then run inside it. Everything is logged.
 
+![An agent asks for a session, it is approved on the envh console, and its script runs with the keys](docs/demo.gif)
+
 **1. You, or an agent, ask for a session** in an ordinary terminal:
 
 ```bash
@@ -400,6 +402,13 @@ envh never runs from your clone. Your agents can edit the clone, and the console
 uv sync --all-groups
 uv run pytest -q                       # no root, no network, no environment variables needed
 uv run envh --help
+```
+
+The demo GIF above is a real recording of a development broker with fake keys. After the console changes, record it again and render it (needs ffmpeg, Google Chrome, and network access to load xterm.js from jsDelivr; `--mp4` also writes the full video with captions):
+
+```bash
+uv run python scripts/demo/record.py build/demo/recording.json
+uv run --with playwright python scripts/demo/render.py build/demo/recording.json --gif docs/demo.gif
 ```
 
 Run a development broker as yourself, without installing: `uv run envh init --data-dir /tmp/envh-dev`, then in a terminal `uv run envh serve --data-dir /tmp/envh-dev --socket /tmp/envh-dev/ctl.sock`, and point clients at it with `--socket /tmp/envh-dev/ctl.sock` or `ENVH_SOCKET=/tmp/envh-dev/ctl.sock`. This gives none of the user-separation guarantees; it is for working on envh itself.
