@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import difflib
+from collections import Counter
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -33,6 +34,8 @@ from envh.core.config import (
 from envh.core.durations import MAX_SESSION, format_duration
 from envh.core.state import Provenance, Request, Session, StateTable
 from envh.core.vault import MIN_PASSPHRASE_LENGTH, Vault, VaultError, move_into_place, stage_private_file, write_private_file
+
+MAX_UNKNOWN_SESSION_IDS = 20
 
 
 class RequestError(ValueError):
@@ -78,6 +81,7 @@ class Broker:
         self.state = state
         self.audit = audit
         self.request_listeners: list[Callable[[Request], None]] = []
+        self.unknown_session_ids: Counter[int] = Counter()
 
     def _announce(self, request: Request) -> None:
         self._log_request(request)
@@ -214,10 +218,16 @@ class Broker:
         return request
 
     def owned_session(self, session_id: str, uid: int) -> Session:
-        session = self.state.session(session_id)
-        if session.provenance.uid != uid:
-            raise RequestError(f"session {session_id[:8]} belongs to another user")
-        return session
+        """Session ids are short enough to guess, so another user's session reads as unknown, and a uid that names too
+        many unknown ids is refused every session until the console restarts."""
+        if self.unknown_session_ids[uid] >= MAX_UNKNOWN_SESSION_IDS:
+            raise RequestError(f"refused: your user named {MAX_UNKNOWN_SESSION_IDS} unknown session ids; run without --session, or restart the console")
+        known = self.state.sessions.get(session_id)
+        if known is None or known.provenance.uid != uid:
+            self.unknown_session_ids[uid] += 1
+            self.audit.event("unknown_session", session=session_id, uid=uid, count=self.unknown_session_ids[uid])
+            raise RequestError(f"unknown session {session_id}; check the name, or start a new session")
+        return self.state.session(session_id)
 
     def resolve_run_in_session(self, session_id: str, items: list[str], uid: int) -> tuple[Session, dict[str, str]]:
         session = self.owned_session(session_id, uid)
@@ -225,9 +235,9 @@ class Broker:
         for item in items:
             var, _, secret = item.partition("=")
             if var not in session.mapping:
-                raise RequestError(f"{var} is not covered by session {session_id[:8]}; start a session that includes it, or run without --session")
+                raise RequestError(f"{var} is not covered by session {session_id}; start a session that includes it, or run without --session")
             if secret and secret != session.mapping[var]:
-                raise RequestError(f"{var} maps to {session.mapping[var]} in session {session_id[:8]}, not {secret}")
+                raise RequestError(f"{var} maps to {session.mapping[var]} in session {session_id}, not {secret}")
             mapping[var] = session.mapping[var]
         presets = [self.config.presets[name] for name in session.presets if name in self.config.presets]
         _, per_run = self.split_per_run(mapping, presets)

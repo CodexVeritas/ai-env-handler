@@ -31,13 +31,13 @@ envh session start weekly-report --minutes 90 --reason "forecast digest: researc
 **3. You type your vault passphrase on the console** (hidden) and press Enter; ↓ then Enter denies. Back in the terminal, the request returns:
 
 ```
-session 3f9c... approved, expires 15:02:11
+session brave-otter approved, expires 15:02:11
 ```
 
 **4. Scripts and agents run inside the session** without asking again until it expires. Each run is logged:
 
 ```bash
-envh run --session 3f9c... --reason "fetch" -- uv run python scripts/research.py
+envh run --session brave-otter --reason "fetch" -- uv run python scripts/research.py
 ```
 
 **Only one command, or want to approve every request?** Skip the session. `envh run` without one asks the console for that single run:
@@ -78,7 +78,7 @@ The boundaries, in words:
 | **The socket** | A Unix socket in `/run/envh`, a directory only `envh` can write. The broker reads the connecting process's uid from the kernel (`SO_PEERCRED`, not spoofable) and only talks to logins listed under `users:` in `config.yaml`. | Anyone running as a listed user can *ask*. Asking never grants anything; it only puts a prompt on the console. Other local accounts are refused before they can see or request anything. |
 | **Per-user sessions** | Every session and pending request is tagged with the kernel-reported uid that created it. | A session can be used, waited on, listed or ended only by the user who opened it. Two listed users on one machine cannot use each other's sessions; only the console sees everything. |
 | **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal device chowned to `envh`, approval by your vault passphrase typed hidden, next to your console phrase. | No process running as you can inject keystrokes through the terminal itself. Something that can type but cannot see your screen or record your keys cannot approve without the passphrase. A fake prompt elsewhere cannot show your console phrase. Your display and input devices are a separate way in; see the next row. |
-| **Not a boundary** | | During step 12 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, a same-user process can record the passphrase as you type it and then type it into the console itself; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). |
+| **Not a boundary** | | During step 12 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime, and two words long, so it can be guessed. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, a same-user process can record the passphrase as you type it and then type it into the console itself; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). |
 
 ## What it protects, and what it does not
 
@@ -353,6 +353,7 @@ What does:
 - **It does not hide a value from the command that receives it.** Values are visible to that process, everything it imports, and every other process running as you for the duration of the run. envh cannot revoke a value once delivered, cannot undo a copy the command made (a log line, a file, a cache), and a session expiring does not stop a running command. It does end the run cleanly: processes the command left behind are terminated when it exits.
 - **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent; see the [Roadmap](#roadmap). On the host, your agent's own permission rules and classifier are the only control over what else it reads.
 - **A session id is a bearer capability within your own account.** Anything running as you that obtains it, for example from a process environment, can use it until it expires. Keep sessions short and specific. Other local accounts cannot use it: the broker checks the kernel-reported uid of every connection against the session's owner.
+- **A session id is two words, so it can be guessed.** It is short so that you can read it out and type it from memory. That matters inside a sandbox, where an agent running as you can reach the socket but cannot see your other processes: guessing is its only way into a session someone else started. So the broker logs every unknown id on the console, and after 20 from one user refuses all of that user's sessions until the console restarts. With about 36,000 ids, 20 guesses at three live sessions find one about 1 time in 600.
 - **Reasons and provenance are claims.** The `--reason` text and the pid and command line shown in prompts come from the requester and help you decide; they are not verified.
 - **The console is only as trusted as your display and terminal.** On X11, same-user processes can record the passphrase and type it into the console; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). The desktop launcher can be shadowed by a file in `~/.local/share/applications`; the console phrase makes an impostor recognizable, it does not prevent one.
 - **It does not stop a persistent same-user attacker from phishing you later.** An agent that can edit your shell startup files or desktop configuration could capture the sudo password or vault passphrase at the next start. Claude Code's protected-path rules reduce this; only running agents in a container removes it.
