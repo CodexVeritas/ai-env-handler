@@ -157,8 +157,11 @@ def print_session(reply: dict[str, Any], quiet: bool) -> int:
 
 
 def cmd_session_end(args: argparse.Namespace, sock: Path) -> int:
+    session_id = args.session_id or os.environ.get(SESSION_ENV_VAR)
+    if not session_id:
+        raise ClientError(f"no session to end: name one, or set {SESSION_ENV_VAR}", EXIT_USAGE)
     with Connection(sock) as conn:
-        conn.send(op="session_end", session_id=args.session_id or os.environ.get(SESSION_ENV_VAR))
+        conn.send(op="session_end", session_id=session_id)
         conn.recv_ok()
     print("session ended")
     return 0
