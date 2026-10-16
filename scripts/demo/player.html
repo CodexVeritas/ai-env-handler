@@ -47,22 +47,38 @@
   #title .brand { font-size: 150px; font-weight: 700; letter-spacing: -2px; }
   #title .tagline { font-size: 52px; margin-top: 8px; }
   #title .detail { font-size: 32px; color: var(--muted); margin-top: 34px; }
-  #how { padding: 0 140px; }
-  #how .diagram { display: grid; grid-template-columns: 470px 1fr 560px; align-items: stretch; }
-  #how .zone { border: 3px solid; border-radius: 16px; padding: 28px 32px; }
-  #how .zone h2 { font-size: 24px; letter-spacing: 2px; text-transform: uppercase; margin: 0 0 20px; }
-  #how .zone div { font-size: 33px; margin-bottom: 14px; }
-  #how .zone .note { font-size: 26px; color: var(--muted); margin-top: 22px; }
-  #how .you { border-color: var(--agent); }
-  #how .you h2 { color: var(--agent); }
-  #how .envh { border-color: var(--console); }
-  #how .envh h2 { color: var(--console); }
-  #how .envh b { color: var(--console); }
-  #how .arrows { display: flex; flex-direction: column; justify-content: center; gap: 70px; padding: 0 22px; }
-  #how .arrow { font-size: 28px; text-align: center; }
-  #how .arrow .line { font-size: 44px; color: var(--muted); line-height: 1; }
-  #how .terms { margin-top: 56px; font-size: 31px; color: var(--muted); line-height: 1.6; }
-  #how .terms b { color: var(--text); }
+  #how h1 { position: absolute; left: 140px; top: 96px; margin: 0; }
+  #how .build { position: absolute; opacity: 0; }
+  #how .zone { top: 310px; width: 500px; height: 420px; box-sizing: border-box; border-width: 3px; border-style: solid; border-radius: 18px; padding: 26px 32px; }
+  #how .zone h2 { font-size: 22px; letter-spacing: 2px; text-transform: uppercase; margin: 0 0 34px; }
+  #how-you { left: 140px; border-color: var(--agent); }
+  #how-you h2 { color: var(--agent); }
+  #how-envh { left: 1280px; border-color: var(--console); }
+  #how-envh h2 { color: var(--console); }
+  #how .item { display: flex; align-items: center; gap: 22px; font-size: 36px; margin-bottom: 46px; }
+  #how .item svg { width: 42px; height: 42px; color: var(--agent); flex: none; }
+  #how .component { left: 1310px; width: 440px; height: 90px; box-sizing: border-box; border: 2px solid #3a4554; background: var(--window); border-radius: 12px; display: flex; align-items: center; gap: 18px; padding: 0 20px; }
+  #how .component svg { width: 40px; height: 40px; color: var(--console); flex: none; }
+  #how .component b { display: block; font-size: 30px; font-weight: 600; }
+  #how .component span { display: block; font-size: 22px; color: #aab4c0; }
+  #how-console { top: 388px; }
+  #how-vault { top: 494px; }
+  #how-log { top: 600px; }
+  #how-approve { left: 1590px; top: 368px; padding: 4px 14px; border-radius: 14px; background: var(--console); color: #0b0f14; font-size: 21px; font-weight: 700; }
+  #how-boundary { left: 958px; top: 282px; height: 476px; border-left: 3px dashed #3a4554; }
+  #how-boundary span { position: absolute; top: -34px; left: 0; transform: translateX(-50%); white-space: nowrap; font-size: 21px; letter-spacing: 2px; text-transform: uppercase; color: #aab4c0; }
+  #how svg.arrows { position: absolute; inset: 0; width: 1920px; height: 1080px; pointer-events: none; }
+  #how svg.arrows path { fill: none; stroke-width: 4; stroke-linecap: round; }
+  #how .arrow-label { left: 650px; width: 620px; text-align: center; font-size: 29px; }
+  #how .arrow-label span { background: var(--bg); padding: 2px 12px; }
+  #how-ask-label { top: 368px; }
+  #how-give-label { top: 556px; }
+  #how-caption { position: absolute; left: 0; right: 0; top: 820px; text-align: center; font-size: 38px; color: #c3cdd8; }
+  #terms { padding: 0 220px; }
+  #terms .row { display: grid; grid-template-columns: 260px 1fr; gap: 40px; align-items: start; margin-bottom: 64px; }
+  #terms .word { font-size: 46px; font-weight: 700; color: var(--console); }
+  #terms p { font-size: 38px; margin: 0 0 18px; }
+  #terms code { font: 28px "DejaVu Sans Mono", monospace; color: #c3cdd8; background: var(--window); border: 2px solid var(--border); border-radius: 10px; padding: 10px 18px; display: inline-block; }
   #recap { padding: 0 220px; }
   #recap ol { list-style: none; margin: 0; padding: 0; counter-reset: step; }
   #recap li { font-size: 36px; margin-bottom: 24px; padding-left: 70px; position: relative; counter-increment: step; }
@@ -98,27 +114,30 @@
 </div>
 <div class="card" id="how">
   <h1>How envh works</h1>
-  <div class="diagram">
-    <div class="zone you" data-from="0">
-      <h2>Runs as you</h2>
-      <div>You</div>
-      <div>Your scripts</div>
-      <div>Your AI agents</div>
-      <div class="note">No keys stored here</div>
-    </div>
-    <div class="arrows">
-      <div class="arrow" data-from="3">① ask for keys, and say why<div class="line">──────────▶</div></div>
-      <div class="arrow" data-from="8"><div class="line">◀──────────</div>③ the keys go into that one command</div>
-    </div>
-    <div class="zone envh" data-from="0">
-      <h2>Runs as a separate Linux user</h2>
-      <div data-from="5.5"><b>②</b> The envh console: you approve here</div>
-      <div>The encrypted vault, with the keys</div>
-      <div>The audit log</div>
-      <div class="note">You and your agents can't read any of it</div>
-    </div>
+  <div class="build zone" id="how-you" data-group="you">
+    <h2>Runs as you</h2>
+    <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>You</div>
+    <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5M9 12h8M9 16h8"/></svg>Your scripts</div>
+    <div class="item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 3v4"/><circle cx="9" cy="13" r="1.2" fill="currentColor"/><circle cx="15" cy="13" r="1.2" fill="currentColor"/><path d="M9 17h6"/></svg>Your AI agents</div>
   </div>
-  <div class="terms" data-from="10.5"><b>Preset:</b> a named set of keys for one project, like news-bot<br><b>Session:</b> one approval that lets a preset's keys be used for a set time</div>
+  <div class="build" id="how-boundary" data-group="envh"><span>Linux user boundary</span></div>
+  <div class="build zone" id="how-envh" data-group="envh"><h2>Runs as the envh user</h2></div>
+  <div class="build component" id="how-console" data-group="console"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4M8 10.5l2.5 2.5L16 8"/></svg><div><b>Console</b><span>where you approve requests</span></div></div>
+  <div class="build component" id="how-vault" data-group="vault"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.5" fill="currentColor"/></svg><div><b>Encrypted vault</b><span>your API keys</span></div></div>
+  <div class="build component" id="how-log" data-group="log"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg><div><b>Audit log</b><span>every request and decision</span></div></div>
+  <div class="build" id="how-approve" data-group="approve">② you approve</div>
+  <svg class="arrows" viewBox="0 0 1920 1080">
+    <g class="build" data-group="ask"><path d="M 650 433 H 1288" pathLength="1" stroke="var(--agent)"/><polygon points="1302,433 1282,421 1282,445" fill="var(--agent)"/></g>
+    <g class="build" data-group="give"><path d="M 1302 539 H 664" pathLength="1" stroke="var(--console)"/><polygon points="650,539 670,527 670,551" fill="var(--console)"/></g>
+  </svg>
+  <div class="build arrow-label" id="how-ask-label" data-group="ask"><span>① asks for keys, and says why</span></div>
+  <div class="build arrow-label" id="how-give-label" data-group="give"><span>③ the keys, for that one command only</span></div>
+  <div id="how-caption"></div>
+</div>
+<div class="card" id="terms">
+  <h1>Two words you'll see</h1>
+  <div class="row" data-from="0.6"><div class="word">Preset</div><div><p>A named set of keys for one project.</p><code>news-bot = OPENAI_API_KEY + ASKNEWS_API_KEY</code></div></div>
+  <div class="row" data-from="4.5"><div class="word">Session</div><div><p>One approval that lets a preset's keys be used for a set time.</p><code>news-bot, for 60 minutes</code></div></div>
 </div>
 <div class="card" id="recap">
   <h1>What you just saw</h1>
@@ -148,6 +167,17 @@ python3 scripts/setup_wizard.py</pre>
   const MAX_ZOOM = 2.2;
   const ZOOM_MARGIN = 50;
   const TAG_SPACE = 90;
+  const HOW_STEPS = [
+    { at: 0.8, groups: ["you"], caption: "Your scripts and AI agents run as you." },
+    { at: 4.8, groups: ["envh"], caption: "envh runs as a separate Linux user. Nothing running as you can read its files." },
+    { at: 9.8, groups: ["vault"], caption: "Your API keys live in its encrypted vault." },
+    { at: 13.8, groups: ["ask", "console"], caption: "① An agent asks envh for the keys it needs, and says why." },
+    { at: 18.3, groups: ["approve", "console"], caption: "② The request appears on the envh console, and you approve it." },
+    { at: 22.6, groups: ["give", "vault"], caption: "③ envh gives the keys to that one command, and nothing else." },
+    { at: 27, groups: ["log"], caption: "Every request and decision goes into the audit log." },
+    { at: 31, groups: null, caption: "Now let's see it for real." },
+  ];
+  const HOW_SECONDS = 34.5;
   const STEPS = ["Start the console", "Import .env", "Agent asks", "You approve", "Agent runs", "Auto keys", "Deny", "Log"];
   const YOUR_TERMINAL = "Your terminal";
   const AGENT_TERMINAL = "Your AI agent's terminal";
@@ -160,7 +190,8 @@ python3 scripts/setup_wizard.py</pre>
     intro("problem", "The problem", "Today, API keys sit in plaintext .env files", "Your AI agents run as you, so they can read every one.", { solo: true }),
     play("problem", "problem_shown", { solo: true, focus: "agent" }),
     hold("problem_shown", 5, { pane: "agent", from: "OPENAI_API_KEY=", to: "ASKNEWS_API_KEY=", label: "Plaintext keys. Any program you run can read them." }, { solo: true }),
-    card("how", 15.5),
+    card("how", HOW_SECONDS),
+    card("terms", 9.5),
     intro("console_start", "Step 1 of 8", "Start the envh console", "Its own window, running as a separate Linux user. You unlock it with your passphrase.", { step: 0 }),
     play("console_start", "console_phrase", { step: 0, focus: "console" }),
     hold("console_phrase", 5, { pane: "console", from: "Console phrase:", label: "Only type your passphrase where you see this phrase" }, { step: 0 }),
@@ -346,10 +377,41 @@ python3 scripts/setup_wizard.py</pre>
     tag.style.top = `${above ? onScreen.y - tag.offsetHeight - 16 : onScreen.y + onScreen.h + 16}px`;
   }
 
+  function reveal(element, progress, dimmed) {
+    const eased = ease(clamp(progress, 0, 1));
+    element.style.opacity = String(eased * (dimmed ? 0.4 : 1));
+    if (!(element instanceof SVGElement)) element.style.transform = `translateY(${(1 - eased) * 18}px)`;
+  }
+
+  function showHowBuild(local) {
+    // Each group appears at the first step that names it; groups outside the current step dim so the new piece stands out.
+    const current = HOW_STEPS.filter(step => step.at <= local).pop();
+    for (const element of document.querySelectorAll("#how .build")) {
+      const group = element.dataset.group;
+      const first = HOW_STEPS.find(step => step.groups && step.groups.includes(group));
+      const progress = (local - first.at) / 0.7;
+      const dimmed = Boolean(current && current.groups && !current.groups.includes(group));
+      reveal(element, progress, dimmed);
+      const path = element.querySelector(":scope > path");
+      if (path) {
+        const drawn = clamp((local - first.at) / 1.1, 0, 1);
+        path.style.strokeDasharray = "1";
+        path.style.strokeDashoffset = String(1 - ease(drawn));
+        element.querySelector("polygon").style.opacity = String(clamp((drawn - 0.85) / 0.15, 0, 1));
+      }
+    }
+    const caption = document.getElementById("how-caption");
+    const index = HOW_STEPS.indexOf(current);
+    caption.textContent = current ? current.caption : "";
+    const next = HOW_STEPS[index + 1];
+    const fadeOut = next ? (next.at - local) / 0.3 : 1;
+    caption.style.opacity = current ? String(clamp(Math.min((local - current.at) / 0.4, fadeOut), 0, 1)) : "0";
+  }
+
   function showCard(active, opacity, local) {
     for (const element of document.querySelectorAll(".card")) element.style.opacity = element.id === active ? String(opacity) : "0";
-    if (!active) return;
-    for (const element of document.querySelectorAll(`#${active} [data-from]`)) element.style.opacity = String(clamp((local - Number(element.dataset.from)) / 0.6, 0, 1));
+    if (active === "how") showHowBuild(local);
+    else if (active) for (const element of document.querySelectorAll(`#${active} [data-from]`)) reveal(element, (local - Number(element.dataset.from)) / 0.6, false);
   }
 
   async function renderAt(videoSeconds) {
