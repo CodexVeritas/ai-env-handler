@@ -19,8 +19,8 @@ from playwright.sync_api import Page, sync_playwright
 PLAYER = Path(__file__).resolve().parent / "player.html"
 WIDTH, HEIGHT = 1920, 1080
 MP4_FPS = 30
-GIF_FPS = 10
-GIF_WIDTH = 1280
+GIF_FPS = 8
+GIF_WIDTH = 1120
 
 
 def mp4_encoder(output: Path) -> list[str]:
@@ -70,7 +70,7 @@ def main() -> int:
         raise SystemExit("ffmpeg is not installed")
     recording = json.loads(args.recording.read_text())
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel="chrome")
+        browser = playwright.chromium.launch(channel="chrome", args=["--font-render-hinting=none"])
         page = browser.new_page(viewport={"width": WIDTH, "height": HEIGHT})
         page.on("console", lambda message: print(f"player: {message.text}", flush=True) if message.type in ("error", "warning") else None)
         page.on("pageerror", lambda error: print(f"player error: {error}", file=sys.stderr, flush=True))

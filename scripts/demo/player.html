@@ -41,12 +41,14 @@
   #steps span { font-size: 22px; padding: 8px 18px; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); }
   #steps span.done { color: #c3cdd8; }
   #steps span.current { color: #0b0f14; background: var(--text); border-color: var(--text); font-weight: 600; }
-  .card { position: absolute; inset: 0; background: var(--bg); display: flex; flex-direction: column; justify-content: center; opacity: 0; }
+  .card { position: absolute; inset: 0; background: var(--bg); opacity: 0; }
+  .card > .content { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; }
   .card h1 { font-size: 66px; margin: 0 0 52px; }
-  #title { align-items: center; text-align: center; }
+  #title > .content { align-items: center; text-align: center; }
   #title .brand { font-size: 150px; font-weight: 700; letter-spacing: -2px; }
   #title .tagline { font-size: 52px; margin-top: 8px; }
   #title .detail { font-size: 32px; color: var(--muted); margin-top: 34px; }
+  #how > .content { display: block; }
   #how h1 { position: absolute; left: 140px; top: 96px; margin: 0; }
   #how .build { position: absolute; opacity: 0; }
   #how .zone { top: 310px; width: 500px; height: 420px; box-sizing: border-box; border-width: 3px; border-style: solid; border-radius: 18px; padding: 26px 32px; }
@@ -74,16 +76,16 @@
   #how-ask-label { top: 368px; }
   #how-give-label { top: 556px; }
   #how-caption { position: absolute; left: 0; right: 0; top: 820px; text-align: center; font-size: 38px; color: #c3cdd8; }
-  #terms { padding: 0 220px; }
+  #terms > .content { padding: 0 220px; }
   #terms .row { display: grid; grid-template-columns: 260px 1fr; gap: 40px; align-items: start; margin-bottom: 64px; }
   #terms .word { font-size: 46px; font-weight: 700; color: var(--console); }
   #terms p { font-size: 38px; margin: 0 0 18px; }
   #terms code { font: 28px "DejaVu Sans Mono", monospace; color: #c3cdd8; background: var(--window); border: 2px solid var(--border); border-radius: 10px; padding: 10px 18px; display: inline-block; }
-  #recap { padding: 0 220px; }
+  #recap > .content { padding: 0 220px; }
   #recap ol { list-style: none; margin: 0; padding: 0; counter-reset: step; }
   #recap li { font-size: 36px; margin-bottom: 24px; padding-left: 70px; position: relative; counter-increment: step; }
   #recap li::before { content: counter(step); position: absolute; left: 0; top: -2px; width: 46px; height: 46px; border-radius: 50%; background: var(--green); color: #0b0f14; font-size: 28px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-  #start { padding: 0 220px; }
+  #start > .content { padding: 0 220px; }
   #start p { font-size: 34px; color: #c3cdd8; margin: 0 0 36px; line-height: 1.4; }
   #start pre { margin: 0; padding: 26px 32px; background: var(--window); border: 2px solid var(--border); border-radius: 12px; font: 30px/1.5 "DejaVu Sans Mono", monospace; color: var(--text); }
   #start .footnote { margin-top: 28px; font-size: 28px; color: var(--muted); }
@@ -108,11 +110,14 @@
 <div id="steps"></div>
 <div id="intro"><div class="panel"><div class="label"></div><div class="headline"></div><div class="text"></div></div></div>
 <div class="card" id="title">
+<div class="content">
   <div class="brand">envh</div>
   <div class="tagline">Human-approved secrets for scripts and AI agents</div>
   <div class="detail">A walkthrough: setup, then a day with an AI agent</div>
 </div>
+</div>
 <div class="card" id="how">
+<div class="content">
   <h1>How envh works</h1>
   <div class="build zone" id="how-you" data-group="you">
     <h2>Runs as you</h2>
@@ -134,12 +139,16 @@
   <div class="build arrow-label" id="how-give-label" data-group="give"><span>③ the keys, for that one command only</span></div>
   <div id="how-caption"></div>
 </div>
+</div>
 <div class="card" id="terms">
+<div class="content">
   <h1>Two words you'll see</h1>
   <div class="row" data-from="0.6"><div class="word">Preset</div><div><p>A named set of keys for one project.</p><code>news-bot = OPENAI_API_KEY + ASKNEWS_API_KEY</code></div></div>
   <div class="row" data-from="4.5"><div class="word">Session</div><div><p>One approval that lets a preset's keys be used for a set time.</p><code>news-bot, for 60 minutes</code></div></div>
 </div>
+</div>
 <div class="card" id="recap">
+<div class="content">
   <h1>What you just saw</h1>
   <ol>
     <li data-from="0.5">Your .env keys moved into an encrypted vault your agents can't read.</li>
@@ -151,19 +160,23 @@
     <li data-from="10.7">Every step was logged.</li>
   </ol>
 </div>
+</div>
 <div class="card" id="start">
+<div class="content">
   <h1>Try it</h1>
   <p>The setup wizard installs envh, imports your .env files, and connects Claude Code and Cursor.</p>
   <pre>git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
 python3 scripts/setup_wizard.py</pre>
   <div class="footnote">Linux only · github.com/CodexVeritas/ai-env-handler</div>
 </div>
+</div>
 <script>
   const FADE_SECONDS = 0.4;
   const INTRO_BASE_SECONDS = 1.6;
   const WORDS_PER_SECOND = 3;
-  const ZOOM_IN_SECONDS = 0.8;
-  const ZOOM_OUT_SECONDS = 0.7;
+  const ZOOM_IN_SECONDS = 1.5;
+  const ZOOM_OUT_SECONDS = 1.0;
+  const BLEND_SECONDS = 0.6;
   const MAX_ZOOM = 2.2;
   const ZOOM_MARGIN = 50;
   const TAG_SPACE = 90;
@@ -184,25 +197,25 @@ python3 scripts/setup_wizard.py</pre>
   const card = (name, seconds) => ({ card: name, seconds });
   const intro = (at, label, headline, text, extra = {}) => ({ intro: { label, headline, text }, at, ...extra });
   const play = (from, to, extra = {}) => ({ play: [from, to], ...extra });
-  const hold = (at, seconds, highlight, extra = {}) => ({ hold: seconds, at, highlight, ...extra });
+  const hold = (at, readingSeconds, highlight, extra = {}) => ({ hold: readingSeconds, at, highlight, ...extra });
   const SEGMENTS = [
     card("title", 3.5),
     intro("problem", "The problem", "Today, API keys sit in plaintext .env files", "Your AI agents run as you, so they can read every one.", { solo: true }),
     play("problem", "problem_shown", { solo: true, focus: "agent" }),
     hold("problem_shown", 5, { pane: "agent", from: "OPENAI_API_KEY=", to: "ASKNEWS_API_KEY=", label: "Plaintext keys. Any program you run can read them." }, { solo: true }),
-    card("how", HOW_SECONDS),
+    { ...card("how", HOW_SECONDS), solo: true },
     card("terms", 9.5),
     intro("console_start", "Step 1 of 8", "Start the envh console", "Its own window, running as a separate Linux user. You unlock it with your passphrase.", { step: 0 }),
     play("console_start", "console_phrase", { step: 0, focus: "console" }),
-    hold("console_phrase", 5, { pane: "console", from: "Console phrase:", label: "Only type your passphrase where you see this phrase" }, { step: 0 }),
+    hold("console_phrase", 4.5, { pane: "console", from: "Console phrase:", label: "Only type your passphrase where you see this phrase" }, { step: 0 }),
     play("console_phrase", "console_ready", { step: 0, badge: true, focus: "console" }),
     intro("import", "Step 2 of 8", "Move your keys into the vault", "Run envh import in the project. We'll accept its defaults.", { step: 1 }),
     play("import", "import_classify", { step: 1, focus: "agent" }),
-    hold("import_classify", 5.5, { pane: "agent", from: "OPENAI_API_KEY", to: "LOG_LEVEL", label: "Two API keys go to the vault. LOG_LEVEL is a setting, so it stays." }, { step: 1 }),
+    hold("import_classify", 6.5, { pane: "agent", from: "OPENAI_API_KEY", to: "LOG_LEVEL", label: "Two API keys go to the vault. LOG_LEVEL is a setting, so it stays." }, { step: 1 }),
     play("import_classify", "import_presets", { step: 1, focus: "agent" }),
-    hold("import_presets", 5.5, { pane: "agent", from: "Step 4 of 6", to: "<- NEWS_BOT_ASKNEWS_API_KEY", label: "A preset called news-bot: this project's keys, under one name" }, { step: 1 }),
+    hold("import_presets", 6.5, { pane: "agent", from: "Step 4 of 6", to: "<- NEWS_BOT_ASKNEWS_API_KEY", label: "A preset called news-bot: this project's keys, under one name" }, { step: 1 }),
     play("import_presets", "import_card", { step: 1, focus: "agent" }),
-    hold("import_card", 5.5, { pane: "console", from: "Import request #", to: "Deny", below: 1, label: "You approve the import on the console" }, { step: 1 }),
+    hold("import_card", 7.5, { pane: "console", from: "Import request #", to: "Deny", below: 1, label: "You approve the import on the console" }, { step: 1 }),
     play("import_card", "import_check", { step: 1, badge: true, focus: "console" }),
     play("import_check", "import_checked", { step: 1, focus: "agent" }),
     hold("import_checked", 5.5, { pane: "agent", from: "# OPENAI_API_KEY", to: "# ASKNEWS_API_KEY", label: "The keys are gone. .env only says where they are now." }, { step: 1 }),
@@ -210,26 +223,26 @@ python3 scripts/setup_wizard.py</pre>
     play("ask", "ask_typed", { step: 2, focus: "agent" }),
     hold("ask_typed", 5, { pane: "agent", from: "envh session start", label: "The news-bot keys, for 60 minutes, and the reason" }, { step: 2 }),
     play("ask_typed", "ask_card", { step: 2, focus: "agent" }),
-    hold("ask_card", 6, { pane: "console", from: "Session request #", to: "Deny", below: 1, label: "On your console: who asks, why, which keys, how long" }, { step: 2 }),
+    hold("ask_card", 8, { pane: "console", from: "Session request #", to: "Deny", below: 1, label: "On your console: who asks, why, which keys, how long" }, { step: 2 }),
     intro("approve", "Step 4 of 8", "You approve it", "Type your vault passphrase on the console. That opens a one-hour session.", { step: 3 }),
     play("approve", "approved", { step: 3, badge: true, focus: "console" }),
-    hold("approved", 4.5, { pane: "agent", from: "approved, expires", label: "Approved. The session lasts one hour." }, { step: 3 }),
+    hold("approved", 4, { pane: "agent", from: "approved, expires", label: "Approved. The session lasts one hour." }, { step: 3 }),
     intro("run", "Step 5 of 8", "The agent runs its script", "Inside the session it starts right away. Only that script gets the keys.", { step: 4 }),
     play("run", "ran", { step: 4, focus: "agent" }),
-    hold("ran", 5, { pane: "agent", from: "envh run --session", to: "digest.md", label: "fetch.py ran with the keys. No new approval needed." }, { step: 4 }),
+    hold("ran", 5.5, { pane: "agent", from: "envh run --session", to: "digest.md", label: "fetch.py ran with the keys. No new approval needed." }, { step: 4 }),
     intro("auto", "Step 6 of 8", "Low-risk keys can skip approval", "You marked FRED_API_KEY, a free read-only key, as auto. Runs that use it start at once.", { step: 5 }),
     play("auto", "auto_ran", { step: 5, focus: "agent" }),
     hold("auto_ran", 5, { pane: "agent", from: "envh run --with FRED_API_KEY", to: "rates.png", label: "No prompt on the console. It just ran." }, { step: 5 }),
-    hold("auto_ran", 5.5, { pane: "console", from: "need no approval", to: "ended · exit", label: "Still logged. Use auto only for keys that cost little if leaked." }, { step: 5 }),
+    hold("auto_ran", 6, { pane: "console", from: "need no approval", to: "ended · exit", label: "Still logged. Use auto only for keys that cost little if leaked." }, { step: 5 }),
     intro("deny", "Step 7 of 8", "Then the agent asks for something unexpected", "The production database key, with no reason.", { step: 5 }),
     play("deny", "deny_card", { step: 6, focus: "agent" }),
-    hold("deny_card", 5.5, { pane: "console", from: "Run request #", to: "Deny", below: 1, label: "No reason, and not a key this project uses" }, { step: 6 }),
+    hold("deny_card", 6, { pane: "console", from: "Run request #", to: "Deny", below: 1, label: "No reason, and not a key this project uses" }, { step: 6 }),
     play("deny_card", "deny_chosen", { step: 6, focus: "console" }),
     hold("deny_chosen", 4, { pane: "console", from: "› Deny", label: "You pick Deny: ↓ then Enter" }, { step: 6 }),
     play("deny_chosen", "denied", { step: 6, focus: "console" }),
-    hold("denied", 4.5, { pane: "agent", from: "envh: denied", label: "The agent is refused and gets no keys" }, { step: 6 }),
+    hold("denied", 4, { pane: "agent", from: "envh: denied", label: "The agent is refused and gets no keys" }, { step: 6 }),
     intro("log", "Step 8 of 8", "Everything is logged", "Every request and decision, in an audit log only envh can read.", { step: 7 }),
-    hold("log", 5.5, { pane: "console", from: "Console ready", to: "Denied #", label: "The full history of what just happened" }, { step: 7 }),
+    hold("log", 6.5, { pane: "console", from: "Console ready", to: "Denied #", label: "The full history of what just happened" }, { step: 7 }),
     card("recap", 14),
     card("start", 8),
   ];
@@ -254,7 +267,7 @@ python3 scripts/setup_wizard.py</pre>
     if (segment.card) return segment.seconds;
     if (segment.intro) return introSeconds(segment);
     if (segment.play) return recording.marks[segment.play[1]] - recording.marks[segment.play[0]];
-    return segment.hold;
+    return ZOOM_IN_SECONDS + segment.hold + ZOOM_OUT_SECONDS;
   }
 
   function cutSegments(cut) {
@@ -369,7 +382,7 @@ python3 scripts/setup_wizard.py</pre>
     Object.assign(spotElement.style, { left: `${spot.x}px`, top: `${spot.y}px`, width: `${spot.w}px`, height: `${spot.h}px`, borderColor: color, opacity: String(zoom) });
     tag.textContent = spec.label;
     tag.style.background = color;
-    tag.style.opacity = String(clamp(Math.min((local - ZOOM_IN_SECONDS) / 0.3, (segment.seconds - local - ZOOM_OUT_SECONDS) / 0.25), 0, 1));
+    tag.style.opacity = String(clamp(Math.min((local - ZOOM_IN_SECONDS) / 0.4, (segment.seconds - local - ZOOM_OUT_SECONDS) / 0.3), 0, 1));
     const onScreen = { x: camera.x + camera.scale * box.x, y: camera.y + camera.scale * box.y, w: camera.scale * box.w, h: camera.scale * box.h };
     const viewport = document.getElementById("viewport");
     const above = !nearTop && onScreen.y - tag.offsetHeight - 16 >= 8;
@@ -408,10 +421,39 @@ python3 scripts/setup_wizard.py</pre>
     caption.style.opacity = current ? String(clamp(Math.min((local - current.at) / 0.4, fadeOut), 0, 1)) : "0";
   }
 
-  function showCard(active, opacity, local) {
-    for (const element of document.querySelectorAll(".card")) element.style.opacity = element.id === active ? String(opacity) : "0";
-    if (active === "how") showHowBuild(local);
-    else if (active) for (const element of document.querySelectorAll(`#${active} [data-from]`)) reveal(element, (local - Number(element.dataset.from)) / 0.6, false);
+  function showCardContent(name, local) {
+    if (name === "how") showHowBuild(local);
+    else for (const element of document.querySelectorAll(`#${name} [data-from]`)) reveal(element, (local - Number(element.dataset.from)) / 0.6, false);
+  }
+
+  function showCards(index, local) {
+    // A card fades in and out over the terminals as a whole. Between two cards the background stays solid and only the
+    // content fades, so the terminals never show through and two cards' text never overlaps.
+    const segment = timeline[index];
+    for (const element of document.querySelectorAll(".card")) element.style.opacity = "0";
+    if (!segment.card) return;
+    const previousIsCard = Boolean(timeline[index - 1] && timeline[index - 1].card);
+    const nextIsCard = Boolean(timeline[index + 1] && timeline[index + 1].card);
+    const entering = clamp(local / FADE_SECONDS, 0, 1);
+    const leaving = clamp((segment.seconds - local) / FADE_SECONDS, 0, 1);
+    const element = document.getElementById(segment.card);
+    element.style.opacity = String(Math.min(index > 0 && !previousIsCard ? entering : 1, index < timeline.length - 1 && !nextIsCard ? leaving : 1));
+    element.querySelector(".content").style.opacity = String(Math.min(previousIsCard ? entering : 1, nextIsCard ? leaving : 1));
+    showCardContent(segment.card, local);
+  }
+
+  function focusOf(position) {
+    // The pane a segment looks at; an intro looks ahead, so the dimming changes while it covers the terminals.
+    const segment = timeline[position];
+    if (!segment) return null;
+    if (segment.intro) return focusOf(position + 1);
+    return segment.highlight ? segment.highlight.pane : segment.focus || null;
+  }
+
+  function blended(index, local, valueAt) {
+    const current = valueAt(index);
+    const previous = index > 0 ? valueAt(index - 1) : current;
+    return previous + (current - previous) * ease(clamp(local / BLEND_SECONDS, 0, 1));
   }
 
   async function renderAt(videoSeconds) {
@@ -420,15 +462,17 @@ python3 scripts/setup_wizard.py</pre>
     const local = videoSeconds - segment.start;
     await Promise.all(Object.values(panes).map(pane => writeUntil(pane, recordingSecondsAt(index, local))));
 
-    showCard(segment.card, segment.card ? fade(index, local, index > 0, index < timeline.length - 1) : 0, local);
+    showCards(index, local);
     document.getElementById("console").style.display = segment.solo ? "none" : "";
     document.querySelector("#agent .name").textContent = segment.step === undefined || segment.step < 2 ? YOUR_TERMINAL : AGENT_TERMINAL;
-    document.getElementById("badge").style.opacity = segment.badge ? "1" : "0";
-    const focus = segment.highlight ? segment.highlight.pane : segment.focus;
-    for (const name of ["agent", "console"]) document.getElementById(name).style.opacity = !focus || focus === name ? "1" : "0.4";
+    document.getElementById("badge").style.opacity = segment.badge ? String(fade(index, local)) : "0";
+    for (const name of ["agent", "console"]) {
+      const opacity = blended(index, local, position => (!focusOf(position) || focusOf(position) === name ? 1 : 0.4));
+      document.getElementById(name).style.opacity = String(opacity);
+    }
 
     const steps = document.getElementById("steps");
-    steps.style.opacity = segment.step === undefined ? "0" : "1";
+    steps.style.opacity = String(blended(index, local, position => (timeline[position].step === undefined ? 0 : 1)));
     Array.from(steps.children).forEach((chip, position) => {
       chip.className = position === segment.step ? "current" : position < segment.step ? "done" : "";
     });
