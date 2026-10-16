@@ -17,36 +17,37 @@
     --green: #3fb950;
   }
   html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); color: var(--text); font-family: "Fira Sans", "DejaVu Sans", sans-serif; }
-  header { position: absolute; left: 48px; top: 24px; display: flex; align-items: baseline; gap: 18px; }
+  header { position: absolute; left: 48px; top: 22px; display: flex; align-items: baseline; gap: 18px; }
   header .brand { font-size: 38px; font-weight: 700; }
   header .tagline { font-size: 24px; color: var(--muted); }
-  #windows { position: absolute; top: 96px; left: 0; right: 0; height: 840px; display: flex; justify-content: center; align-items: flex-start; gap: 24px; }
+  #viewport { position: absolute; top: 88px; left: 0; width: 1920px; height: 868px; overflow: hidden; }
+  #windows { position: absolute; left: 0; top: 0; width: 1920px; padding-top: 10px; display: flex; justify-content: center; align-items: flex-start; gap: 24px; transform-origin: 0 0; }
   .window { background: var(--window); border: 2px solid var(--border); border-radius: 12px; overflow: hidden; position: relative; }
-  .titlebar { height: 46px; display: flex; align-items: center; gap: 12px; padding: 0 18px; border-bottom: 1px solid var(--border); font-size: 21px; font-weight: 600; }
-  .titlebar .who { font-size: 17px; font-weight: 400; color: var(--muted); }
+  .titlebar { height: 44px; display: flex; align-items: center; gap: 12px; padding: 0 18px; border-bottom: 1px solid var(--border); font-size: 20px; font-weight: 600; }
+  .titlebar .who { font-size: 16px; font-weight: 400; color: var(--muted); }
   .dot { width: 12px; height: 12px; border-radius: 50%; }
   #agent .dot { background: var(--agent); }
   #console .dot { background: var(--console); }
-  .term { padding: 14px 16px; position: relative; }
-  .spot { position: absolute; border: 3px solid; border-radius: 8px; box-shadow: 0 0 0 4000px rgba(5, 8, 12, 0.6); pointer-events: none; opacity: 0; z-index: 10; }
-  .tag { position: absolute; padding: 7px 14px; border-radius: 8px; color: #0b0f14; font-size: 23px; font-weight: 600; white-space: nowrap; opacity: 0; z-index: 11; }
-  .badge { position: absolute; right: 12px; top: 6px; padding: 5px 12px; border-radius: 8px; background: #2a2210; border: 1px solid var(--console); color: var(--console); font-size: 18px; opacity: 0; }
-  #intro { position: absolute; top: 96px; left: 0; right: 0; height: 840px; display: flex; align-items: center; justify-content: center; background: rgba(8, 11, 15, 0.88); opacity: 0; }
-  #intro .panel { max-width: 1240px; text-align: center; }
+  .term { padding: 12px 14px; position: relative; }
+  .spot { position: absolute; border: 3px solid; border-radius: 8px; box-shadow: 0 0 0 4000px rgba(5, 8, 12, 0.62); pointer-events: none; opacity: 0; z-index: 10; }
+  .badge { position: absolute; right: 12px; top: 6px; padding: 4px 12px; border-radius: 8px; background: #2a2210; border: 1px solid var(--console); color: var(--console); font-size: 17px; opacity: 0; }
+  #tag { position: absolute; padding: 10px 18px; border-radius: 10px; color: #0b0f14; font-size: 31px; font-weight: 600; white-space: nowrap; opacity: 0; z-index: 20; }
+  #intro { position: absolute; top: 88px; left: 0; right: 0; height: 868px; display: flex; align-items: center; justify-content: center; background: rgba(8, 11, 15, 0.9); opacity: 0; }
+  #intro .panel { max-width: 1300px; text-align: center; }
   #intro .label { font-size: 26px; font-weight: 600; letter-spacing: 3px; text-transform: uppercase; color: var(--console); }
-  #intro .headline { font-size: 64px; font-weight: 700; margin-top: 16px; line-height: 1.15; }
-  #intro .text { font-size: 36px; color: #c3cdd8; margin-top: 26px; line-height: 1.4; }
-  #steps { position: absolute; left: 0; right: 0; top: 968px; display: flex; justify-content: center; gap: 14px; opacity: 0; }
+  #intro .headline { font-size: 66px; font-weight: 700; margin-top: 16px; line-height: 1.15; }
+  #intro .text { font-size: 38px; color: #c3cdd8; margin-top: 28px; line-height: 1.4; }
+  #steps { position: absolute; left: 0; right: 0; top: 982px; display: flex; justify-content: center; gap: 14px; opacity: 0; }
   #steps span { font-size: 22px; padding: 8px 18px; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); }
   #steps span.done { color: #c3cdd8; }
   #steps span.current { color: #0b0f14; background: var(--text); border-color: var(--text); font-weight: 600; }
   .card { position: absolute; inset: 0; background: var(--bg); display: flex; flex-direction: column; justify-content: center; opacity: 0; }
+  .card h1 { font-size: 66px; margin: 0 0 52px; }
   #title { align-items: center; text-align: center; }
   #title .brand { font-size: 150px; font-weight: 700; letter-spacing: -2px; }
   #title .tagline { font-size: 52px; margin-top: 8px; }
   #title .detail { font-size: 32px; color: var(--muted); margin-top: 34px; }
   #how { padding: 0 140px; }
-  #how h1 { font-size: 64px; margin: 0 0 56px; }
   #how .diagram { display: grid; grid-template-columns: 470px 1fr 560px; align-items: stretch; }
   #how .zone { border: 3px solid; border-radius: 16px; padding: 28px 32px; }
   #how .zone h2 { font-size: 24px; letter-spacing: 2px; text-transform: uppercase; margin: 0 0 20px; }
@@ -62,35 +63,38 @@
   #how .arrow .line { font-size: 44px; color: var(--muted); line-height: 1; }
   #how .terms { margin-top: 56px; font-size: 31px; color: var(--muted); line-height: 1.6; }
   #how .terms b { color: var(--text); }
-  #closing { padding: 0 200px; }
-  #closing h1 { font-size: 64px; margin: 0 0 40px; }
-  #closing ul { list-style: none; margin: 0; padding: 0; }
-  #closing li { font-size: 31px; color: var(--muted); margin-bottom: 26px; line-height: 1.35; padding-left: 44px; position: relative; }
-  #closing li::before { content: "✓"; position: absolute; left: 0; color: var(--green); font-weight: 700; }
-  #closing li b { color: var(--text); font-weight: 600; }
-  #closing pre { margin: 30px 0 0; padding: 22px 28px; background: var(--window); border: 2px solid var(--border); border-radius: 12px; font: 26px/1.5 "DejaVu Sans Mono", monospace; color: var(--text); }
-  #closing .footnote { margin-top: 20px; font-size: 24px; color: var(--muted); }
+  #recap { padding: 0 220px; }
+  #recap ol { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  #recap li { font-size: 36px; margin-bottom: 24px; padding-left: 70px; position: relative; counter-increment: step; }
+  #recap li::before { content: counter(step); position: absolute; left: 0; top: -2px; width: 46px; height: 46px; border-radius: 50%; background: var(--green); color: #0b0f14; font-size: 28px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  #start { padding: 0 220px; }
+  #start p { font-size: 34px; color: #c3cdd8; margin: 0 0 36px; line-height: 1.4; }
+  #start pre { margin: 0; padding: 26px 32px; background: var(--window); border: 2px solid var(--border); border-radius: 12px; font: 30px/1.5 "DejaVu Sans Mono", monospace; color: var(--text); }
+  #start .footnote { margin-top: 28px; font-size: 28px; color: var(--muted); }
 </style>
 </head>
 <body>
 <header><span class="brand">envh</span><span class="tagline">Human-approved secrets for scripts and AI agents</span></header>
-<div id="windows">
-  <div class="window" id="agent">
-    <div class="titlebar"><span class="dot"></span><span class="name"></span><span class="who">~/news-bot · runs as you</span></div>
-    <div class="term"><div class="spot"></div><div class="tag"></div></div>
+<div id="viewport">
+  <div id="windows">
+    <div class="window" id="agent">
+      <div class="titlebar"><span class="dot"></span><span class="name"></span><span class="who">~/news-bot · runs as you</span></div>
+      <div class="term"><div class="spot"></div></div>
+    </div>
+    <div class="window" id="console">
+      <div class="titlebar"><span class="dot"></span>envh console<span class="who">its own window · runs as the envh user</span></div>
+      <div class="term"><div class="spot"></div></div>
+      <div class="badge" id="badge">⌨ Typing the vault passphrase · never shown</div>
+    </div>
   </div>
-  <div class="window" id="console">
-    <div class="titlebar"><span class="dot"></span>envh console<span class="who">its own window · runs as the envh user</span></div>
-    <div class="term"><div class="spot"></div><div class="tag"></div></div>
-    <div class="badge" id="badge">⌨ Typing the vault passphrase · never shown</div>
-  </div>
+  <div id="tag"></div>
 </div>
 <div id="steps"></div>
 <div id="intro"><div class="panel"><div class="label"></div><div class="headline"></div><div class="text"></div></div></div>
 <div class="card" id="title">
   <div class="brand">envh</div>
   <div class="tagline">Human-approved secrets for scripts and AI agents</div>
-  <div class="detail">Setup and daily use, in under three minutes</div>
+  <div class="detail">A walkthrough: setup, then a day with an AI agent</div>
 </div>
 <div class="card" id="how">
   <h1>How envh works</h1>
@@ -103,12 +107,12 @@
       <div class="note">No keys stored here</div>
     </div>
     <div class="arrows">
-      <div class="arrow" data-from="2.5">① ask for keys, and say why<div class="line">──────────▶</div></div>
-      <div class="arrow" data-from="7.5"><div class="line">◀──────────</div>③ the keys go into that one command</div>
+      <div class="arrow" data-from="3">① ask for keys, and say why<div class="line">──────────▶</div></div>
+      <div class="arrow" data-from="8"><div class="line">◀──────────</div>③ the keys go into that one command</div>
     </div>
     <div class="zone envh" data-from="0">
       <h2>Runs as a separate Linux user</h2>
-      <div data-from="5"><b>②</b> The envh console: you approve here</div>
+      <div data-from="5.5"><b>②</b> The envh console: you approve here</div>
       <div>The encrypted vault, with the keys</div>
       <div>The audit log</div>
       <div class="note">You and your agents can't read any of it</div>
@@ -116,22 +120,35 @@
   </div>
   <div class="terms" data-from="10.5"><b>Preset:</b> a named set of keys for one project, like news-bot<br><b>Session:</b> one approval that lets a preset's keys be used for a set time</div>
 </div>
-<div class="card" id="closing">
-  <h1>Why use envh</h1>
-  <ul>
-    <li><b>No keys in .env files.</b> They sit in an encrypted vault owned by a separate Linux user, which you and your agents can't read.</li>
-    <li><b>You approve each use on one console.</b> Every request shows who is asking, why, which keys, for how long and the exact command.</li>
-    <li><b>One approval covers a work session.</b> Runs inside it start at once. Every request, decision and run is logged.</li>
-    <li><b>Works with Claude Code and Cursor.</b> A skill teaches the agent how to ask, and a hook tells you when the console needs you.</li>
-  </ul>
+<div class="card" id="recap">
+  <h1>What you just saw</h1>
+  <ol>
+    <li data-from="0.5">Your .env keys moved into an encrypted vault your agents can't read.</li>
+    <li data-from="2.2">An AI agent asked for the keys it needed, and said why.</li>
+    <li data-from="3.9">You approved on the envh console, with your passphrase.</li>
+    <li data-from="5.6">Only the agent's script got the keys, for one session.</li>
+    <li data-from="7.3">A low-risk key marked auto worked without asking.</li>
+    <li data-from="9">You denied a request you didn't expect. The agent got nothing.</li>
+    <li data-from="10.7">Every step was logged.</li>
+  </ol>
+</div>
+<div class="card" id="start">
+  <h1>Try it</h1>
+  <p>The setup wizard installs envh, imports your .env files, and connects Claude Code and Cursor.</p>
   <pre>git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
 python3 scripts/setup_wizard.py</pre>
   <div class="footnote">Linux only · github.com/CodexVeritas/ai-env-handler</div>
 </div>
 <script>
   const FADE_SECONDS = 0.4;
-  const WORDS_PER_SECOND = 3.2;
-  const STEPS = ["Start the console", "Import .env", "Agent asks", "You approve", "Agent runs", "Deny", "Log"];
+  const INTRO_BASE_SECONDS = 1.6;
+  const WORDS_PER_SECOND = 3;
+  const ZOOM_IN_SECONDS = 0.8;
+  const ZOOM_OUT_SECONDS = 0.7;
+  const MAX_ZOOM = 2.2;
+  const ZOOM_MARGIN = 50;
+  const TAG_SPACE = 90;
+  const STEPS = ["Start the console", "Import .env", "Agent asks", "You approve", "Agent runs", "Auto keys", "Deny", "Log"];
   const YOUR_TERMINAL = "Your terminal";
   const AGENT_TERMINAL = "Your AI agent's terminal";
   const card = (name, seconds) => ({ card: name, seconds });
@@ -142,49 +159,65 @@ python3 scripts/setup_wizard.py</pre>
     card("title", 3.5),
     intro("problem", "The problem", "Today, API keys sit in plaintext .env files", "Your AI agents run as you, so they can read every one.", { solo: true }),
     play("problem", "problem_shown", { solo: true, focus: "agent" }),
-    hold("problem_shown", 3.5, { pane: "agent", from: "OPENAI_API_KEY=", to: "ASKNEWS_API_KEY=", label: "Readable by anything running as you" }, { solo: true }),
-    card("how", 14),
-    intro("console_start", "Step 1", "Start the envh console", "It runs in its own window, as a separate Linux user, and unlocks the vault.", { step: 0 }),
+    hold("problem_shown", 5, { pane: "agent", from: "OPENAI_API_KEY=", to: "ASKNEWS_API_KEY=", label: "Plaintext keys. Any program you run can read them." }, { solo: true }),
+    card("how", 15.5),
+    intro("console_start", "Step 1 of 8", "Start the envh console", "Its own window, running as a separate Linux user. You unlock it with your passphrase.", { step: 0 }),
     play("console_start", "console_phrase", { step: 0, focus: "console" }),
-    hold("console_phrase", 4, { pane: "console", from: "Console phrase:", label: "Type your passphrase only where you see this phrase" }, { step: 0 }),
+    hold("console_phrase", 5, { pane: "console", from: "Console phrase:", label: "Only type your passphrase where you see this phrase" }, { step: 0 }),
     play("console_phrase", "console_ready", { step: 0, badge: true, focus: "console" }),
-    hold("console_ready", 2.5, { pane: "console", from: "Console ready", label: "Ready. Requests will appear here." }, { step: 0 }),
-    intro("import", "Step 2", "Move the keys into the vault", "envh import asks a few questions. Here we accept the defaults.", { step: 1 }),
-    play("import", "import_plan", { step: 1, focus: "agent" }),
-    hold("import_plan", 4, { pane: "agent", from: "line 1", to: "line 2", below: 1, label: "Each key's line becomes a pointer to the vault" }, { step: 1 }),
-    play("import_plan", "import_card", { step: 1, focus: "agent" }),
-    hold("import_card", 4.5, { pane: "console", from: "Import request #", to: "Deny", below: 1, label: "Approve it here. It shows names and fingerprints, not values." }, { step: 1 }),
+    intro("import", "Step 2 of 8", "Move your keys into the vault", "Run envh import in the project. We'll accept its defaults.", { step: 1 }),
+    play("import", "import_classify", { step: 1, focus: "agent" }),
+    hold("import_classify", 5.5, { pane: "agent", from: "OPENAI_API_KEY", to: "LOG_LEVEL", label: "Two API keys go to the vault. LOG_LEVEL is a setting, so it stays." }, { step: 1 }),
+    play("import_classify", "import_presets", { step: 1, focus: "agent" }),
+    hold("import_presets", 5.5, { pane: "agent", from: "Step 4 of 6", to: "<- NEWS_BOT_ASKNEWS_API_KEY", label: "A preset called news-bot: this project's keys, under one name" }, { step: 1 }),
+    play("import_presets", "import_card", { step: 1, focus: "agent" }),
+    hold("import_card", 5.5, { pane: "console", from: "Import request #", to: "Deny", below: 1, label: "You approve the import on the console" }, { step: 1 }),
     play("import_card", "import_check", { step: 1, badge: true, focus: "console" }),
     play("import_check", "import_checked", { step: 1, focus: "agent" }),
-    hold("import_checked", 3.5, { pane: "agent", from: "# OPENAI_API_KEY", to: "# ASKNEWS_API_KEY", label: "No keys left in the file" }, { step: 1 }),
-    intro("ask", "Step 3", "An AI agent asks for the keys", "It asks for a one-hour session with the news-bot keys, and says why.", { step: 2 }),
-    play("ask", "ask_card", { step: 2, focus: "agent" }),
-    hold("ask_card", 5, { pane: "console", from: "Session request #", to: "Deny", below: 1, label: "Who, why, which keys, how long" }, { step: 2 }),
-    intro("approve", "Step 4", "You approve on the console", "Type your vault passphrase. You only ever type it here.", { step: 3 }),
+    hold("import_checked", 5.5, { pane: "agent", from: "# OPENAI_API_KEY", to: "# ASKNEWS_API_KEY", label: "The keys are gone. .env only says where they are now." }, { step: 1 }),
+    intro("ask", "Step 3 of 8", "An AI agent asks for the keys", "An agent now works in this terminal. Its script needs the news-bot keys.", { step: 2 }),
+    play("ask", "ask_typed", { step: 2, focus: "agent" }),
+    hold("ask_typed", 5, { pane: "agent", from: "envh session start", label: "The news-bot keys, for 60 minutes, and the reason" }, { step: 2 }),
+    play("ask_typed", "ask_card", { step: 2, focus: "agent" }),
+    hold("ask_card", 6, { pane: "console", from: "Session request #", to: "Deny", below: 1, label: "On your console: who asks, why, which keys, how long" }, { step: 2 }),
+    intro("approve", "Step 4 of 8", "You approve it", "Type your vault passphrase on the console. That opens a one-hour session.", { step: 3 }),
     play("approve", "approved", { step: 3, badge: true, focus: "console" }),
-    hold("approved", 3, { pane: "agent", from: "approved, expires", label: "Session open for one hour" }, { step: 3 }),
-    intro("run", "Step 5", "The agent runs its script", "No new approval inside the session. Only that command gets the keys.", { step: 4 }),
+    hold("approved", 4.5, { pane: "agent", from: "approved, expires", label: "Approved. The session lasts one hour." }, { step: 3 }),
+    intro("run", "Step 5 of 8", "The agent runs its script", "Inside the session it starts right away. Only that script gets the keys.", { step: 4 }),
     play("run", "ran", { step: 4, focus: "agent" }),
-    hold("ran", 3, { pane: "agent", from: "envh: run #", to: "digest.md", label: "The script got the keys" }, { step: 4 }),
-    intro("deny", "Step 6", "Then something unexpected", "The agent asks for the production database key, with no reason.", { step: 5 }),
-    play("deny", "deny_card", { step: 5, focus: "agent" }),
-    hold("deny_card", 4, { pane: "console", from: "none given", to: "DATABASE_URL ←", label: "No reason, and not a news-bot key" }, { step: 5 }),
-    play("deny_card", "denied", { step: 5, focus: "console" }),
-    hold("denied", 3.5, { pane: "agent", from: "envh: denied", label: "↓ then Enter denies it. The agent gets nothing." }, { step: 5 }),
-    intro("log", "Step 7", "Everything is logged", "Every request, approval, run and denial.", { step: 6 }),
-    hold("log", 4.5, { pane: "console", from: "Console ready", to: "Denied #", label: "Kept in an audit log only envh can read" }, { step: 6 }),
-    card("closing", 11),
+    hold("ran", 5, { pane: "agent", from: "envh run --session", to: "digest.md", label: "fetch.py ran with the keys. No new approval needed." }, { step: 4 }),
+    intro("auto", "Step 6 of 8", "Low-risk keys can skip approval", "You marked FRED_API_KEY, a free read-only key, as auto. Runs that use it start at once.", { step: 5 }),
+    play("auto", "auto_ran", { step: 5, focus: "agent" }),
+    hold("auto_ran", 5, { pane: "agent", from: "envh run --with FRED_API_KEY", to: "rates.png", label: "No prompt on the console. It just ran." }, { step: 5 }),
+    hold("auto_ran", 5.5, { pane: "console", from: "need no approval", to: "ended · exit", label: "Still logged. Use auto only for keys that cost little if leaked." }, { step: 5 }),
+    intro("deny", "Step 7 of 8", "Then the agent asks for something unexpected", "The production database key, with no reason.", { step: 5 }),
+    play("deny", "deny_card", { step: 6, focus: "agent" }),
+    hold("deny_card", 5.5, { pane: "console", from: "Run request #", to: "Deny", below: 1, label: "No reason, and not a key this project uses" }, { step: 6 }),
+    play("deny_card", "deny_chosen", { step: 6, focus: "console" }),
+    hold("deny_chosen", 4, { pane: "console", from: "› Deny", label: "You pick Deny: ↓ then Enter" }, { step: 6 }),
+    play("deny_chosen", "denied", { step: 6, focus: "console" }),
+    hold("denied", 4.5, { pane: "agent", from: "envh: denied", label: "The agent is refused and gets no keys" }, { step: 6 }),
+    intro("log", "Step 8 of 8", "Everything is logged", "Every request and decision, in an audit log only envh can read.", { step: 7 }),
+    hold("log", 5.5, { pane: "console", from: "Console ready", to: "Denied #", label: "The full history of what just happened" }, { step: 7 }),
+    card("recap", 14),
+    card("start", 8),
   ];
+  const THEME = {
+    background: "#10151c", foreground: "#e6edf3", cursor: "#e6edf3", cursorAccent: "#10151c",
+    black: "#484f58", red: "#ff7b72", green: "#3fb950", yellow: "#e3b341", blue: "#58a6ff", magenta: "#bc8cff", cyan: "#39c5cf", white: "#b1bac4",
+    brightBlack: "#6e7681", brightRed: "#ffa198", brightGreen: "#56d364", brightYellow: "#f0c75e", brightBlue: "#79c0ff", brightMagenta: "#d2a8ff", brightCyan: "#56d4dd", brightWhite: "#f0f6fc",
+  };
 
   let recording = null;
   let timeline = [];
   const panes = {};
 
   function clamp(value, low, high) { return Math.min(Math.max(value, low), high); }
+  function ease(progress) { return progress < 0.5 ? 4 * progress ** 3 : 1 - (-2 * progress + 2) ** 3 / 2; }
   function nextFrame() { return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); }
   function introSeconds(segment) {
     const words = `${segment.intro.headline} ${segment.intro.text}`.split(/\s+/).length;
-    return 1.2 + words / WORDS_PER_SECOND;
+    return INTRO_BASE_SECONDS + words / WORDS_PER_SECOND;
   }
   function segmentSeconds(segment) {
     if (segment.card) return segment.seconds;
@@ -209,19 +242,14 @@ python3 scripts/setup_wizard.py</pre>
     let start = 0;
     timeline = segments.map(segment => { const entry = { ...segment, start, seconds: segmentSeconds(segment) }; start += entry.seconds; return entry; });
     for (const name of ["agent", "console"]) {
-      const terminal = new Terminal({ cols: data.columns, rows: data.rows, fontFamily: "DejaVu Sans Mono", fontSize: 18, lineHeight: 1, theme: THEME });
+      const pane = data.panes[name];
+      const terminal = new Terminal({ cols: pane.columns, rows: pane.rows, fontFamily: "DejaVu Sans Mono", fontSize: 16, lineHeight: 1, theme: THEME });
       terminal.open(document.querySelector(`#${name} .term`));
-      panes[name] = { terminal, events: data.panes[name] || [], written: 0 };
+      panes[name] = { terminal, events: pane.events, written: 0 };
     }
     document.getElementById("steps").innerHTML = STEPS.map(step => `<span>${step}</span>`).join("");
     return start;
   }
-
-  const THEME = {
-    background: "#10151c", foreground: "#e6edf3", cursor: "#e6edf3", cursorAccent: "#10151c",
-    black: "#484f58", red: "#ff7b72", green: "#3fb950", yellow: "#e3b341", blue: "#58a6ff", magenta: "#bc8cff", cyan: "#39c5cf", white: "#b1bac4",
-    brightBlack: "#6e7681", brightRed: "#ffa198", brightGreen: "#56d364", brightYellow: "#f0c75e", brightBlue: "#79c0ff", brightMagenta: "#d2a8ff", brightCyan: "#56d4dd", brightWhite: "#f0f6fc",
-  };
 
   function writeUntil(pane, seconds) {
     let text = "";
@@ -253,12 +281,12 @@ python3 scripts/setup_wizard.py</pre>
     return Array.from({ length: terminal.rows }, (_, row) => buffer.getLine(buffer.viewportY + row).translateToString(true));
   }
 
-  function placeHighlight(name, spec, opacity) {
+  function highlightGeometry(name, spec) {
+    // The rows from the last line containing spec.from down to the next containing spec.to, as a rectangle inside the
+    // pane's .term (spot) and inside #windows before the camera moves it (box).
     const pane = panes[name];
-    const term = document.querySelector(`#${name} .term`);
-    const spot = term.querySelector(".spot");
-    const tag = term.querySelector(".tag");
-    if (!spec) { spot.style.opacity = tag.style.opacity = "0"; return; }
+    const windowElement = document.getElementById(name);
+    const term = windowElement.querySelector(".term");
     const lines = visibleLines(pane.terminal);
     const first = lines.map(line => line.includes(spec.from)).lastIndexOf(true);
     if (first < 0) throw new Error(`highlight: ${JSON.stringify(spec.from)} is not on the ${name} screen`);
@@ -268,28 +296,59 @@ python3 scripts/setup_wizard.py</pre>
     const covered = lines.slice(first, last + 1);
     const left = Math.min(...covered.map(line => line.search(/\S/)).filter(column => column >= 0));
     const right = Math.max(...covered.map(line => line.length));
-    const screen = term.querySelector(".xterm-screen").getBoundingClientRect();
-    const box = term.getBoundingClientRect();
-    const originX = screen.left - box.left;
-    const originY = screen.top - box.top;
-    const cellWidth = screen.width / pane.terminal.cols;
-    const cellHeight = screen.height / pane.terminal.rows;
-    const color = `var(--${name})`;
-    Object.assign(spot.style, {
-      left: `${originX + (left - 0.6) * cellWidth}px`, top: `${originY + (first - 0.25) * cellHeight}px`,
-      width: `${(right - left + 1.2) * cellWidth}px`, height: `${(last - first + 1.5) * cellHeight}px`, borderColor: color, opacity: String(opacity),
-    });
+    const xterm = term.querySelector(".xterm");
+    const screen = term.querySelector(".xterm-screen");
+    const cellWidth = screen.clientWidth / pane.terminal.cols;
+    const cellHeight = screen.clientHeight / pane.terminal.rows;
+    const spot = {
+      x: xterm.offsetLeft + screen.offsetLeft + (left - 0.6) * cellWidth,
+      y: xterm.offsetTop + screen.offsetTop + (first - 0.15) * cellHeight,
+      w: (right - left + 1.2) * cellWidth,
+      h: (last - first + 1.3) * cellHeight,
+    };
+    const box = { x: windowElement.offsetLeft + term.offsetLeft + spot.x, y: windowElement.offsetTop + term.offsetTop + spot.y, w: spot.w, h: spot.h };
+    return { spot, box, nearTop: first < 2 };
+  }
+
+  function cameraFor(box) {
+    const viewport = document.getElementById("viewport");
+    const width = viewport.clientWidth;
+    const height = viewport.clientHeight;
+    const scale = clamp(Math.min((width - 2 * ZOOM_MARGIN) / box.w, (height - 2 * ZOOM_MARGIN - TAG_SPACE) / box.h), 1, MAX_ZOOM);
+    return { scale, x: width / 2 - scale * (box.x + box.w / 2), y: (height + TAG_SPACE) / 2 - scale * (box.y + box.h / 2) };
+  }
+
+  function showHighlight(segment, local) {
+    const tag = document.getElementById("tag");
+    const windows = document.getElementById("windows");
+    for (const spot of document.querySelectorAll(".spot")) spot.style.opacity = "0";
+    windows.style.transform = "none";
+    if (!segment.highlight) {
+      tag.style.opacity = "0";
+      return;
+    }
+    const spec = segment.highlight;
+    const { spot, box, nearTop } = highlightGeometry(spec.pane, spec);
+    const target = cameraFor(box);
+    const zoom = ease(clamp(Math.min(local / ZOOM_IN_SECONDS, (segment.seconds - local) / ZOOM_OUT_SECONDS), 0, 1));
+    const camera = { scale: 1 + (target.scale - 1) * zoom, x: target.x * zoom, y: target.y * zoom };
+    windows.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
+    const color = `var(--${spec.pane})`;
+    const spotElement = document.querySelector(`#${spec.pane} .spot`);
+    Object.assign(spotElement.style, { left: `${spot.x}px`, top: `${spot.y}px`, width: `${spot.w}px`, height: `${spot.h}px`, borderColor: color, opacity: String(zoom) });
     tag.textContent = spec.label;
     tag.style.background = color;
-    tag.style.opacity = String(opacity);
-    const above = first >= 3;
-    const tagLeft = clamp(originX + (left - 0.6) * cellWidth, 8, term.clientWidth - tag.offsetWidth - 8);
-    tag.style.left = `${tagLeft}px`;
-    tag.style.top = above ? `${originY + (first - 0.25) * cellHeight - tag.offsetHeight - 10}px` : `${originY + (last + 1.25) * cellHeight + 10}px`;
+    tag.style.opacity = String(clamp(Math.min((local - ZOOM_IN_SECONDS) / 0.3, (segment.seconds - local - ZOOM_OUT_SECONDS) / 0.25), 0, 1));
+    const onScreen = { x: camera.x + camera.scale * box.x, y: camera.y + camera.scale * box.y, w: camera.scale * box.w, h: camera.scale * box.h };
+    const viewport = document.getElementById("viewport");
+    const above = !nearTop && onScreen.y - tag.offsetHeight - 16 >= 8;
+    tag.style.left = `${clamp(onScreen.x, 16, viewport.clientWidth - tag.offsetWidth - 16)}px`;
+    tag.style.top = `${above ? onScreen.y - tag.offsetHeight - 16 : onScreen.y + onScreen.h + 16}px`;
   }
 
   function showCard(active, opacity, local) {
     for (const element of document.querySelectorAll(".card")) element.style.opacity = element.id === active ? String(opacity) : "0";
+    if (!active) return;
     for (const element of document.querySelectorAll(`#${active} [data-from]`)) element.style.opacity = String(clamp((local - Number(element.dataset.from)) / 0.6, 0, 1));
   }
 
@@ -299,13 +358,9 @@ python3 scripts/setup_wizard.py</pre>
     const local = videoSeconds - segment.start;
     await Promise.all(Object.values(panes).map(pane => writeUntil(pane, recordingSecondsAt(index, local))));
 
-    if (segment.card) showCard(segment.card, fade(index, local, index > 0, index < timeline.length - 1), local);
-    else showCard(null, 0, local);
-
-    const solo = Boolean(segment.solo);
-    document.getElementById("console").style.display = solo ? "none" : "";
-    const agentName = segment.step === undefined || segment.step < 2 ? YOUR_TERMINAL : AGENT_TERMINAL;
-    document.querySelector("#agent .name").textContent = agentName;
+    showCard(segment.card, segment.card ? fade(index, local, index > 0, index < timeline.length - 1) : 0, local);
+    document.getElementById("console").style.display = segment.solo ? "none" : "";
+    document.querySelector("#agent .name").textContent = segment.step === undefined || segment.step < 2 ? YOUR_TERMINAL : AGENT_TERMINAL;
     document.getElementById("badge").style.opacity = segment.badge ? "1" : "0";
     const focus = segment.highlight ? segment.highlight.pane : segment.focus;
     for (const name of ["agent", "console"]) document.getElementById(name).style.opacity = !focus || focus === name ? "1" : "0.4";
@@ -323,10 +378,7 @@ python3 scripts/setup_wizard.py</pre>
       introElement.querySelector(".headline").textContent = segment.intro.headline;
       introElement.querySelector(".text").textContent = segment.intro.text;
     }
-
-    const spec = segment.highlight;
-    const opacity = spec ? clamp(local / 0.3, 0, 1) : 0;
-    for (const name of ["agent", "console"]) placeHighlight(name, spec && spec.pane === name ? spec : null, opacity);
+    showHighlight(segment, local);
     await nextFrame();
   }
 </script>

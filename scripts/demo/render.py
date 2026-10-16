@@ -19,8 +19,8 @@ from playwright.sync_api import Page, sync_playwright
 PLAYER = Path(__file__).resolve().parent / "player.html"
 WIDTH, HEIGHT = 1920, 1080
 MP4_FPS = 30
-GIF_FPS = 12
-GIF_WIDTH = 1440
+GIF_FPS = 10
+GIF_WIDTH = 1280
 
 
 def mp4_encoder(output: Path) -> list[str]:

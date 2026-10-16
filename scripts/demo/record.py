@@ -36,7 +36,8 @@ from envh.core.config import CONFIG_FILE, PRESETS_FILE, PRESETS_TEMPLATE, Defaul
 from envh.core.vault import VAULT_FILE, Vault, write_private_file
 from envh.server.init_cmd import PHRASE_FILE
 
-COLUMNS, ROWS = 80, 36
+SHELL_SIZE = (100, 40)
+CONSOLE_SIZE = (80, 40)
 WAIT_TIMEOUT_SECONDS = 20
 CONSOLE_PHRASE = "amber basil cedar"
 ANSI = re.compile(r"\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][A-Z0-9]|[=>78])")
@@ -52,6 +53,11 @@ print("fetch.py: got OPENAI_API_KEY and ASKNEWS_API_KEY" if os.environ.get("OPEN
 time.sleep(0.6)
 print("fetch.py: summarized 14 articles into digest.md")
 """
+RATES_SCRIPT = """import os
+
+print("rates.py: got FRED_API_KEY" if os.environ.get("FRED_API_KEY") else "rates.py: no key")
+print("rates.py: charted 10-year Treasury yields into rates.png")
+"""
 CLEANUP_SCRIPT = 'print("cleanup.py: connected to the database")\n'
 # The request card shows the client's path twice, so a short one keeps the card readable.
 SHORT_PATH_CLIENT = """#!/usr/bin/env python3
@@ -61,7 +67,8 @@ from envh.cli import main
 
 sys.exit(main())
 """
-IMPORT_PROMPTS = ("Import which?", "Flip any of these", "Rename any?", "Drop any preset?", "Rename any preset?")
+# Each prompt of the import wizard, with the mark set when it appears, for the steps the video stops on.
+IMPORT_PROMPTS = {"Import which?": None, "Flip any of these": "import_classify", "Rename any?": None, "Drop any preset?": "import_presets", "Rename any preset?": None}
 
 
 class Clock:
@@ -80,15 +87,16 @@ class Clock:
 
 
 class Pane:
-    """A program on its own pty of COLUMNS x ROWS, with everything it prints kept with the time it arrived."""
+    """A program on its own pty, with everything it prints kept with the time it arrived."""
 
-    def __init__(self, name: str, argv: list[str], env: dict[str, str], cwd: Path, clock: Clock) -> None:
+    def __init__(self, name: str, size: tuple[int, int], argv: list[str], env: dict[str, str], cwd: Path, clock: Clock) -> None:
         pid, descriptor = pty.fork()
         if pid == 0:
             os.chdir(cwd)
-            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLUMNS, 0, 0))
+            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", size[1], size[0], 0, 0))
             os.execvpe(argv[0], argv, env)
         self.name = name
+        self.size = size
         self.pid = pid
         self.descriptor = descriptor
         self.clock = clock
@@ -131,16 +139,19 @@ class Pane:
     def send(self, text: str) -> None:
         os.write(self.descriptor, text.encode())
 
-    def type(self, text: str, seconds_per_char: float = 0.04) -> None:
+    def type(self, text: str, seconds_per_char: float = 0.05) -> None:
         for char in text:
             self.send(char)
             time.sleep(seconds_per_char * random.uniform(0.6, 1.4))
 
-    def run(self, command: str) -> int:
-        """Type a command and press Enter; returns the checkpoint from before it, to wait for its output."""
+    def run(self, command: str, typed_mark: str | None = None) -> int:
+        """Type a command and press Enter, setting typed_mark in between; returns the checkpoint from before it."""
         since = self.checkpoint()
         self.type(command)
         time.sleep(0.4)
+        if typed_mark:
+            self.clock.mark(typed_mark)
+            time.sleep(0.6)
         self.send(ENTER)
         return since
 
@@ -158,18 +169,23 @@ def fake_value(prefix: str, length: int) -> str:
 
 
 def seed(data_dir: Path, project_dir: Path) -> str:
-    """A vault holding another project's key, and a news-bot project with its keys still in .env. Returns the passphrase."""
+    """A vault holding a key marked auto and another project's key, and a news-bot project with its keys still in .env.
+    Returns the passphrase."""
     data_dir.mkdir(mode=0o700)
     project_dir.mkdir()
     passphrase = fake_value("demo-", 16)
     vault = Vault.create(data_dir / VAULT_FILE, passphrase)
     vault.set("PROD_DATABASE_URL", f"postgresql://app:{fake_value('DEMO', 20)}@db.internal:5432/prod")
+    vault.set("FRED_API_KEY", fake_value("demo", 28))
     vault.save()
     settings = Settings(
         users=(getpass.getuser(),),
         notify=False,
         defaults=Defaults(approval="session", max_session=timedelta(hours=1)),
-        secrets={"PROD_DATABASE_URL": SecretEntry(approval="per-run", description="Production database, read-write")},
+        secrets={
+            "PROD_DATABASE_URL": SecretEntry(approval="per-run", description="Production database, read-write"),
+            "FRED_API_KEY": SecretEntry(approval="auto", description="Free economic data, read-only"),
+        },
     )
     write_private_file(data_dir / CONFIG_FILE, render_config(settings).encode())
     write_private_file(data_dir / PRESETS_FILE, PRESETS_TEMPLATE.encode())
@@ -177,6 +193,7 @@ def seed(data_dir: Path, project_dir: Path) -> str:
     env_text = f"OPENAI_API_KEY={fake_value('sk-proj-DEMO', 48)}\nASKNEWS_API_KEY={fake_value('DEMO', 36)}\nLOG_LEVEL=info\n"
     (project_dir / ".env").write_text(env_text)
     (project_dir / "fetch.py").write_text(FETCH_SCRIPT)
+    (project_dir / "rates.py").write_text(RATES_SCRIPT)
     (project_dir / "cleanup.py").write_text(CLEANUP_SCRIPT)
     return passphrase
 
@@ -212,14 +229,15 @@ def import_env(shell: Pane, console: Pane, passphrase: str, clock: Clock) -> Non
     shell.send(CLEAR_SCREEN)
     time.sleep(0.5)
     since = shell.run("envh import .")
-    for prompt in IMPORT_PROMPTS:
+    for prompt, mark in IMPORT_PROMPTS.items():
         shell.wait_for(prompt, since)
-        time.sleep(1.4)
+        if mark:
+            clock.mark(mark)
+        time.sleep(1.0)
         since = shell.checkpoint()
         shell.send(ENTER)
     shell.wait_for("as shown? [Y/n]", since)
-    clock.mark("import_plan")
-    time.sleep(0.6)
+    time.sleep(1.0)
     since = shell.checkpoint()
     shell.send(ENTER)
     shell.wait_for("Proceed?", since)
@@ -250,7 +268,7 @@ def agent_session(agent: Pane, console: Pane, passphrase: str, clock: Clock) -> 
     agent.send(CLEAR_SCREEN)
     time.sleep(0.5)
     since = console.checkpoint()
-    agent.run('envh session start news-bot --minutes 60 --reason "daily news digest"')
+    agent.run('envh session start news-bot --minutes 60 --reason "daily news digest"', typed_mark="ask_typed")
     console.wait_for("Session request #", since)
     time.sleep(0.6)
     clock.mark("ask_card")
@@ -277,6 +295,18 @@ def agent_session(agent: Pane, console: Pane, passphrase: str, clock: Clock) -> 
     time.sleep(0.4)
 
 
+def auto_approved_run(agent: Pane, console: Pane, clock: Clock) -> None:
+    clock.log("The agent runs with a key marked auto")
+    clock.mark("auto")
+    time.sleep(0.4)
+    since = console.checkpoint()
+    agent.wait_for("rates.png", agent.run('envh run --with FRED_API_KEY --reason "chart rates" -- python3 rates.py'))
+    console.wait_for("need no approval", since)
+    time.sleep(0.6)
+    clock.mark("auto_ran")
+    time.sleep(0.4)
+
+
 def denied_request(agent: Pane, console: Pane, clock: Clock) -> None:
     clock.log("The agent asks for a key it should not need")
     clock.mark("deny")
@@ -288,8 +318,12 @@ def denied_request(agent: Pane, console: Pane, clock: Clock) -> None:
     clock.mark("deny_card")
     time.sleep(0.4)
     since = agent.checkpoint()
+    hint = console.checkpoint()
     console.send(DOWN)
-    time.sleep(1.0)
+    console.wait_for("Enter deny", hint)
+    time.sleep(0.3)
+    clock.mark("deny_chosen")
+    time.sleep(0.7)
     console.send(ENTER)
     agent.wait_for("denied", since)
     time.sleep(0.6)
@@ -328,12 +362,12 @@ def record(output: Path) -> None:
         }
 
         def launch_console() -> Pane:
-            panes["console"] = Pane("console", [str(bin_dir / "envh"), "serve", "--data-dir", str(data_dir), "--socket", str(socket)], env, data_dir, clock)
+            panes["console"] = Pane("console", CONSOLE_SIZE, [str(bin_dir / "envh"), "serve", "--data-dir", str(data_dir), "--socket", str(socket)], env, data_dir, clock)
             return panes["console"]
 
         clock.log("Starting the shell, with a plaintext .env of fake keys")
         shell_env = {**env, "PS1": r"\[\e[1;32m\]$\[\e[0m\] ", "HISTFILE": "/dev/null"}
-        panes["agent"] = shell = Pane("agent", ["bash", "--norc", "--noprofile", "-i"], shell_env, project_dir, clock)
+        panes["agent"] = shell = Pane("agent", SHELL_SIZE, ["bash", "--norc", "--noprofile", "-i"], shell_env, project_dir, clock)
         shell.wait_for("$ ")
         time.sleep(0.8)
         show_problem(shell, clock)
@@ -341,6 +375,7 @@ def record(output: Path) -> None:
         console = start_console(launch_console, passphrase, clock)
         import_env(shell, console, passphrase, clock)
         agent_session(shell, console, passphrase, clock)
+        auto_approved_run(shell, console, clock)
         denied_request(shell, console, clock)
     finally:
         clock.log("Stopping the console and the shell")
@@ -353,8 +388,8 @@ def record(output: Path) -> None:
             pane.stop()
         shutil.rmtree(work)
     output.parent.mkdir(parents=True, exist_ok=True)
-    events = {name: pane.events for name, pane in panes.items()}
-    output.write_text(json.dumps({"columns": COLUMNS, "rows": ROWS, "marks": clock.marks, "panes": events}))
+    events = {name: {"columns": pane.size[0], "rows": pane.size[1], "events": pane.events} for name, pane in panes.items()}
+    output.write_text(json.dumps({"marks": clock.marks, "panes": events}))
     clock.log(f"Wrote {output}")
 
 
