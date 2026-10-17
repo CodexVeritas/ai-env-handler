@@ -131,16 +131,16 @@ def cmd_session_start(args: argparse.Namespace, sock: Path) -> int:
         reply = conn.recv_ok()
         if reply.get("excluded_per_run"):
             print(f"envh: per-run secrets are not covered by sessions: {', '.join(reply['excluded_per_run'])}", file=sys.stderr, flush=True)
-        with waiting_notice(reply, f"envh session wait {reply['request_id']}") if reply.get("pending") else nullcontext():
+        with waiting_notice(reply, f"envh session wait {reply['resume_code']}") if reply.get("pending") else nullcontext():
             final = conn.recv_ok()
     return print_session(final, args.quiet)
 
 
 def cmd_session_wait(args: argparse.Namespace, sock: Path) -> int:
     with Connection(sock) as conn:
-        conn.send(op="session_wait", request_id=args.request_id)
+        conn.send(op="session_wait", resume_code=args.resume_code)
         reply = conn.recv_ok()
-        with waiting_notice(reply, f"envh session wait {args.request_id}") if reply.get("pending") else nullcontext():
+        with waiting_notice(reply, f"envh session wait {args.resume_code}") if reply.get("pending") else nullcontext():
             final = conn.recv_ok()
     return print_session(final, args.quiet)
 
@@ -279,7 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--quiet", action="store_true", help="print only the session id")
     start.set_defaults(func=cmd_session_start)
     wait = session_commands.add_parser("wait")
-    wait.add_argument("request_id", type=int)
+    wait.add_argument("resume_code", help="the code `envh session start` printed while it waited")
     wait.add_argument("--quiet", action="store_true")
     wait.set_defaults(func=cmd_session_wait)
     end = session_commands.add_parser("end")

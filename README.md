@@ -247,6 +247,7 @@ envh session end <id>
 - A running command is never killed when its session expires; expiry only stops new approvals. When the command itself exits, any process it left running is terminated so the values do not outlive the run (`--keep-background` to opt out).
 - One user can have 32 `envh` commands running or waiting at once; another is refused until one finishes. A `--reason` can be up to 1,000 characters, and the audit log keeps the first 4,000 characters of a command line.
 - `envh status` shows pending requests, active runs and live sessions as JSON. Neither it nor `envh list` shows session ids: `envh session start` prints yours, and the console's `/sessions` shows them all.
+- If `envh session start` stops waiting before you approve (an agent's tool call timed out), the request still waits for 10 minutes. `envh session wait <code>` picks it up again, with the code `envh session start` printed. A request id from `envh status` is not enough, so another program running as you can't collect the session.
 
 Exit codes: 3 broker not running, 4 denied, 5 request error (unknown preset, variable not in session), otherwise the command's own exit code.
 

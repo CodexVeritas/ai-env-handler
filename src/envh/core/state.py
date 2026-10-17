@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import secrets as random_secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -13,6 +14,7 @@ from envh.core.words import ADJECTIVES, NOUNS
 DETACHED_GRACE = timedelta(minutes=10)
 HISTORY_RETENTION = timedelta(hours=1)
 MAX_PENDING_PER_USER = 20
+RESUME_CODE_BYTES = 8
 RequestKind = Literal["session", "run", "import", "preset"]
 Outcome = Literal["approved", "denied", "withdrawn"]
 
@@ -52,6 +54,7 @@ class Request:
     detached: bool = False
     abandon_at: datetime | None = None
     result: dict[str, Any] = field(default_factory=dict)
+    resume_code: str | None = None
 
     @property
     def decided(self) -> bool:
@@ -140,9 +143,19 @@ class StateTable:
             created_at=self.now(),
             summary=dict(summary or {}),
             decision=asyncio.get_running_loop().create_future(),
+            resume_code=random_secrets.token_hex(RESUME_CODE_BYTES) if kind == "session" else None,
         )
         self.requests[(provenance.uid, request.id)] = request
         return request
+
+    def session_request_to_resume(self, uid: int, resume_code: str) -> Request | None:
+        """Only the process that asked is shown the resume code. Request ids are sequential and listed by `envh status`,
+        so resuming by id would hand a session to anything else running as the same user."""
+        offered = resume_code.encode(errors="replace")
+        for request in self.requests.values():
+            if request.provenance.uid == uid and request.resume_code and hmac.compare_digest(request.resume_code.encode(), offered):
+                return request
+        return None
 
     def pending(self) -> list[Request]:
         return [request for request in self.requests.values() if request.pending]
