@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Literal
 
+from envh.core.words import ADJECTIVES, NOUNS
+
 DETACHED_GRACE = timedelta(minutes=10)
 HISTORY_RETENTION = timedelta(hours=1)
 MAX_PENDING_PER_USER = 20
@@ -173,12 +175,18 @@ class StateTable:
             del self.runs[rid]
         return len(stale_requests) + len(stale_sessions) + len(stale_runs)
 
+    def _new_session_id(self) -> str:
+        while True:
+            candidate = f"{random_secrets.choice(ADJECTIVES)}-{random_secrets.choice(NOUNS)}"
+            if candidate not in self.sessions:
+                return candidate
+
     def create_session(self, request: Request, auto_granted: bool = False) -> Session:
         if request.granted is None:
             raise StateError("session request has no granted duration")
         now = self.now()
         session = Session(
-            id=random_secrets.token_hex(8),
+            id=self._new_session_id(),
             mapping=dict(request.mapping),
             presets=request.presets,
             created_at=now,

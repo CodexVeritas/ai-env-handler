@@ -48,6 +48,7 @@ The console shows your `--reason` first. Write what a careful colleague would wa
 
 - Denied, or exit code 4: the human said no. Stop. Report what you asked for and why, and wait for instructions. Do not retry with a different wording or a different variable.
 - `not covered by session`: the variable is not in your session. Start a new session that includes it (with a reason), or run that one command without `--session`.
+- `unknown session`: the id is wrong or its session is gone. Do not try other ids: each one shows on the console, and 20 refuse all your sessions. Start a new session, or run without `--session`.
 - Broker not running, or exit code 3: tell the human to start the envh console. Do not look for the secrets elsewhere.
 
 ## Proposing a preset

@@ -1,0 +1,47 @@
+"""Words for session ids, which people say aloud and type from memory. Each word is common, easy to spell and has no
+homophone; none is envh or shell vocabulary, and the adjectives are kind or neutral so that no pair reads as an insult."""
+
+ADJECTIVES = (
+    "agile", "airy", "amber", "ample", "azure", "balmy", "bold", "brave", "breezy", "bright",
+    "brisk", "bubbly", "busy", "calm", "candid", "caring", "cheery", "chipper", "civil", "clever",
+    "cloudy", "comfy", "coral", "cosmic", "crimson", "crisp", "cuddly", "curious", "curly", "dapper",
+    "daring", "dazzling", "dewy", "eager", "early", "earnest", "easy", "elated", "epic", "fabled",
+    "fancy", "fearless", "festive", "fluffy", "fond", "frank", "fresh", "friendly", "frosty", "frugal",
+    "funny", "fuzzy", "gallant", "gentle", "giant", "gifted", "glad", "gleeful", "glossy", "golden",
+    "graceful", "grand", "green", "happy", "hazy", "hearty", "helpful", "honest", "hopeful", "humble",
+    "icy", "indigo", "jade", "jaunty", "jazzy", "jolly", "jovial", "joyful", "keen", "kind",
+    "lavish", "leafy", "lilac", "little", "lively", "lofty", "loyal", "lucid", "lucky", "lunar",
+    "magic", "mellow", "merry", "mighty", "mild", "minty", "misty", "modest", "nifty", "nimble",
+    "noble", "patient", "peppy", "perky", "placid", "playful", "plucky", "plush", "polar", "polite",
+    "proud", "quick", "quiet", "quirky", "radiant", "rapid", "rare", "ready", "regal", "roomy",
+    "rosy", "royal", "rugged", "rustic", "sandy", "savvy", "scenic", "serene", "shiny", "silent",
+    "silky", "silver", "sincere", "sleek", "smiling", "smooth", "snowy", "snug", "soft", "solar",
+    "solid", "sonic", "spirited", "spotted", "spry", "starry", "steady", "stellar", "stoic", "striped",
+    "sturdy", "sunny", "super", "swift", "tactful", "tall", "teal", "tender", "thrifty", "tidy",
+    "tiny", "tranquil", "trusty", "upbeat", "valiant", "vast", "velvet", "violet", "vivid", "warm",
+    "wavy", "wise", "witty", "zany", "zesty", "zippy",
+)
+
+NOUNS = (
+    "acorn", "alpaca", "anchor", "apple", "apricot", "arrow", "aspen", "avocado", "badger", "bagel",
+    "bamboo", "banjo", "basil", "beacon", "beetle", "birch", "bison", "blossom", "brook", "button",
+    "cabin", "cactus", "candle", "canoe", "canyon", "castle", "cedar", "cello", "cheetah", "chestnut",
+    "cliff", "clover", "comet", "compass", "cookie", "cotton", "coyote", "crane", "crater", "cricket",
+    "crocus", "cupcake", "daisy", "dingo", "dolphin", "dove", "dragon", "dune", "eagle", "ember",
+    "emu", "falcon", "feather", "fern", "ferret", "fig", "finch", "firefly", "flamingo", "flint",
+    "forest", "fossil", "fox", "galaxy", "garden", "garnet", "gazelle", "gecko", "glacier", "goose",
+    "gopher", "grape", "grove", "gull", "hamster", "harp", "hawk", "hazel", "heron", "hippo",
+    "honey", "hornet", "iguana", "iris", "island", "ivy", "jaguar", "jasmine", "jay", "jelly",
+    "kayak", "kettle", "kite", "koala", "lagoon", "lantern", "lark", "laurel", "lemon", "lemur",
+    "lily", "lion", "lizard", "lobster", "lotus", "magpie", "manatee", "mango", "maple", "marble",
+    "marmot", "meadow", "meteor", "minnow", "mitten", "moon", "moss", "moth", "muffin", "nectar",
+    "nest", "newt", "nutmeg", "oak", "oasis", "ocean", "ocelot", "octopus", "orange", "orbit",
+    "orca", "orchid", "osprey", "ostrich", "otter", "owl", "oyster", "panda", "panther", "papaya",
+    "parrot", "peach", "pebble", "pelican", "penguin", "pepper", "petal", "piano", "pine", "planet",
+    "pond", "poppy", "prairie", "pretzel", "puffin", "pumpkin", "quail", "quartz", "quill", "rabbit",
+    "radish", "rainbow", "raven", "reef", "ribbon", "river", "robin", "rocket", "sage", "sapling",
+    "shark", "sloth", "snail", "sparrow", "spruce", "squid", "starling", "stork", "storm", "summit",
+    "swan", "thistle", "thunder", "tiger", "timber", "tomato", "topaz", "toucan", "trout", "tulip",
+    "tundra", "turnip", "turtle", "valley", "violin", "volcano", "waffle", "walnut", "walrus", "willow",
+    "wolf", "wombat", "yak", "zebra",
+)
