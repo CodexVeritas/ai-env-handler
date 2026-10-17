@@ -88,24 +88,42 @@ async def test_run_withdrawn_when_client_leaves(control: Path, harness: Harness)
 async def test_session_wait_resumes_after_disconnect(control: Path, harness: Harness) -> None:
     async with Client(control) as client:
         await client.send(op="session_start", **{"with": ["OPENAI_API_KEY"]}, minutes=10)
-        request_id = (await client.recv())["request_id"]
+        resume_code = (await client.recv())["resume_code"]
     await asyncio.sleep(0.05)
     request = next(iter(harness.broker.state.requests.values()))
     assert request.pending and request.abandon_at is not None
     async with Client(control) as client:
-        await client.send(op="session_wait", request_id=request_id)
+        await client.send(op="session_wait", resume_code=resume_code)
         assert (await client.recv())["pending"] is True
         assert request.abandon_at is None
         harness.broker.approve(request)
         final = await client.recv()
         assert final["ok"] is True and "session_id" in final
     async with Client(control) as client:
-        await client.send(op="session_wait", request_id=request_id)
+        await client.send(op="session_wait", resume_code=resume_code)
         assert (await client.recv())["pending"] is False
         assert (await client.recv())["session_id"] == final["session_id"]
     async with Client(control) as client:
-        await client.send(op="session_wait", request_id=999)
-        assert "unknown" in (await client.recv())["error"]
+        await client.send(op="session_wait", resume_code="0" * len(resume_code))
+        assert "unknown resume code" in (await client.recv())["error"]
+
+
+async def test_a_request_id_from_status_does_not_resume_someone_elses_session(control: Path, harness: Harness) -> None:
+    async with Client(control) as requester:
+        await requester.send(op="session_start", **{"with": ["OPENAI_API_KEY"]}, minutes=10)
+        first = await requester.recv()
+        async with Client(control) as bystander:
+            await bystander.send(op="status")
+            [listed] = (await bystander.recv())["pending"]
+        assert listed["id"] == first["request_id"] and first["resume_code"] not in str(listed)
+        harness.broker.approve(harness.broker.state.pending()[0])
+        assert "session_id" in await requester.recv()
+    for guess in (str(first["request_id"]), first["request_id"], "", None, "\ud800"):
+        async with Client(control) as bystander:
+            await bystander.send(op="session_wait", resume_code=guess, request_id=first["request_id"])
+            reply = await bystander.recv()
+            assert reply["ok"] is False and "session_id" not in reply
+    assert sum("unknown_resume_code" in line for line in harness.echoed) == 5
 
 
 async def test_list_status_validate_and_errors(control: Path, harness: Harness) -> None:

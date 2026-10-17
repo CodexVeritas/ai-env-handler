@@ -50,6 +50,26 @@ async def test_one_command_with_a_preset_needs_no_session(control: Path, harness
     assert harness.broker.state.live_sessions() == []
 
 
+async def test_a_session_start_that_timed_out_resumes_with_the_printed_command(control: Path, harness: Harness) -> None:
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "envh", "--socket", str(control), "session", "start", "team", "--minutes", "30", "--reason", "e2e",
+        stderr=asyncio.subprocess.PIPE, env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+    )
+    assert process.stderr is not None
+    hint = ""
+    while "resume with:" not in hint:
+        hint = (await asyncio.wait_for(process.stderr.readline(), timeout=20)).decode()
+    process.kill()
+    await process.wait()
+    resume_command = hint.split("resume with: ", 1)[1].split()
+    assert resume_command[:3] == ["envh", "session", "wait"]
+    task = asyncio.create_task(run_cli(control, *resume_command[1:], "--quiet"))
+    await approve_next(harness)
+    code, out, err = await asyncio.wait_for(task, timeout=20)
+    assert code == 0, err
+    assert out.strip() == harness.broker.state.live_sessions()[0].id
+
+
 async def test_session_start_then_run_and_end(control: Path, harness: Harness) -> None:
     task = asyncio.create_task(run_cli(control, "session", "start", "team", "--minutes", "30", "--reason", "e2e", "--quiet"))
     await approve_next(harness)

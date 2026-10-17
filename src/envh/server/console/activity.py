@@ -86,6 +86,7 @@ def describe(event: AuditEvent) -> tuple[str, str] | None:
         "vault_passphrase_changed": ("ok", lambda: "Changed the vault passphrase"),
         "rejected_uid": ("warn", lambda: f"Refused uid {fields.get('uid')}: not an allowed user (see /settings)"),
         "unknown_session": ("warn", lambda: f"Unknown session {fields.get('session')} from {login_name(fields['uid'])}" + (" · refusing their sessions until the console restarts" if fields.get("count") == MAX_UNKNOWN_SESSION_IDS else "")),
+        "unknown_resume_code": ("warn", lambda: f"Wrong resume code for a session request from {login_name(fields['uid'])} · pid {fields.get('pid')}"),
         "error": ("error", lambda: f"Internal error in the {fields.get('where', 'broker')}; details in audit.jsonl"),
     }
     if event.name in simple:
