@@ -204,7 +204,14 @@ envh scan                      # your home directory
 envh scan ~/code ~/Downloads   # specific places; add --json for machine-readable output
 ```
 
-It prints the file, the line, what kind of key it looks like, the first four characters, the length and a short fingerprint, never the value. The fingerprint lets you see that the same key sits in several files. Exit code 1 means something was found. While it runs, a progress bar shows how much it has read and about how long is left.
+For every hit it records the file, the line, what kind of key it looks like, the first four characters, the length and a short fingerprint, never the value. The fingerprint lets you see that the same key sits in several files. Exit code 1 means something was found. While it runs, a progress bar shows how much it has read and about how long is left.
+
+A home-folder scan can find thousands of hits, so the terminal gets a short summary (counts by kind) and the full results go to a new folder, `~/.local/state/envh/scans/<date-time>/` (under `$XDG_STATE_HOME` if you set it), mode 0700:
+- `report.txt`: every hit, grouped by file, and which values appear in several files.
+- `files.txt`: just the paths of the files with hits, one per line.
+- `hits.json`: the same data `--json` prints.
+
+These hold paths and fingerprints only, no values, so unlike the import backups they are safe to keep.
 
 To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of installed code and caches that hold none of your keys but can hold millions of files:
 - **Installed packages and environments:** `.venv`, `venv`, `node_modules`, `site-packages`, conda, uv's Pythons, pipx, `.cargo`, `go/pkg` and the like.
