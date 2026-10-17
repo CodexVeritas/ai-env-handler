@@ -209,6 +209,7 @@ class Expanded(str):
 class Word:
     value: str = ""
     quoted: bool = False
+    expands: bool = False
     substitutions: list[list[Word | str]] = field(default_factory=list)
     heredoc: str | None = None
 
@@ -287,7 +288,7 @@ class Lexer:
                 word.quoted = True
             elif self.peek() == '"' or self.peek(2) == '$"':
                 self.pos += 2 if self.peek() == "$" else 1
-                value += self.expansions(word.substitutions, closer='"')
+                value += self.expansions(word, closer='"')
                 word.quoted = True
             elif self.peek(2) == "$(":
                 self.pos += 2
@@ -295,6 +296,7 @@ class Lexer:
             elif self.peek() == "`":
                 word.substitutions.append(self.backticks())
             else:
+                word.expands = word.expands or self.peek() == "$"
                 value += self.peek()
                 self.pos += 1
         word.value = value
@@ -304,7 +306,7 @@ class Lexer:
             word.substitutions += [inner for element in array if isinstance(element, Word) for inner in element.substitutions]
         return word
 
-    def expansions(self, substitutions: list[list[Word | str]], closer: str) -> str:
+    def expansions(self, word: Word, closer: str) -> str:
         """Literal text under double-quote rules, where only backslash, $(...) and backticks are special, up to `closer` or the end."""
         value = ""
         while self.pos < len(self.text) and self.peek() != closer:
@@ -313,10 +315,11 @@ class Lexer:
                 self.pos += 2
             elif self.peek(2) == "$(":
                 self.pos += 2
-                substitutions.append(self.tokens(until_paren=True))
+                word.substitutions.append(self.tokens(until_paren=True))
             elif self.peek() == "`":
-                substitutions.append(self.backticks())
+                word.substitutions.append(self.backticks())
             else:
+                word.expands = word.expands or self.peek() == "$"
                 value += self.peek()
                 self.pos += 1
         self.unclosed = self.unclosed or (closer != "" and self.pos >= len(self.text))
@@ -374,7 +377,7 @@ class Lexer:
             delimiter.heredoc = "\n".join(lines)
             if not delimiter.quoted:
                 body = Lexer(delimiter.heredoc)
-                body.expansions(delimiter.substitutions, closer="")
+                body.expansions(delimiter, closer="")
                 self.unclosed = self.unclosed or body.unclosed
         self.heredocs = []
 
@@ -396,7 +399,7 @@ def split_commands(tokens: list[Word | str]) -> list[Command]:
         elif token.heredoc is not None:
             command.stdin.append(token.heredoc)
         elif not redirect:
-            command.words.append(Expanded(token.value) if token.substitutions or "$" in token.value else token.value)
+            command.words.append(Expanded(token.value) if token.substitutions or token.expands else token.value)
         redirect = ""
     return commands
 
