@@ -108,6 +108,19 @@ async def test_a_user_naming_too_many_unknown_session_ids_is_refused_every_sessi
     assert broker.resolve_run_in_session(session_id, [], owner)[0].id == session_id
 
 
+async def test_session_wait_token_misses_count_toward_the_lockout(harness: Harness) -> None:
+    broker = harness.broker
+    mapping, presets = broker.mapping_from_presets(["team"], [])
+    request = broker.request_session(mapping, presets, 30, None, (), harness.provenance())
+    uid = harness.provenance().uid
+    for _ in range(MAX_UNKNOWN_SESSION_IDS):
+        with pytest.raises(RequestError, match="unknown session request id"):
+            broker.session_request_for_wait(uid, request.id, "wrong")
+    with pytest.raises(RequestError, match="refused"):
+        broker.session_request_for_wait(uid, request.id, request.wait_token)
+    assert sum("unknown_session" in line for line in harness.echoed) == MAX_UNKNOWN_SESSION_IDS
+
+
 async def test_import_then_approve_writes_vault_and_presets(harness: Harness) -> None:
     broker = harness.broker
     presets = {"news-bot-personal": {"env": {"OPENROUTER_API_KEY": "PERSONAL_OPENROUTER_KEY", "OPENAI_API_KEY": "OPENAI_API_KEY"}}}

@@ -60,7 +60,7 @@ DECISIONS = pytest.mark.parametrize(
         ("envh session start --help", None),
         ("envh list", None),
         ("envh status && git status", None),
-        ("envh session wait 7", None),
+        ("envh session wait 7.Xy3nTok", None),
         ("envh session end abc", None),
         ("envh preset validate d.yaml", None),
         ("envh scan ~/code --json", None),

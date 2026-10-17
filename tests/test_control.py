@@ -88,24 +88,44 @@ async def test_run_withdrawn_when_client_leaves(control: Path, harness: Harness)
 async def test_session_wait_resumes_after_disconnect(control: Path, harness: Harness) -> None:
     async with Client(control) as client:
         await client.send(op="session_start", **{"with": ["OPENAI_API_KEY"]}, minutes=10)
-        request_id = (await client.recv())["request_id"]
+        start = await client.recv()
+        request_id, token = start["request_id"], start["wait_token"]
     await asyncio.sleep(0.05)
     request = next(iter(harness.broker.state.requests.values()))
     assert request.pending and request.abandon_at is not None
     async with Client(control) as client:
-        await client.send(op="session_wait", request_id=request_id)
+        await client.send(op="session_wait", request_id=request_id, token=token)
         assert (await client.recv())["pending"] is True
         assert request.abandon_at is None
         harness.broker.approve(request)
         final = await client.recv()
         assert final["ok"] is True and "session_id" in final
     async with Client(control) as client:
-        await client.send(op="session_wait", request_id=request_id)
+        await client.send(op="session_wait", request_id=request_id, token=token)
         assert (await client.recv())["pending"] is False
         assert (await client.recv())["session_id"] == final["session_id"]
     async with Client(control) as client:
-        await client.send(op="session_wait", request_id=999)
+        await client.send(op="session_wait", request_id=999, token=token)
         assert "unknown" in (await client.recv())["error"]
+
+
+async def test_session_wait_needs_the_printed_token(control: Path, harness: Harness) -> None:
+    """A sibling process shares the uid and can read the request id from `status`, but not the token, so it cannot
+    collect another agent's session; the original caller, with the token, still can."""
+    async with Client(control) as client:
+        await client.send(op="session_start", **{"with": ["OPENAI_API_KEY"]}, minutes=10)
+        start = await client.recv()
+    request_id = start["request_id"]
+    async with Client(control) as client:
+        await client.send(op="session_wait", request_id=request_id, token="not-the-token")
+        assert "unknown session request id" in (await client.recv())["error"]
+    assert any("unknown_session" in line for line in harness.echoed)
+    request = next(iter(harness.broker.state.requests.values()))
+    harness.broker.approve(request)
+    async with Client(control) as client:
+        await client.send(op="session_wait", request_id=request_id, token=start["wait_token"])
+        assert (await client.recv())["pending"] is False
+        assert "session_id" in (await client.recv())
 
 
 async def test_list_status_validate_and_errors(control: Path, harness: Harness) -> None:

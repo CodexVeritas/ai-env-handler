@@ -71,8 +71,9 @@ async def test_other_user_cannot_see_or_use_my_session(control: Path, harness: H
 async def test_other_user_cannot_wait_on_my_request(control: Path, harness: Harness, as_uid) -> None:
     async with Client(control) as client:
         await client.send(op="session_start", **{"with": ["OPENAI_API_KEY"]}, minutes=5)
-        request_id = (await client.recv())["request_id"]
+        start = await client.recv()
+        request_id, token = start["request_id"], start["wait_token"]
     as_uid(NOBODY_UID)
     async with Client(control) as client:
-        await client.send(op="session_wait", request_id=request_id)
+        await client.send(op="session_wait", request_id=request_id, token=token)
         assert "unknown session request id" in (await client.recv())["error"]

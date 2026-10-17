@@ -201,13 +201,11 @@ class Connection:
             command=self._command(message),
             provenance=self.provenance,
         )
-        await self.send(self._pending(request, excluded_per_run=request.summary["excluded_per_run"]))
+        await self.send(self._pending(request, excluded_per_run=request.summary["excluded_per_run"], wait_token=request.wait_token))
         await self._attend(request)
 
     async def op_session_wait(self, message: dict[str, Any]) -> None:
-        request = self.broker.state.requests.get((self.provenance.uid, int(message.get("request_id") or 0)))
-        if request is None or request.kind != "session":
-            raise RequestError("unknown session request id")
+        request = self.broker.session_request_for_wait(self.provenance.uid, int(message.get("request_id") or 0), str(message.get("token") or ""))
         request.abandon_at = None
         await self.send({"ok": True, "request_id": request.id, "pending": request.pending, "notify": self.broker.config.notify})
         await self._attend(request)

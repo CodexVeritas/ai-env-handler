@@ -52,6 +52,7 @@ class Request:
     detached: bool = False
     abandon_at: datetime | None = None
     result: dict[str, Any] = field(default_factory=dict)
+    wait_token: str = ""
 
     @property
     def decided(self) -> bool:

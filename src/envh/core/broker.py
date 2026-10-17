@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import difflib
+import secrets
 from collections import Counter
 from dataclasses import replace
 from datetime import timedelta
@@ -218,20 +219,39 @@ class Broker:
             granted=granted,
             summary={"excluded_per_run": sorted(per_run)},
         )
+        request.wait_token = secrets.token_urlsafe(16)
         self._announce_or_grant(request, presets)
         return request
+
+    def _guess_lockout_guard(self, uid: int) -> None:
+        if self.unknown_session_ids[uid] >= MAX_UNKNOWN_SESSION_IDS:
+            raise RequestError(f"refused: your user named {MAX_UNKNOWN_SESSION_IDS} unknown session ids; run without --session or `session wait`, or restart the console")
+
+    def _record_unknown(self, uid: int, **what: Any) -> None:
+        self.unknown_session_ids[uid] += 1
+        self.audit.event("unknown_session", uid=uid, count=self.unknown_session_ids[uid], **what)
 
     def owned_session(self, session_id: str, uid: int) -> Session:
         """Session ids are short enough to guess, so another user's session reads as unknown, and a uid that names too
         many unknown ids is refused every session until the console restarts."""
-        if self.unknown_session_ids[uid] >= MAX_UNKNOWN_SESSION_IDS:
-            raise RequestError(f"refused: your user named {MAX_UNKNOWN_SESSION_IDS} unknown session ids; run without --session, or restart the console")
+        self._guess_lockout_guard(uid)
         known = self.state.sessions.get(session_id)
         if known is None or known.provenance.uid != uid:
-            self.unknown_session_ids[uid] += 1
-            self.audit.event("unknown_session", session=session_id, uid=uid, count=self.unknown_session_ids[uid])
+            self._record_unknown(uid, session=session_id)
             raise RequestError(f"unknown session {session_id}; check the name, or start a new session")
         return self.state.session(session_id)
+
+    def session_request_for_wait(self, uid: int, request_id: int, token: str) -> Request:
+        """The caller's own session request, matched by the token that was printed only to the requester. The request id
+        alone is not enough: it shows in `envh status` and the ids are sequential, so without the token any process
+        running as the same user could wait on a sibling's request and read back its session id once approved. A wrong
+        id or token reads as unknown and counts toward the same lockout as a guessed session id."""
+        self._guess_lockout_guard(uid)
+        request = self.state.requests.get((uid, request_id))
+        if request is None or request.kind != "session" or not secrets.compare_digest(request.wait_token, token):
+            self._record_unknown(uid, request=request_id)
+            raise RequestError("unknown session request id")
+        return request
 
     def resolve_run_in_session(self, session_id: str, items: list[str], uid: int) -> tuple[Session, dict[str, str]]:
         session = self.owned_session(session_id, uid)

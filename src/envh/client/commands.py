@@ -64,8 +64,11 @@ def cmd_run(args: argparse.Namespace, sock: Path) -> int:
 
 
 def spawn(command: list[str], extra_env: dict[str, str]) -> int:
+    # The child gets the values this run was granted, not the session id: an exported ENVH_SESSION would otherwise let it
+    # request the session's other secrets, past any --with narrowing.
+    inherited = {name: value for name, value in os.environ.items() if name != SESSION_ENV_VAR}
     try:
-        child = subprocess.Popen(command, env={**os.environ, **extra_env})
+        child = subprocess.Popen(command, env={**inherited, **extra_env})
     except FileNotFoundError as error:
         raise ClientError(f"command not found: {command[0]}", EXIT_USAGE) from error
 
@@ -131,16 +134,20 @@ def cmd_session_start(args: argparse.Namespace, sock: Path) -> int:
         reply = conn.recv_ok()
         if reply.get("excluded_per_run"):
             print(f"envh: per-run secrets are not covered by sessions: {', '.join(reply['excluded_per_run'])}", file=sys.stderr, flush=True)
-        with waiting_notice(reply, f"envh session wait {reply['request_id']}") if reply.get("pending") else nullcontext():
+        handle = f"{reply['request_id']}.{reply.get('wait_token', '')}"
+        with waiting_notice(reply, f"envh session wait {handle}") if reply.get("pending") else nullcontext():
             final = conn.recv_ok()
     return print_session(final, args.quiet)
 
 
 def cmd_session_wait(args: argparse.Namespace, sock: Path) -> int:
+    request_id, _, token = args.handle.partition(".")
+    if not request_id.isdigit() or not token:
+        raise ClientError("pass the handle that `session start` printed, like `envh session wait 3.Xy…`", EXIT_USAGE)
     with Connection(sock) as conn:
-        conn.send(op="session_wait", request_id=args.request_id)
+        conn.send(op="session_wait", request_id=int(request_id), token=token)
         reply = conn.recv_ok()
-        with waiting_notice(reply, f"envh session wait {args.request_id}") if reply.get("pending") else nullcontext():
+        with waiting_notice(reply, f"envh session wait {args.handle}") if reply.get("pending") else nullcontext():
             final = conn.recv_ok()
     return print_session(final, args.quiet)
 
@@ -279,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--quiet", action="store_true", help="print only the session id")
     start.set_defaults(func=cmd_session_start)
     wait = session_commands.add_parser("wait")
-    wait.add_argument("request_id", type=int)
+    wait.add_argument("handle", help="the handle `session start` printed (its request id and token)")
     wait.add_argument("--quiet", action="store_true")
     wait.set_defaults(func=cmd_session_wait)
     end = session_commands.add_parser("end")

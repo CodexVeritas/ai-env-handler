@@ -25,7 +25,7 @@ Secrets are not in `.env` files and not in your environment. A human approves ev
    envh session start <preset> --minutes 60 --reason "weekly report: fetch forecasts and draft the summary"
    ```
    `--with` and several presets work here too: `envh session start --with OPENAI_API_KEY --minutes 30 --reason "..."`, or `envh session start news-bot forecasting-bot --minutes 60 --reason "..."`.
-   If the call times out before approval, resume with `envh session wait <request_id>` (the id is printed). Do not start a second session for the same work.
+   If the call times out before approval, resume with `envh session wait <handle>`, where `<handle>` is the `request-id.token` string that `session start` printed. Keep that handle: it is what proves the session is yours to collect, and only your original call is shown it. Do not start a second session for the same work.
    Then run commands inside the session. Each run is approved instantly, logged, and gets only the variables you name:
    ```bash
    envh run --session <id> --reason "research step" -- uv run python scripts/research.py

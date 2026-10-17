@@ -85,7 +85,7 @@ def describe(event: AuditEvent) -> tuple[str, str] | None:
         "config_edited": ("ok", lambda: f"Saved {fields.get('file')}"),
         "vault_passphrase_changed": ("ok", lambda: "Changed the vault passphrase"),
         "rejected_uid": ("warn", lambda: f"Refused uid {fields.get('uid')}: not an allowed user (see /settings)"),
-        "unknown_session": ("warn", lambda: f"Unknown session {fields.get('session')} from {login_name(fields['uid'])}" + (" · refusing their sessions until the console restarts" if fields.get("count") == MAX_UNKNOWN_SESSION_IDS else "")),
+        "unknown_session": ("warn", lambda: f"Unknown session {fields['session'] if fields.get('session') else 'request #' + str(fields.get('request'))} from {login_name(fields['uid'])}" + (" · refusing their sessions until the console restarts" if fields.get("count") == MAX_UNKNOWN_SESSION_IDS else "")),
         "error": ("error", lambda: f"Internal error in the {fields.get('where', 'broker')}; details in audit.jsonl"),
     }
     if event.name in simple:
