@@ -1,4 +1,5 @@
 import asyncio
+import getpass
 import json
 import os
 import re
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from envh.core.audit import Audit, AuditEvent
+from envh.core.broker import MAX_UNKNOWN_SESSION_IDS, RequestError
 from envh.core.config import load_config
 from envh.core.state import Provenance, Request
 from envh.core.vault import Vault
@@ -388,10 +390,22 @@ async def test_a_live_session_can_be_ended_from_the_console(harness: Harness) ->
     harness.broker.approve(request)
     console = new_console(harness)
     console.command("sessions")
-    assert request.result["session_id"][:8] in console.screen()
+    assert request.result["session_id"] in console.screen()
     console.press("enter", "down", "enter")
     assert harness.broker.state.live_sessions() == []
-    assert f"Ended session {request.result['session_id'][:8]}" in console.screen()
+    assert f"Ended session {request.result['session_id']}" in console.screen()
+
+
+
+async def test_unknown_session_ids_show_on_the_console_until_the_user_is_refused(harness: Harness) -> None:
+    console = new_console(harness)
+    uid = os.getuid()
+    for _ in range(MAX_UNKNOWN_SESSION_IDS):
+        with pytest.raises(RequestError):
+            harness.broker.resolve_run_in_session("brave-otter", [], uid)
+    screen = console.screen(160, 60)
+    assert f"Unknown session brave-otter from {getpass.getuser()}" in screen
+    assert screen.count("refusing their sessions until the console restarts") == 1
 
 
 async def test_changing_the_passphrase_reencrypts_the_vault(harness: Harness) -> None:

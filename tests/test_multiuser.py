@@ -58,10 +58,10 @@ async def test_other_user_cannot_see_or_use_my_session(control: Path, harness: H
     async with Client(control) as client:
         await client.send(op="run", session=session_id, **{"with": ["OPENAI_API_KEY"]}, command=["true"])
         reply = await client.recv()
-        assert reply["ok"] is False and "belongs to another user" in reply["error"]
+        assert reply["ok"] is False and "unknown session" in reply["error"]
     async with Client(control) as client:
         await client.send(op="session_end", session_id=session_id)
-        assert "belongs to another user" in (await client.recv())["error"]
+        assert "unknown session" in (await client.recv())["error"]
     as_uid(None)
     async with Client(control) as client:
         await client.send(op="run", session=session_id, **{"with": ["OPENAI_API_KEY"]}, command=["true"])

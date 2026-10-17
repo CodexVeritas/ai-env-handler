@@ -63,6 +63,8 @@ async def test_session_start_then_run_and_end(control: Path, harness: Harness) -
     assert code == 0 and out.strip() == "sk-or-team"
     code, out, err = await run_cli(control, "run", "--session", session_id, "--with", "DATABASE_URL", "--", "true")
     assert code == 5 and "not covered" in err
+    code, out, err = await run_cli(control, "session", "end", env={"ENVH_SESSION": ""})
+    assert code == 2 and "no session to end" in err
     code, out, err = await run_cli(control, "session", "end", session_id)
     assert code == 0
     code, out, err = await run_cli(control, "list")
