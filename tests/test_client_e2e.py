@@ -79,12 +79,12 @@ async def test_session_start_then_run_and_end(control: Path, harness: Harness) -
     code, out, err = await run_cli(control, "run", "--session", session_id, "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", "import os; print(sorted(k for k in os.environ if k in {'OPENAI_API_KEY','OPENROUTER_API_KEY'}))")
     assert code == 0, err
     assert out.strip() == "['OPENAI_API_KEY']"
-    code, out, err = await run_cli(control, "run", "--", sys.executable, "-c", "import os; print(os.environ['OPENROUTER_API_KEY'])", env={"ENVH_SESSION": session_id})
+    code, out, err = await run_cli(control, "run", "--session", session_id, "--", sys.executable, "-c", "import os; print(os.environ['OPENROUTER_API_KEY'])")
     assert code == 0 and out.strip() == "sk-or-team"
     code, out, err = await run_cli(control, "run", "--session", session_id, "--with", "DATABASE_URL", "--", "true")
     assert code == 5 and "not covered" in err
-    code, out, err = await run_cli(control, "session", "end", env={"ENVH_SESSION": ""})
-    assert code == 2 and "no session to end" in err
+    code, out, err = await run_cli(control, "session", "end")
+    assert code == 2 and "required: session_id" in err
     code, out, err = await run_cli(control, "session", "end", session_id)
     assert code == 0
     code, out, err = await run_cli(control, "list")
