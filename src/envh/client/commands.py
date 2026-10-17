@@ -64,8 +64,10 @@ def cmd_run(args: argparse.Namespace, sock: Path) -> int:
 
 
 def spawn(command: list[str], extra_env: dict[str, str]) -> int:
+    """The command doesn't inherit ENVH_SESSION, so a run narrowed with --with can't reach the rest of the session."""
+    inherited = {name: value for name, value in os.environ.items() if name != SESSION_ENV_VAR}
     try:
-        child = subprocess.Popen(command, env={**os.environ, **extra_env})
+        child = subprocess.Popen(command, env={**inherited, **extra_env})
     except FileNotFoundError as error:
         raise ClientError(f"command not found: {command[0]}", EXIT_USAGE) from error
 
