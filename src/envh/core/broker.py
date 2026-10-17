@@ -578,8 +578,8 @@ class Broker:
         return {"secrets": secrets, "presets": presets, "sessions": [self.session_payload(session) for session in sessions]}
 
     def session_payload(self, session: Session) -> dict[str, Any]:
+        """Leaves the id out, so that agents working side by side as one user don't pick up each other's sessions."""
         return {
-            "id": session.id,
             "presets": list(session.presets),
             "vars": sorted(session.mapping),
             "expires_at": session.expires_at.isoformat(timespec="seconds"),
@@ -599,7 +599,7 @@ class Broker:
                 if mine(request.provenance)
             ],
             "runs": [
-                {"id": run.id, "vars": sorted(run.mapping), "session": run.session_id, "command": list(run.command), "pid": run.provenance.pid, "started_at": run.started_at.isoformat(timespec="seconds")}
+                {"id": run.id, "vars": sorted(run.mapping), "in_session": run.session_id is not None, "command": list(run.command), "pid": run.provenance.pid, "started_at": run.started_at.isoformat(timespec="seconds")}
                 for run in self.state.active_runs()
                 if mine(run.provenance)
             ],

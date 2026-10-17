@@ -1,3 +1,4 @@
+import json
 import re
 from dataclasses import replace
 from datetime import timedelta
@@ -75,6 +76,19 @@ async def test_run_in_session_resolution(harness: Harness) -> None:
     assert len(broker.list_payload(for_uid=uid)["sessions"]) == 1
     assert broker.env_for(resolved) == {"OPENAI_API_KEY": "sk-openai"}
 
+
+
+
+async def test_list_and_status_leave_session_ids_out(harness: Harness) -> None:
+    broker = harness.broker
+    mapping, presets = broker.mapping_from_presets(["team"], [])
+    request = broker.request_session(mapping, presets, 30, "work", (), harness.provenance())
+    broker.approve(request)
+    session_id = request.result["session_id"]
+    broker.state.start_run(mapping, session_id, "step", ("x",), harness.provenance())
+    status = broker.status_payload(for_uid=harness.provenance().uid)
+    assert status["runs"][0]["in_session"] and status["sessions"][0]["reason"] == "work"
+    assert session_id not in json.dumps(status) + json.dumps(broker.list_payload(for_uid=harness.provenance().uid))
 
 
 async def test_a_user_naming_too_many_unknown_session_ids_is_refused_every_session(harness: Harness) -> None:

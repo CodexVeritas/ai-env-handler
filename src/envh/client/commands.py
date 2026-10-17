@@ -190,7 +190,7 @@ def cmd_list(args: argparse.Namespace, sock: Path) -> int:
         print("  (none)")
     print("LIVE SESSIONS")
     for session in payload["sessions"]:
-        print(f"  {session['id']}  {', '.join(session['presets']) or '(ad hoc)':<24} expires {session['expires_at']}  vars {', '.join(session['vars'])}  reason: {session['reason'] or '-'}")
+        print(f"  {', '.join(session['presets']) or '(ad hoc)':<24} expires {session['expires_at']}  vars {', '.join(session['vars'])}  reason: {session['reason'] or '-'}")
     if not payload["sessions"]:
         print("  (none)")
     return 0
