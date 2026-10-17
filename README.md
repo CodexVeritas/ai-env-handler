@@ -115,7 +115,7 @@ Or click the "envh console" launcher. Enter your sudo password, check the consol
 The helper chowns the terminal device to the service user for the duration and restores it afterwards.
 
 **You don't have to watch the console.** When a request needs your passphrase, envh shows a desktop notification with its own chime, and the console rings its bell.
-- **It reminds you while the request waits:** after 30 seconds, 1 minute, 2 minutes and 5 minutes, then every 5 minutes. Each reminder updates the same notification ("has been waiting 2 minutes"), and the notification disappears once you approve or deny.
+- **It reminds you every 5 minutes while the request waits.** Each reminder updates the same notification ("has been waiting 5 minutes"), and the notification disappears once you approve or deny.
 - **The notification comes from the program that asked.** That program runs as you, in your desktop session, and reminds you only while it is still waiting. A request from a script with no desktop session (cron, SSH) only rings the bell.
 - **The chime is envh's own**, a short rising bell, so it isn't mistaken for another app. envh generates it and keeps it in your private runtime folder (`$XDG_RUNTIME_DIR`).
 - **Its text is fixed.** It never shows the requester's reason, so a request can't use it to show you instructions.

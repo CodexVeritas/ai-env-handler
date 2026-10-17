@@ -10,9 +10,9 @@ from envh.client import attention
 from envh.common import reminder_delays
 
 
-def test_reminders_come_after_30s_1min_2min_5min_then_every_5min() -> None:
+def test_reminders_come_every_5min() -> None:
     delays = reminder_delays()
-    assert [next(delays) for _ in range(7)] == [30, 30, 60, 180, 300, 300, 300]
+    assert [next(delays) for _ in range(3)] == [300, 300, 300]
 
 
 def test_the_chime_is_a_short_mono_wav_that_never_clips() -> None:
