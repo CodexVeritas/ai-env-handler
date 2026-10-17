@@ -172,8 +172,8 @@ and Cursor (`beforeShellExecution`) input shapes.
 - No pre-decision write: `validate`/`propose`/`import` never touch `presets.yaml`/`config.yaml`/the
   vault before `approve()`; `list` byte-identical across blocking propose/import.
 - Identity: bound to the kernel `SO_PEERCRED` uid read once at connect, immune to `SCM_RIGHTS`
-  fd-passing; unlisted `outsider` rejected before any op. Session ids are 64-bit CSPRNG, never leaked
-  to non-owners. Cross-uid use of session_wait/end/run blocked.
+  fd-passing; unlisted `outsider` rejected before any op. Session ids were 64-bit CSPRNG at the time
+  (they are now two words; see the README), never leaked to non-owners. Cross-uid use of session_wait/end/run blocked.
 - No value/fingerprint leaked by `list`/`status`/`preset_validate`; propose/import carry the
   diff/fingerprints/resolution only in `request.summary` (console) and `request.result` (post-approval).
 - Preset-backup path (importer) is traversal/symlink-safe; scanner regexes are linear (no ReDoS).
@@ -189,7 +189,7 @@ and Cursor (`beforeShellExecution`) input shapes.
 ## Method & coordination notes
 - 12 attack agents (Wave 1 = 4 smoke, Wave 2 = 8) across 12 disjoint surface families, each writing a
   structured findings file; 4 independent adversarial graders reproduced every candidate as non-root
-  and graded it against the frozen rubric. Full artifacts in `/opt/ctf/arena/` (findings/ + grading/).
+  and graded it against the frozen rubric. Full artifacts were in `/opt/ctf/arena/` on the audit machine; copies are in `evidence/`.
 - Coordination lessons applied between waves: parallel agents can't read each other's ledger (so the
   event-loop-wedge was independently found twice — complementary root causes), fixed by feeding Wave 2
   a digest of Wave 1; and destructive DoS on a shared broker degraded concurrent agents, fixed by
