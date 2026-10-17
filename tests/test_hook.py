@@ -153,6 +153,8 @@ DECISIONS = pytest.mark.parametrize(
         # a session that is set then stripped by env before envh runs is not a session
         ("ENVH_SESSION=deadbeef env -i envh run --reason r -- echo hi", "ask"),
         ("ENVH_SESSION=deadbeef env -u ENVH_SESSION envh run --reason r -- echo hi", "ask"),
+        ("ENVH_SESSION=deadbeef env -uENVH_SESSION envh run --reason r -- echo hi", "ask"),
+        ("ENVH_SESSION=deadbeef env - envh run --reason r -- echo hi", "ask"),
         ("export ENVH_SESSION=abc && env -i envh run --reason r -- echo hi", "ask"),
         # env --split-string / -S runs a nested command the hook must read
         ('env --split-string="envh run --reason r -- echo hi"', "ask"),

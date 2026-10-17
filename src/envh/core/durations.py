@@ -23,10 +23,7 @@ def parse_duration(text: str) -> timedelta:
     amount = int(match.group(1))
     if amount <= 0:
         raise DurationError(f"invalid duration {text!r}: must be greater than zero")
-    try:
-        return timedelta(**{_UNITS[match.group(2)]: amount})
-    except OverflowError as error:
-        raise DurationError(f"invalid duration {text!r}: too large") from error
+    return timedelta(**{_UNITS[match.group(2)]: amount})
 
 
 def format_duration(duration: timedelta) -> str:

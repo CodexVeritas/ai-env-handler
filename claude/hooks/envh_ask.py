@@ -411,15 +411,15 @@ def assigns_session(word: str) -> bool:
 
 
 def env_clears_session(env_args: list[str]) -> bool:
-    """Whether this `env` invocation starts its child with ENVH_SESSION unset: `-i`/`--ignore-environment`,
-    or `-u ENVH_SESSION` / `--unset ENVH_SESSION`. So a counted ENVH_SESSION the command then strips is
-    not treated as a live session."""
+    """Whether this `env` invocation starts its child with ENVH_SESSION unset: `-i`/`-`/`--ignore-environment`,
+    or `-u ENVH_SESSION` / `-uENVH_SESSION` / `--unset ENVH_SESSION`. So a counted ENVH_SESSION the command then
+    strips is not treated as a live session."""
     index = 0
     while index < len(env_args):
         word = env_args[index]
         if not word.startswith("-"):
             return False
-        if word in ("-i", "--ignore-environment") or (not word.startswith("--") and "i" in word):
+        if word in ("-", "-i", "--ignore-environment", "-u" + SESSION_VAR) or (not word.startswith("--") and "i" in word):
             return True
         if word in ("-u", "--unset"):
             if env_args[index + 1 : index + 2] == [SESSION_VAR]:
