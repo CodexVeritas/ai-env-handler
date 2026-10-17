@@ -2,7 +2,9 @@
 
 Human-approved secrets for scripts and AI coding agents, on Linux.
 
-[Watch the five-minute walkthrough](docs/demo.mp4) of setup and daily use, recorded with fake keys.
+https://github.com/user-attachments/assets/d9ada2fc-4999-4a00-a756-6ed6b49f5aa6
+
+A five-minute walkthrough of setup and daily use, recorded with fake keys. If it doesn't play, [download it](docs/demo.mp4).
 
 Your API keys stop living in `.env` files. They move into a vault owned by a separate Linux user, and every use of a key is approved by you on a console that runs as that separate user. You approve a **session** (a set of variables, for a number of minutes, with a reason); scripts and agents then run inside it. Everything is logged.
 
