@@ -90,6 +90,7 @@ class Broker:
         self.audit.event(
             "request",
             id=request.id,
+            uid=request.provenance.uid,
             kind=request.kind,
             pid=request.provenance.pid,
             reason=request.reason or "(no reason given)",
@@ -421,11 +422,11 @@ class Broker:
             self.write_presets(merged)
             self.audit.event("import_applied", added=request.summary["added"], reused=request.summary["reused"], renamed=request.summary["renamed"], presets=request.summary["presets"])
         self.state.decide(request, approved=True, by=by)
-        self.audit.event("decision", id=request.id, outcome="approved", by=by)
+        self.audit.event("decision", id=request.id, uid=request.provenance.uid, outcome="approved", by=by)
 
     def deny(self, request: Request, by: str = "console") -> None:
         self.state.decide(request, approved=False, by=by)
-        self.audit.event("decision", id=request.id, outcome="denied", by=by)
+        self.audit.event("decision", id=request.id, uid=request.provenance.uid, outcome="denied", by=by)
 
     def check_rename(self, old: str, new: str) -> tuple[str | None, str | None, Config]:
         """Check that old can be renamed to new, changing nothing. Returns the new config.yaml and presets.yaml texts

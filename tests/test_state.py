@@ -54,7 +54,7 @@ async def test_runs() -> None:
     table = StateTable(FakeClock())
     run = table.start_run({"A": "A"}, None, "r", ("python", "x.py"), PROVENANCE)
     assert table.active_runs() == [run]
-    table.end_run(run.id)
+    table.end_run(run)
     assert table.active_runs() == []
 
 
@@ -65,22 +65,29 @@ async def test_prune_history() -> None:
     table.decide(decided, approved=True, by="console")
     pending = table.new_request("run", {"A": "A"}, PROVENANCE, None)
     run = table.start_run({"A": "A"}, None, None, (), PROVENANCE)
-    table.end_run(run.id)
+    table.end_run(run)
     clock.advance(timedelta(hours=2))
     assert table.prune_history() == 2
-    assert decided.id not in table.requests and pending.id in table.requests and run.id not in table.runs
+    assert (PROVENANCE.uid, decided.id) not in table.requests and (PROVENANCE.uid, pending.id) in table.requests and (PROVENANCE.uid, run.id) not in table.runs
 
 
-async def test_request_and_run_ids_are_unique_and_not_a_global_sequence() -> None:
-    # Ids must not be a monotonic counter: a sequential id lets a client that sees its own id infer
-    # how many requests/runs other users allocated (a cross-user activity-count leak).
+async def test_ids_are_per_user_sequential_and_do_not_leak_other_users_activity() -> None:
+    # Ids count per user (readable #1, #2, …), shared across that user's requests and runs, with the
+    # tables keyed by (uid, seq). The key property: one user's ids must reveal nothing about how many
+    # requests/runs another user allocated — each user's counter advances only on its own actions.
     table = StateTable(FakeClock())
-    requests = [table.new_request("run", {"A": "A"}, PROVENANCE, None) for _ in range(10)]
-    runs = [table.start_run({"A": "A"}, None, None, (), PROVENANCE) for _ in range(20)]
-    ids = [request.id for request in requests] + [run.id for run in runs]
-    assert len(set(ids)) == len(ids)  # all unique across requests and runs
-    assert all(identifier > 0 for identifier in ids)
-    assert sorted(ids) != list(range(min(ids), min(ids) + len(ids)))  # not a contiguous sequence
+    alice = Provenance(pid=1, uid=1000, cmdline="a")
+    bob = Provenance(pid=2, uid=1001, cmdline="b")
+    a1 = table.new_request("run", {"A": "A"}, alice, None)
+    a2 = table.start_run({"A": "A"}, None, None, (), alice)
+    # Bob's five allocations happen between two of Alice's but do not advance Alice's counter.
+    bob_ids = [table.new_request("run", {"A": "A"}, bob, None).id for _ in range(5)]
+    a3 = table.new_request("run", {"A": "A"}, alice, None)
+    assert [a1.id, a2.id, a3.id] == [1, 2, 3]  # contiguous per user, unaffected by Bob's activity
+    assert bob_ids == [1, 2, 3, 4, 5]  # Bob has his own sequence, also starting at 1
+    # The same seq for two users does not collide: the tables are keyed by (uid, seq).
+    assert table.requests[(alice.uid, 1)] is a1 and table.runs[(alice.uid, 2)] is a2
+    assert (bob.uid, 1) in table.requests and table.requests[(bob.uid, 1)] is not a1
 
 
 async def test_pending_requests_are_capped_per_user() -> None:

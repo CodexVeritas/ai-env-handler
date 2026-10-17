@@ -90,7 +90,7 @@ async def test_session_wait_resumes_after_disconnect(control: Path, harness: Har
         await client.send(op="session_start", **{"with": ["OPENAI_API_KEY"]}, minutes=10)
         request_id = (await client.recv())["request_id"]
     await asyncio.sleep(0.05)
-    request = harness.broker.state.requests[request_id]
+    request = next(iter(harness.broker.state.requests.values()))
     assert request.pending and request.abandon_at is not None
     async with Client(control) as client:
         await client.send(op="session_wait", request_id=request_id)

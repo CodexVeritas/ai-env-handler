@@ -3,9 +3,9 @@
 Every CONFIRMED finding in `FINDINGS.md` is fixed here, with a regression test. The REJECTED and
 KNOWN items are not code-changed (they are out of scope or acknowledged). Each fix was also
 re-validated live against the running broker as the non-root `redteam` user (the exploit no longer
-works). Full suite: 559 passed (the only failures are 3 pre-existing `test_install.py` cases that
+works). The full suite passes (the only failures are 3 pre-existing `test_install.py` cases that
 require a non-root runner — they fail identically on the unmodified baseline because the suite here
-runs as root with no `SUDO_USER`).
+runs as root with no `SUDO_USER`; CI runs them non-root and they pass).
 
 | Finding | Fix | File(s) | Test |
 |---|---|---|---|
@@ -15,7 +15,7 @@ runs as root with no `SUDO_USER`).
 | **V3** fd-exhaustion | Per-uid (32) and global (256) concurrent-connection caps; a 30 s idle timeout on the first request line; the broker raises its own `RLIMIT_NOFILE` to the hard limit. | `server/control.py` (`MAX_CONNECTIONS*`, `FIRST_LINE_TIMEOUT_SECONDS`), `server/hardening.py` | `test_control.py::test_one_user_cannot_hold_more_than_the_connection_cap`, `::test_an_idle_connection_is_dropped` |
 | **V4** audit disk-fill via uncapped `reason` | `reason` is capped at 1000 characters at the socket boundary. | `server/control.py` `_reason` / `MAX_REASON` | `test_control.py::test_an_overlong_reason_is_refused_before_any_request_exists` |
 | **V5** uncaught duration `ValueError`/`OverflowError` | The duration regex bounds the digit count (1–8), and `timedelta` construction catches `OverflowError` → `DurationError`. | `core/durations.py` | `test_durations.py::test_absurdly_long_durations_are_clean_errors_not_crashes`, `test_config.py::test_an_absurd_duration_in_a_preset_is_a_config_error` |
-| **V7** cross-user `_next_id` count leak | Request/run ids are random and unique, not a global monotonic counter, so a client's own id reveals nothing about other users' activity. | `core/state.py` `_allocate_id` | `test_state.py::test_request_and_run_ids_are_unique_and_not_a_global_sequence` |
+| **V7** cross-user `_next_id` count leak | Request/run ids are now a **per-user sequence** (each user counts its own `#1`, `#2`, … shared across its requests and runs), with the live tables keyed by `(uid, seq)`, instead of one global monotonic counter — so a client's own id reveals nothing about other users' activity, and the ids stay short and readable on the console. The console feed/logs label each id with the requester (`alice#3`) to tell two users' sequences apart. | `core/state.py` `_allocate_id`, `server/console/activity.py` | `test_state.py::test_ids_are_per_user_sequential_and_do_not_leak_other_users_activity` |
 | **V8** hook bypasses (10) | Runner value-option table (uv/poetry); `env -S`/`--split-string` parsed as a nested script; value-taking shell options before `-c` skipped; `eval` drops a leading `--`; empty `ENVH_SESSION=`/`--session=` is not a session; a bare unexported `ENVH_SESSION=` no longer counts; `env -i`/`-u ENVH_SESSION` clears a counted session; nesting past the cap falls back to the word-match; the fallback regex allows a `--socket` option before the subcommand. | `claude/hooks/envh_ask.py` | `test_hook.py` (regression block; both Claude Code and Cursor shapes) |
 
 Note on V8: the Claude/Cursor hook is explicitly **not** a security boundary (the console always

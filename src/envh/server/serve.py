@@ -120,7 +120,7 @@ async def run_broker(data_dir: Path, socket_path: Path) -> None:
         while True:
             await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
             for request in state.sweep_abandoned():
-                audit.event("abandoned", id=request.id)
+                audit.event("abandoned", id=request.id, uid=request.provenance.uid)
             state.prune_history()
 
     console_task = asyncio.create_task(app.run(reader, Terminal(tty_fd, write)))

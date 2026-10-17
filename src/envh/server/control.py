@@ -159,7 +159,7 @@ class Connection:
         if await self._wait_decision(request):
             return True
         self.broker.state.withdraw(request)
-        self.broker.audit.event("withdrawn", id=request.id)
+        self.broker.audit.event("withdrawn", id=request.id, uid=request.provenance.uid)
         return False
 
     async def _wait_decision(self, request: Request) -> bool:
@@ -205,8 +205,8 @@ class Connection:
         await self._attend(request)
 
     async def op_session_wait(self, message: dict[str, Any]) -> None:
-        request = self.broker.state.requests.get(int(message.get("request_id") or 0))
-        if request is None or request.kind != "session" or request.provenance.uid != self.provenance.uid:
+        request = self.broker.state.requests.get((self.provenance.uid, int(message.get("request_id") or 0)))
+        if request is None or request.kind != "session":
             raise RequestError("unknown session request id")
         request.abandon_at = None
         await self.send({"ok": True, "request_id": request.id, "pending": request.pending, "notify": self.broker.config.notify})
@@ -220,7 +220,7 @@ class Connection:
             await self._reply_decision(request)
         else:
             self.broker.state.mark_detached(request)
-            self.broker.audit.event("detached", id=request.id, grace_until=request.abandon_at)
+            self.broker.audit.event("detached", id=request.id, uid=request.provenance.uid, grace_until=request.abandon_at)
 
     async def op_session_end(self, message: dict[str, Any]) -> None:
         session = self.broker.end_session(str(message.get("session_id") or ""), by=f"pid {self.provenance.pid}", uid=self.provenance.uid)
@@ -249,7 +249,7 @@ class Connection:
 
     async def _start_run(self, mapping: dict[str, str], session_id: str | None, reason: str | None, command: tuple[str, ...]) -> None:
         run = self.broker.state.start_run(mapping, session_id, reason, command, self.provenance)
-        self.broker.audit.event("run_start", run=run.id, vars=sorted(mapping), session=session_id, pid=self.provenance.pid, command=" ".join(command))
+        self.broker.audit.event("run_start", run=run.id, uid=run.provenance.uid, vars=sorted(mapping), session=session_id, pid=self.provenance.pid, command=" ".join(command))
         exit_code: int | None = None
         lingering_terminated: int | None = None
         try:
@@ -267,10 +267,11 @@ class Connection:
                     lingering_terminated = note.get("lingering_terminated")
                     break
         finally:
-            self.broker.state.end_run(run.id)
+            self.broker.state.end_run(run)
             self.broker.audit.event(
                 "run_end",
                 run=run.id,
+                uid=run.provenance.uid,
                 exit_code=exit_code if exit_code is not None else "client gone",
                 lingering_terminated=lingering_terminated if lingering_terminated is not None else "unknown",
             )

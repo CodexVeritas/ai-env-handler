@@ -18,6 +18,7 @@ from envh.server.console import app as app_module
 from envh.server.console import logs
 from envh.server.console.activity import Activity
 from envh.server.console.app import ConsoleApp
+from envh.server.console.summaries import login_name
 from envh.server.console.tui import Paste, plain, text_width
 from tests.conftest import PASSPHRASE, Harness
 
@@ -152,7 +153,7 @@ async def test_requests_come_one_at_a_time_and_down_or_esc_then_enter_denies(har
     console.press("enter")
     assert second.decision.result().outcome == "denied"
     screen = console.screen()
-    assert f"Run request #{second.id} · no reason given" in screen and f"Denied #{second.id}" in screen
+    assert f"Run request {login_name(harness.provenance().uid)}#{second.id} · no reason given" in screen and f"Denied #{second.id}" in screen
 
 
 async def test_a_wrong_passphrase_is_audited_and_pauses_typing(harness: Harness) -> None:
@@ -378,7 +379,7 @@ async def test_a_key_set_to_need_no_approval_is_granted_without_a_card(harness: 
     console.press("escape", "escape")
     request = run_request(harness)
     assert request.decision.result().outcome == "approved" and console.app.card is None and console.written == []
-    assert f'Run request #{request.id} · "why" · granted, its keys need no approval' in console.screen()
+    assert f'Run request {login_name(harness.provenance().uid)}#{request.id} · "why" · granted, its keys need no approval' in console.screen()
     assert f"Approved #{request.id}" not in console.screen()
 
 

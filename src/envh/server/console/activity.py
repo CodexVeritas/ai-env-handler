@@ -12,7 +12,7 @@ from typing import Any
 
 from envh.common import printable
 from envh.core.audit import AuditEvent
-from envh.server.console.summaries import plural
+from envh.server.console.summaries import login_name, plural
 from envh.server.console.tui import DIM, MARKS, Line, Span, styled, wrap
 
 ACTIVITY_KEPT = 500
@@ -33,6 +33,20 @@ def names(value: Any) -> str:
     return ", ".join(str(item) for item in value) if isinstance(value, (list, tuple)) else str(value)
 
 
+def ident(fields: dict[str, Any], key: str = "id") -> str:
+    """The id a user sees, labelled with who asked — e.g. `alice#3`. Ids count per user, so the label is
+    what tells two users' `#3`s apart in a feed that interleaves them. Falls back to a bare `#3` for an
+    older audit line that recorded no uid."""
+    uid = fields.get("uid")
+    if not isinstance(uid, int):
+        return f"#{fields.get(key)}"
+    try:
+        name = login_name(uid)
+    except (KeyError, OverflowError, ValueError, TypeError):
+        name = f"uid {uid}"
+    return f"{name}#{fields.get(key)}"
+
+
 def describe(event: AuditEvent) -> tuple[str, str] | None:
     """The kind (ok, warn, error or info) and text of an event's line, or None for one not shown."""
     fields = event.fields
@@ -41,22 +55,22 @@ def describe(event: AuditEvent) -> tuple[str, str] | None:
     if event.name == "request":
         presets = names(fields.get("presets") or [])
         reason = fields.get("reason")
-        text = f"{KIND_NAMES.get(str(fields.get('kind')), 'Request')} #{fields.get('id')}" + (f" · {presets}" if presets else "")
+        text = f"{KIND_NAMES.get(str(fields.get('kind')), 'Request')} {ident(fields)}" + (f" · {presets}" if presets else "")
         text += f' · "{reason}"' if reason and reason != NO_REASON else " · no reason given"
         return ("ok", f"{text} · granted, its keys need no approval") if fields.get("approval") == "auto" else ("warn", text)
     if event.name == "decision" and fields.get("by") == "auto":
         return None
     if event.name == "decision":
         approved = fields.get("outcome") == "approved"
-        return ("ok", f"Approved #{fields.get('id')}") if approved else ("error", f"Denied #{fields.get('id')}")
+        return ("ok", f"Approved {ident(fields)}") if approved else ("error", f"Denied {ident(fields)}")
     simple = {
         "session_start": ("ok", lambda: f"Session {str(fields.get('session'))[:8]} open until {str(fields.get('expires'))[11:16]} · {names(fields.get('vars', []))}"),
         "session_end": ("info", lambda: f"Session {str(fields.get('session'))[:8]} ended" + (" from the console" if fields.get("by") == "console" else "")),
-        "run_start": ("info", lambda: f"Run #{fields.get('run')} started · {fields.get('command')}" + (f" · session {str(fields.get('session'))[:8]}" if fields.get("session") else "")),
-        "run_end": ("info", lambda: f"Run #{fields.get('run')} ended · exit {fields.get('exit_code')}" + lingering(fields.get("lingering_terminated"))),
-        "withdrawn": ("info", lambda: f"#{fields.get('id')} withdrawn: the program that asked went away"),
-        "detached": ("info", lambda: f"#{fields.get('id')} still waits; the program that asked stopped waiting for it"),
-        "abandoned": ("info", lambda: f"#{fields.get('id')} expired unanswered"),
+        "run_start": ("info", lambda: f"Run {ident(fields, 'run')} started · {fields.get('command')}" + (f" · session {str(fields.get('session'))[:8]}" if fields.get("session") else "")),
+        "run_end": ("info", lambda: f"Run {ident(fields, 'run')} ended · exit {fields.get('exit_code')}" + lingering(fields.get("lingering_terminated"))),
+        "withdrawn": ("info", lambda: f"{ident(fields)} withdrawn: the program that asked went away"),
+        "detached": ("info", lambda: f"{ident(fields)} still waits; the program that asked stopped waiting for it"),
+        "abandoned": ("info", lambda: f"{ident(fields)} expired unanswered"),
         "wrong_passphrase": ("warn", lambda: f"Wrong passphrase ({fields.get('action')})"),
         "admin_add": ("ok", lambda: f"Stored {fields.get('secret')}"),
         "admin_replace": ("ok", lambda: f"Replaced the value of {fields.get('secret')}"),
