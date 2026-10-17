@@ -6,8 +6,6 @@ surface the secret `CAPTURE_THE_FLAG` (or any secret value) without a console ap
 
 - `CHARTER.md` — FROZEN rules of engagement: scope, win conditions, grading rubric, coordination
   and validation protocol. Committed and hashed before any attack agent ran (see `PRECOMMIT.txt`).
-  `PRECOMMIT.txt` names the audit sandbox's base commit, which is not in this repository; the charter
-  itself landed in commit `307fcba` and still matches the hash.
 - `SURFACE_MAP.md` — attack-surface families used to assign disjoint work and dedup ideas.
 - `harness_init_vault.py` / `harness_serve_broker.py` — the headless CTF harness (generate their
   own random passphrase + flag at runtime; no secrets are stored in this repo).
