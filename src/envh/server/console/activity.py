@@ -12,6 +12,7 @@ from typing import Any
 
 from envh.common import printable
 from envh.core.audit import AuditEvent
+from envh.core.broker import MAX_UNKNOWN_SESSION_IDS
 from envh.server.console.summaries import login_name, plural
 from envh.server.console.tui import DIM, MARKS, Line, Span, styled, wrap
 
@@ -64,9 +65,9 @@ def describe(event: AuditEvent) -> tuple[str, str] | None:
         approved = fields.get("outcome") == "approved"
         return ("ok", f"Approved {ident(fields)}") if approved else ("error", f"Denied {ident(fields)}")
     simple = {
-        "session_start": ("ok", lambda: f"Session {str(fields.get('session'))[:8]} open until {str(fields.get('expires'))[11:16]} · {names(fields.get('vars', []))}"),
-        "session_end": ("info", lambda: f"Session {str(fields.get('session'))[:8]} ended" + (" from the console" if fields.get("by") == "console" else "")),
-        "run_start": ("info", lambda: f"Run {ident(fields, 'run')} started · {fields.get('command')}" + (f" · session {str(fields.get('session'))[:8]}" if fields.get("session") else "")),
+        "session_start": ("ok", lambda: f"Session {fields.get('session')} open until {str(fields.get('expires'))[11:16]} · {names(fields.get('vars', []))}"),
+        "session_end": ("info", lambda: f"Session {fields.get('session')} ended" + (" from the console" if fields.get("by") == "console" else "")),
+        "run_start": ("info", lambda: f"Run {ident(fields, 'run')} started · {fields.get('command')}" + (f" · session {fields.get('session')}" if fields.get("session") else "")),
         "run_end": ("info", lambda: f"Run {ident(fields, 'run')} ended · exit {fields.get('exit_code')}" + lingering(fields.get("lingering_terminated"))),
         "withdrawn": ("info", lambda: f"{ident(fields)} withdrawn: the program that asked went away"),
         "detached": ("info", lambda: f"{ident(fields)} still waits; the program that asked stopped waiting for it"),
@@ -84,6 +85,7 @@ def describe(event: AuditEvent) -> tuple[str, str] | None:
         "config_edited": ("ok", lambda: f"Saved {fields.get('file')}"),
         "vault_passphrase_changed": ("ok", lambda: "Changed the vault passphrase"),
         "rejected_uid": ("warn", lambda: f"Refused uid {fields.get('uid')}: not an allowed user (see /settings)"),
+        "unknown_session": ("warn", lambda: f"Unknown session {fields.get('session')} from {login_name(fields['uid'])}" + (" · refusing their sessions until the console restarts" if fields.get("count") == MAX_UNKNOWN_SESSION_IDS else "")),
         "error": ("error", lambda: f"Internal error in the {fields.get('where', 'broker')}; details in audit.jsonl"),
     }
     if event.name in simple:

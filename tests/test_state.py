@@ -1,8 +1,11 @@
+import re
 from datetime import timedelta
 
 import pytest
 
+import envh.core.state as state_module
 from envh.core.state import MAX_PENDING_PER_USER, Provenance, StateError, StateTable
+from envh.core.words import ADJECTIVES, NOUNS
 from tests.conftest import FakeClock
 
 PROVENANCE = Provenance(pid=1, uid=1000, cmdline="x")
@@ -48,6 +51,32 @@ async def test_sessions_expire_and_end() -> None:
         table.session(other.id)
     with pytest.raises(StateError, match="unknown"):
         table.session("nope")
+
+
+
+async def test_session_ids_are_an_adjective_and_a_noun() -> None:
+    table = StateTable(FakeClock())
+    request = table.new_request("session", {"A": "A"}, PROVENANCE, None, granted=timedelta(minutes=30))
+    adjective, noun = table.create_session(request).id.split("-")
+    assert adjective in ADJECTIVES and noun in NOUNS
+
+
+async def test_a_session_id_already_held_is_drawn_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    table = StateTable(FakeClock())
+    request = table.new_request("session", {"A": "A"}, PROVENANCE, None, granted=timedelta(minutes=30))
+    draws = iter(["brave", "otter", "brave", "otter", "calm", "otter"])
+    monkeypatch.setattr(state_module.random_secrets, "choice", lambda options: next(draws))
+    first = table.create_session(request)
+    second = table.create_session(request)
+    assert (first.id, second.id) == ("brave-otter", "calm-otter")
+    assert table.session("brave-otter") is first
+
+
+def test_session_words_are_short_lowercase_and_distinct() -> None:
+    for words in (ADJECTIVES, NOUNS):
+        assert all(re.fullmatch("[a-z]{3,8}", word) for word in words)
+        assert len(set(words)) == len(words)
+    assert not set(ADJECTIVES) & set(NOUNS)
 
 
 async def test_runs() -> None:

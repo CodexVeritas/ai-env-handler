@@ -36,13 +36,13 @@ class SessionsView(View):
             session = sessions[min(self.selection.index, len(sessions) - 1)]
             lines = [styled("Commands it already started keep running. New runs in it are refused.")]
             options = [("Keep it", lambda: None), ("End it now", lambda: self._end(session.id))]
-            self.app.open(Choice(self.app, f"End session {session.id[:8]}?", options, lines=lines))
+            self.app.open(Choice(self.app, f"End session {session.id}?", options, lines=lines))
         else:
             super().handle(key)
 
     def _end(self, session_id: str) -> None:
         if self.app.attempt(lambda: self.app.broker.end_session(session_id, by="console")):
-            self.app.tell(f"Ended session {session_id[:8]}.", "ok")
+            self.app.tell(f"Ended session {session_id}.", "ok")
 
     def body(self, columns: int, rows: int) -> list[Line]:
         state = self.app.broker.state
@@ -51,6 +51,7 @@ class SessionsView(View):
         runs = state.active_runs()
         lines: list[Line] = [styled(f"  Live sessions · {len(sessions)}", BOLD)]
         focus = 0
+        id_width = max((len(session.id) for session in sessions), default=0)
         if not sessions:
             lines.append(styled("    None. A session opens when you approve a session request.", DIM))
         for index, session in enumerate(sessions):
@@ -60,7 +61,7 @@ class SessionsView(View):
             label = ", ".join(session.presets) or "ad hoc"
             lines.append([
                 Span(f"  {POINTER} " if chosen else "    ", CYAN),
-                Span(f"{session.id[:8]}  ", BOLD if chosen else ""),
+                Span(f"{session.id:<{id_width}}  ", BOLD if chosen else ""),
                 Span(f"{login_name(session.provenance.uid):<10} {label:<20} "),
                 Span(f"ends {session.expires_at:%H:%M} (in {minutes_left((session.expires_at - now).total_seconds())})  ", DIM),
                 Span(", ".join(sorted(session.mapping)), DIM),
@@ -71,7 +72,7 @@ class SessionsView(View):
         if not runs:
             lines.append(styled("    None.", DIM))
         for run in runs:
-            where = f"session {run.session_id[:8]}" if run.session_id else "approved alone"
+            where = f"session {run.session_id}" if run.session_id else "approved alone"
             lines.append([
                 Span(f"    #{run.id:<5}"),
                 Span(f"{login_name(run.provenance.uid):<10} "),

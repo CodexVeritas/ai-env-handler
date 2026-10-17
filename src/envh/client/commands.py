@@ -157,8 +157,11 @@ def print_session(reply: dict[str, Any], quiet: bool) -> int:
 
 
 def cmd_session_end(args: argparse.Namespace, sock: Path) -> int:
+    session_id = args.session_id or os.environ.get(SESSION_ENV_VAR)
+    if not session_id:
+        raise ClientError(f"no session to end: name one, or set {SESSION_ENV_VAR}", EXIT_USAGE)
     with Connection(sock) as conn:
-        conn.send(op="session_end", session_id=args.session_id or os.environ.get(SESSION_ENV_VAR))
+        conn.send(op="session_end", session_id=session_id)
         conn.recv_ok()
     print("session ended")
     return 0
@@ -187,7 +190,7 @@ def cmd_list(args: argparse.Namespace, sock: Path) -> int:
         print("  (none)")
     print("LIVE SESSIONS")
     for session in payload["sessions"]:
-        print(f"  {session['id']}  {', '.join(session['presets']) or '(ad hoc)':<24} expires {session['expires_at']}  vars {', '.join(session['vars'])}  reason: {session['reason'] or '-'}")
+        print(f"  {', '.join(session['presets']) or '(ad hoc)':<24} expires {session['expires_at']}  vars {', '.join(session['vars'])}  reason: {session['reason'] or '-'}")
     if not payload["sessions"]:
         print("  (none)")
     return 0

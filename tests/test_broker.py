@@ -1,3 +1,4 @@
+import json
 import re
 from dataclasses import replace
 from datetime import timedelta
@@ -5,7 +6,7 @@ from datetime import timedelta
 import pytest
 
 from envh.common import peek
-from envh.core.broker import RequestError, fingerprint
+from envh.core.broker import MAX_UNKNOWN_SESSION_IDS, RequestError, fingerprint
 from envh.core.config import ConfigError, SecretEntry, load_config
 from envh.core.state import Request
 from envh.core.vault import Vault
@@ -67,13 +68,44 @@ async def test_run_in_session_resolution(harness: Harness) -> None:
         broker.resolve_run_in_session(session_id, ["DATABASE_URL"], uid)
     with pytest.raises(RequestError, match="maps to"):
         broker.resolve_run_in_session(session_id, ["OPENAI_API_KEY=TEAM_OPENROUTER_KEY"], uid)
-    with pytest.raises(RequestError, match="belongs to another user"):
+    with pytest.raises(RequestError, match="unknown session"):
         broker.resolve_run_in_session(session_id, [], uid + 1)
-    with pytest.raises(RequestError, match="belongs to another user"):
+    with pytest.raises(RequestError, match="unknown session"):
         broker.end_session(session_id, by="test", uid=uid + 1)
     assert broker.list_payload(for_uid=uid + 1)["sessions"] == []
     assert len(broker.list_payload(for_uid=uid)["sessions"]) == 1
     assert broker.env_for(resolved) == {"OPENAI_API_KEY": "sk-openai"}
+
+
+
+
+async def test_list_and_status_leave_session_ids_out(harness: Harness) -> None:
+    broker = harness.broker
+    mapping, presets = broker.mapping_from_presets(["team"], [])
+    request = broker.request_session(mapping, presets, 30, "work", (), harness.provenance())
+    broker.approve(request)
+    session_id = request.result["session_id"]
+    broker.state.start_run(mapping, session_id, "step", ("x",), harness.provenance())
+    status = broker.status_payload(for_uid=harness.provenance().uid)
+    assert status["runs"][0]["in_session"] and status["sessions"][0]["reason"] == "work"
+    assert session_id not in json.dumps(status) + json.dumps(broker.list_payload(for_uid=harness.provenance().uid))
+
+
+async def test_a_user_naming_too_many_unknown_session_ids_is_refused_every_session(harness: Harness) -> None:
+    broker = harness.broker
+    mapping, presets = broker.mapping_from_presets(["team"], [])
+    request = broker.request_session(mapping, presets, 30, None, (), harness.provenance())
+    broker.approve(request)
+    session_id = request.result["session_id"]
+    owner = harness.provenance().uid
+    guesser = owner + 1
+    for _ in range(MAX_UNKNOWN_SESSION_IDS):
+        with pytest.raises(RequestError, match="unknown session no-such"):
+            broker.resolve_run_in_session("no-such", [], guesser)
+    with pytest.raises(RequestError, match="refused"):
+        broker.resolve_run_in_session(session_id, [], guesser)
+    assert sum("unknown_session" in line for line in harness.echoed) == MAX_UNKNOWN_SESSION_IDS
+    assert broker.resolve_run_in_session(session_id, [], owner)[0].id == session_id
 
 
 async def test_import_then_approve_writes_vault_and_presets(harness: Harness) -> None:
