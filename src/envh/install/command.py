@@ -30,12 +30,34 @@ tty_path=$(tty) || { echo "envh-console needs a terminal" >&2; exit 1; }
 mkdir -p /run/envh
 chown SERVICE_USER:SERVICE_USER /run/envh
 chmod 755 /run/envh
-original_owner=$(stat -c %u "$tty_path")
-original_mode=$(stat -c %a "$tty_path")
-restore() { chown "$original_owner" "$tty_path" 2>/dev/null || true; chmod "$original_mode" "$tty_path" 2>/dev/null || true; }
+# sudo can run this on a pseudo-terminal of its own and relay what is typed into the terminal it was started
+# from, so the terminal of every ancestor process is locked too.
+terminals=$tty_path
+pid=$PPID
+while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+    ancestor_tty=$(ps -o tty= -p "$pid" | tr -d ' ')
+    case "$ancestor_tty" in
+        ""|"?") ;;
+        *) case " $terminals " in *" /dev/$ancestor_tty "*) ;; *) terminals="$terminals /dev/$ancestor_tty" ;; esac ;;
+    esac
+    pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+done
+saved=""
+for terminal in $terminals; do
+    saved="$saved $terminal:$(stat -c %u:%a "$terminal")"
+done
+restore() {
+    for entry in $saved; do
+        terminal=${entry%%:*} owner_and_mode=${entry#*:}
+        chown "${owner_and_mode%:*}" "$terminal" 2>/dev/null || true
+        chmod "${owner_and_mode#*:}" "$terminal" 2>/dev/null || true
+    done
+}
 trap restore EXIT INT TERM HUP
-chown SERVICE_USER "$tty_path"
-chmod 600 "$tty_path"
+for terminal in $terminals; do
+    chown SERVICE_USER "$terminal"
+    chmod 600 "$terminal"
+done
 if command -v runuser >/dev/null 2>&1; then
     runuser -u SERVICE_USER -- ENVH_BIN serve "$@"
 else

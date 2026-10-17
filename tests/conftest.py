@@ -3,6 +3,10 @@ from __future__ import annotations
 import asyncio
 import getpass
 import json
+import os
+import shlex
+import shutil
+import subprocess
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,6 +23,18 @@ from envh.core.vault import Vault
 
 PASSPHRASE = "test-passphrase"
 PASSPHRASE_LINE = f"{PASSPHRASE}\n".encode()
+needs_script = pytest.mark.skipif(shutil.which("script") is None, reason="needs util-linux script to make pseudo-terminals")
+
+
+def run_in_relayed_terminal(command: str, workdir: Path, extra_env: dict[str, str] | None = None) -> tuple[Path, Path]:
+    """Run a shell command on a pseudo-terminal fed from another one, as sudo does with use_pty. Returns the outer and
+    inner terminal paths."""
+    outer_file, inner_file = workdir / "outer-tty", workdir / "inner-tty"
+    inner = f"tty > {shlex.quote(str(inner_file))}; {command}"
+    outer = f"tty > {shlex.quote(str(outer_file))}; script -qec {shlex.quote(inner)} /dev/null"
+    result = subprocess.run(["script", "-qec", outer, "/dev/null"], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, env={**os.environ, **(extra_env or {})})
+    assert result.returncode == 0, result.stdout + result.stderr
+    return Path(outer_file.read_text().strip()), Path(inner_file.read_text().strip())
 
 
 class FakeClock:
