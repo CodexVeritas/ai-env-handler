@@ -92,9 +92,14 @@ class Pane:
     def __init__(self, name: str, size: tuple[int, int], argv: list[str], env: dict[str, str], cwd: Path, clock: Clock) -> None:
         pid, descriptor = pty.fork()
         if pid == 0:
-            os.chdir(cwd)
-            fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", size[1], size[0], 0, 0))
-            os.execvpe(argv[0], argv, env)
+            try:
+                os.chdir(cwd)
+                fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", size[1], size[0], 0, 0))
+                os.execvpe(argv[0], argv, env)
+            except OSError as error:
+                os.write(2, f"could not start {argv[0]}: {error}\n".encode())
+            finally:
+                os._exit(127)
         self.name = name
         self.size = size
         self.pid = pid

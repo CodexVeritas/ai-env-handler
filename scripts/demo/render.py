@@ -21,6 +21,7 @@ from playwright.sync_api import Page, sync_playwright
 PLAYER = Path(__file__).resolve().parent / "player.html"
 WIDTH, HEIGHT = 1920, 1080
 FPS = 30
+ENCODER_FINISH_SECONDS = 300
 # GitHub plays uploaded videos of up to 10 MB inline on free plans; the margin covers the MP4 container.
 SMALL_MEGABYTES = 9.5
 
@@ -48,7 +49,12 @@ def render(page: Page, recording: dict, output: Path) -> None:
                 print(f"frame {frame}/{frames}", flush=True)
     finally:
         encoder.stdin.close()
-        returncode = encoder.wait()
+        try:
+            returncode = encoder.wait(timeout=ENCODER_FINISH_SECONDS)
+        except subprocess.TimeoutExpired:
+            encoder.kill()
+            encoder.wait()
+            raise RuntimeError(f"ffmpeg did not finish within {ENCODER_FINISH_SECONDS}s of the last frame") from None
     if returncode != 0:
         raise RuntimeError(f"ffmpeg exited with {returncode}")
     print(f"wrote {output}", flush=True)

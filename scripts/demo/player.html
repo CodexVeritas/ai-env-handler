@@ -234,7 +234,7 @@ python3 scripts/setup_wizard.py</pre>
     play("auto", "auto_ran", { step: 5, focus: "agent" }),
     hold("auto_ran", 5, { pane: "agent", from: "envh run --with FRED_API_KEY", to: "rates.png", label: "No prompt on the console. It just ran." }, { step: 5 }),
     hold("auto_ran", 6, { pane: "console", from: "need no approval", to: "ended · exit", label: "Still logged. Use auto only for keys that cost little if leaked." }, { step: 5 }),
-    intro("deny", "Step 7 of 8", "Then the agent asks for something unexpected", "The production database key, with no reason.", { step: 5 }),
+    intro("deny", "Step 7 of 8", "Then the agent asks for something unexpected", "The production database key, with no reason.", { step: 6 }),
     play("deny", "deny_card", { step: 6, focus: "agent" }),
     hold("deny_card", 6, { pane: "console", from: "Run request #", to: "Deny", below: 1, label: "No reason, and not a key this project uses" }, { step: 6 }),
     play("deny_card", "deny_chosen", { step: 6, focus: "console" }),
