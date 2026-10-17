@@ -1,12 +1,14 @@
+import argparse
 import io
 import json
 import os
+import stat
 import time
 from pathlib import Path
 
 import pytest
 
-from envh.tools.scanner import VALUE_PATTERNS, Progress, looks_placeholder, present_kinds, scan_paths, scan_text
+from envh.tools.scanner import VALUE_PATTERNS, Progress, looks_placeholder, main, present_kinds, scan_paths, scan_text
 
 OPENAI = "sk-proj-" + "A1b2C3d4" * 6
 OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
@@ -167,3 +169,27 @@ def test_progress_draws_a_bar_with_the_folder_and_clears_it() -> None:
     assert stream.getvalue() == "\r\x1b[K  [██████████░░░░░░░░░░] 50% · 0.5 of 1.0 GB · ~/code/bot/src"
     progress.clear()
     assert stream.getvalue().endswith("\r\x1b[K")
+
+
+def test_results_are_saved_to_a_private_folder_and_the_terminal_gets_a_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    home = tmp_path / "home"
+    for index in range(30):
+        (home / f"project{index}").mkdir(parents=True)
+        (home / f"project{index}" / "notes.md").write_text(f"key {OPENAI}\nFRED_API_KEY={FRED}\n")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.chdir(home)
+    assert main(argparse.Namespace(paths=["."], json=False, max_size=25)) == 1
+    [report_dir] = (tmp_path / "state" / "envh" / "scans").iterdir()
+    assert stat.S_IMODE(report_dir.stat().st_mode) == 0o700
+    assert sorted(entry.name for entry in report_dir.iterdir()) == ["files.txt", "hits.json", "report.txt"]
+    assert all(stat.S_IMODE(entry.stat().st_mode) == 0o600 for entry in report_dir.iterdir())
+    expected = sorted(str(home / f"project{index}" / "notes.md") for index in range(30))
+    assert (report_dir / "files.txt").read_text().splitlines() == expected
+    assert len(json.loads((report_dir / "hits.json").read_text())["hits"]) == 60
+    assert expected[0] in (report_dir / "report.txt").read_text()
+    shown = capsys.readouterr().out
+    assert str(report_dir) in shown and "notes.md" not in shown
+    assert "60 key-shaped strings in 30 files" in shown and "openai 30, named-assignment 30" in shown
+    for entry in report_dir.iterdir():
+        assert OPENAI not in entry.read_text() and FRED not in entry.read_text()
+    assert scan_paths([report_dir], 1024 * 1024)[0] == []

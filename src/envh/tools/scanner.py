@@ -13,6 +13,7 @@ import sys
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator, TextIO
 
@@ -306,13 +307,27 @@ def skipped_folders_help() -> str:
     return f"Skipped folders: {', '.join(sorted(SKIP_DIR_NAMES, key=str.lower))}, and any folder tagged with {CACHE_TAG}."
 
 
+def headline(hits: list[Hit], scanned: int, elapsed: float) -> str:
+    file_count = len({hit.path for hit in hits})
+    strings = f"{len(hits):,} key-shaped string" + ("" if len(hits) == 1 else "s")
+    files = f"{file_count:,} file" + ("" if file_count == 1 else "s")
+    return f"scanned {scanned:,} text files in {readable_duration(elapsed)}; {strings} in {files}"
+
+
+def notes(unreadable: list[Path], say: Callable[[str], None]) -> None:
+    if unreadable:
+        say(f"\n{len(unreadable)} files or directories could not be read (permissions); run as the owning user to check them")
+    say("")
+    for line in (*SKIPPED_SUMMARY, *NOT_SCANNED_NOTE):
+        say(line)
+    say(f"Keys without a distinctive format ({', '.join(NAME_ONLY_PROVIDERS)}) are only recognized inside named assignments such as FRED_API_KEY=...; a bare copy of one in a transcript cannot be identified reliably.")
+
+
 def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, say: Callable[[str], None] = print) -> None:
     by_path: dict[Path, list[Hit]] = defaultdict(list)
     for hit in hits:
         by_path[hit.path].append(hit)
-    strings = f"{len(hits)} key-shaped string" + ("" if len(hits) == 1 else "s")
-    files = f"{len(by_path)} file" + ("" if len(by_path) == 1 else "s")
-    say(f"scanned {scanned:,} text files in {readable_duration(elapsed)}; {strings} in {files}")
+    say(headline(hits, scanned, elapsed))
     for path in sorted(by_path):
         say(f"\n{path}")
         for hit in sorted(by_path[path], key=lambda h: (h.line, h.kind)):
@@ -328,16 +343,45 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
             say(f"  id {digest}: {len(paths)} files")
             for path in sorted(paths):
                 say(f"      {path}")
-    if unreadable:
-        say(f"\n{len(unreadable)} files or directories could not be read (permissions); run as the owning user to check them")
-    say("")
-    for line in (*SKIPPED_SUMMARY, *NOT_SCANNED_NOTE):
-        say(line)
-    say(f"Keys without a distinctive format ({', '.join(NAME_ONLY_PROVIDERS)}) are only recognized inside named assignments such as FRED_API_KEY=...; a bare copy of one in a transcript cannot be identified reliably.")
+    notes(unreadable, say)
+
+
+def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, saved_to: Path, say: Callable[[str], None] = print) -> None:
+    """The terminal's short version of the report: a fixed number of lines however many keys were found."""
+    say(headline(hits, scanned, elapsed))
+    if hits:
+        by_kind = Counter(hit.kind for hit in hits)
+        say("  by kind: " + ", ".join(f"{kind} {count:,}" for kind, count in by_kind.most_common()))
+    say(f"Saved to {saved_to}: report.txt lists every hit, files.txt only the file paths, hits.json the same as --json.")
+    notes(unreadable, say)
+
+
+def default_report_root() -> Path:
+    state_home = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(state_home) / "envh" / "scans"
+
+
+def results_json(hits: list[Hit], scanned: int, unreadable: list[Path]) -> dict[str, object]:
+    return {"scanned": scanned, "hits": [hit.to_json() for hit in hits], "unreadable": [str(path) for path in unreadable]}
+
+
+def save_results(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, report_dir: Path) -> None:
+    """Write report.txt, files.txt and hits.json to a new folder only its owner can open. They hold no values."""
+    report_lines: list[str] = []
+    report(hits, scanned, unreadable, elapsed, report_lines.append)
+    contents = {
+        "report.txt": "\n".join(report_lines) + "\n",
+        "files.txt": "".join(f"{path}\n" for path in sorted({hit.path for hit in hits})),
+        "hits.json": json.dumps(results_json(hits, scanned, unreadable), indent=2) + "\n",
+    }
+    report_dir.mkdir(mode=0o700, parents=True)
+    for name, text in contents.items():
+        with os.fdopen(os.open(report_dir / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
+            handle.write(text)
 
 
 def main(args: argparse.Namespace) -> int:
-    roots = [Path(raw).expanduser() for raw in (args.paths or [str(Path.home())])]
+    roots = [Path(raw).expanduser().absolute() for raw in (args.paths or [str(Path.home())])]
     missing = [root for root in roots if not root.exists()]
     if missing:
         print(f"envh scan: no such path: {', '.join(str(path) for path in missing)}", file=sys.stderr)
@@ -351,8 +395,18 @@ def main(args: argparse.Namespace) -> int:
     finally:
         if progress is not None:
             progress.clear()
+    elapsed = time.monotonic() - started
+    report_dir = default_report_root() / datetime.now().strftime("%Y%m%d-%H%M%S")
+    try:
+        save_results(hits, scanned, unreadable, elapsed, report_dir)
+    except OSError as error:
+        print(f"envh scan: could not save the results to {report_dir}: {error}", file=sys.stderr)
+        if not args.json:
+            report(hits, scanned, unreadable, elapsed)
+            return 1 if hits else 0
     if args.json:
-        print(json.dumps({"scanned": scanned, "hits": [hit.to_json() for hit in hits], "unreadable": [str(path) for path in unreadable]}, indent=2))
+        print(json.dumps(results_json(hits, scanned, unreadable), indent=2))
+        print(f"Saved to {report_dir}", file=sys.stderr)
     else:
-        report(hits, scanned, unreadable, time.monotonic() - started)
+        summary(hits, scanned, unreadable, elapsed, report_dir)
     return 1 if hits else 0
