@@ -71,6 +71,33 @@ def make_non_dumpable() -> None:
         raise PlatformError(f"prctl(PR_SET_DUMPABLE, 0) failed with errno {errno}")
 
 
+def parent_and_terminal(pid: int) -> tuple[int, int]:
+    """A process's parent pid and the device number of its controlling terminal (0 for none)."""
+    after_name = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    return int(after_name[1]), int(after_name[4])
+
+
+def terminal_path(device: int) -> Path:
+    for path in [*Path("/dev/pts").iterdir(), *Path("/dev").glob("tty*")]:
+        try:
+            if path.stat().st_rdev == device:
+                return path
+        except OSError:
+            continue
+    raise PlatformError(f"no node in /dev for terminal device {os.major(device)}:{os.minor(device)}")
+
+
+def ancestor_terminals(pid: int) -> list[Path]:
+    """The terminals the process's ancestors run on, nearest first."""
+    devices: list[int] = []
+    ancestor, _ = parent_and_terminal(pid)
+    while ancestor > 1:
+        ancestor, device = parent_and_terminal(ancestor)
+        if device and device not in devices:
+            devices.append(device)
+    return [terminal_path(device) for device in devices]
+
+
 def legacy_tiocsti_enabled() -> bool | None:
     path = Path("/proc/sys/dev/tty/legacy_tiocsti")
     if not path.exists():

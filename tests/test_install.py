@@ -1,8 +1,11 @@
+import os
+import shlex
 from pathlib import Path
 
 import pytest
 
 from envh.install import command
+from tests.conftest import needs_script, run_in_relayed_terminal
 
 PASSWORDLESS_PROBLEM = "alice can run these with sudo without a password, so agents can too:\n  (root) NOPASSWD: /usr/local/bin/tool"
 
@@ -42,3 +45,24 @@ def test_a_dry_run_without_root_on_an_installed_system_explains_instead_of_crash
     monkeypatch.setattr(command.os, "access", lambda path, mode: False)
     assert command.main("install", ["--dry-run", "--ignore-preflight"]) == 1
     assert "run the dry run with sudo" in capsys.readouterr().err
+
+
+@needs_script
+def test_the_helper_locks_the_terminal_sudo_relays_from_as_well_as_its_own(tmp_path: Path) -> None:
+    fakes = tmp_path / "bin"
+    fakes.mkdir()
+    calls = tmp_path / "calls"
+    scripts = {name: f'#!/bin/sh\necho "{name} $*" >> {shlex.quote(str(calls))}\n' for name in ("chown", "chmod", "mkdir", "runuser")}
+    for name, script in {**scripts, "id": "#!/bin/sh\necho 0\n"}.items():
+        (fakes / name).write_text(script)
+        (fakes / name).chmod(0o755)
+    helper = tmp_path / "envh-console"
+    helper.write_text(command.HELPER_SCRIPT)
+    outer, inner = run_in_relayed_terminal(f"sh {shlex.quote(str(helper))}", tmp_path, {"PATH": f"{fakes}:{os.environ['PATH']}"})
+    lines = calls.read_text().splitlines()
+    launch = lines.index(f"runuser -u {command.SERVICE_USER} -- {command.ENVH_BIN} serve")
+    locked, restored = lines[:launch], lines[launch + 1 :]
+    for terminal in (inner, outer):
+        assert {f"chown {command.SERVICE_USER} {terminal}", f"chmod 600 {terminal}"} <= set(locked)
+        assert f"chown {os.getuid()} {terminal}" in restored
+        assert any(line.startswith("chmod ") and line.endswith(f" {terminal}") and line != f"chmod 600 {terminal}" for line in restored)
