@@ -1,3 +1,4 @@
+import json
 import os
 import pwd
 from pathlib import Path
@@ -43,6 +44,17 @@ async def test_unlisted_uid_is_rejected(control: Path, harness: Harness, as_uid)
         reply = await client.recv()
     assert reply["ok"] is False and "not in the broker's users list" in reply["error"]
     assert any("rejected_uid" in line for line in harness.echoed)
+
+
+async def test_an_unlisted_uid_cannot_write_a_long_command_line_to_the_audit_log(control: Path, harness: Harness, as_uid, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(control_module, "MAX_LOGGED_COMMAND", 10)
+    as_uid(4242424)
+    async with Client(control) as client:
+        await client.send(op="list")
+        await client.recv()
+    audit_lines = (harness.data_dir / "audit.jsonl").read_text().splitlines()
+    rejected = next(record for record in map(json.loads, audit_lines) if record["event"] == "rejected_uid")
+    assert len(rejected["cmdline"]) < 40 and rejected["cmdline"].endswith("more characters)")
 
 
 async def test_other_user_cannot_see_or_use_my_session(control: Path, harness: Harness, as_uid) -> None:

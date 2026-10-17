@@ -156,8 +156,14 @@ def parse_env_file(path: Path) -> ParsedFile:
     size = path.stat().st_size
     if size > MAX_IMPORT_BYTES:
         raise ClientError(f"{path} is {size // (1024 * 1024)} MB, over envh import's {MAX_IMPORT_BYTES // (1024 * 1024)} MB limit; deselect it, or point envh import at the real .env file", 2)
-    # errors="replace" so one stray non-UTF-8 byte in a discovered file does not abort the whole import.
-    return parse_env_text(path, path.read_text(encoding="utf-8", errors="replace"))
+    data = path.read_bytes()
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        # split as parse_env_text does; the appended character stands for the line holding the bad byte
+        line = len((data[: error.start].decode("utf-8") + "?").splitlines())
+        raise ClientError(f"{path}:{line} is not valid UTF-8; fix that line or deselect the file, then import again", 2) from error
+    return parse_env_text(path, text)
 
 
 def looks_secret(name: str, value: str) -> bool:
@@ -480,7 +486,7 @@ def write_rewrites(plan: ImportPlan, say: Callable[[str], None]) -> None:
         target = path.resolve()
         mode = os.stat(target).st_mode & 0o777
         temp_path = target.with_name(target.name + ".envh-tmp")
-        temp_path.write_text(new_text)
+        temp_path.write_text(new_text, encoding="utf-8")
         os.chmod(temp_path, mode)
         os.replace(temp_path, target)
         say(f"  rewrote {path}" + (f" (symlink to {target})" if path.is_symlink() else ""))

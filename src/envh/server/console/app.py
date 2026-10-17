@@ -22,7 +22,7 @@ from envh.server.console.activity import Activity
 from envh.server.console.dialogs import Choice, PassphraseDialog, View
 from envh.server.console.home import Command, HomeView
 from envh.server.console.request_card import RequestCard
-from envh.server.console.summaries import plural
+from envh.server.console.summaries import login_name, plural
 from envh.server.console.tui import ACCENT, BELL, BOLD, DIM, YELLOW, Display, Key, KeyReader, Line, Paste, Span, Terminal, line_width, mark, render, styled
 from envh.server.control import HandledErrors
 
@@ -119,14 +119,14 @@ class ConsoleApp:
             return
         self.card = None
         self.changed()
-        self.tell(f"Approved #{request.id}.", "ok")
+        self.tell(f"Approved {login_name(request.provenance.uid)}#{request.id}.", "ok")
         self.present()
 
     def deny(self, card: RequestCard) -> None:
         request = card.request
         if request.pending:
             self.broker.deny(request)
-            self.tell(f"Denied #{request.id}.")
+            self.tell(f"Denied {login_name(request.provenance.uid)}#{request.id}.")
         self.dismiss_card()
 
     def dismiss_card(self) -> None:

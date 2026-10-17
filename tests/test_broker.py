@@ -2,12 +2,13 @@ import json
 import re
 from dataclasses import replace
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
 from envh.common import peek
-from envh.core.broker import MAX_UNKNOWN_SESSION_IDS, RequestError, fingerprint
-from envh.core.config import ConfigError, SecretEntry, load_config
+from envh.core.broker import MAX_PRESET_BYTES, MAX_UNKNOWN_SESSION_IDS, RequestError, fingerprint
+from envh.core.config import ConfigError, SecretEntry, dump_presets, load_config
 from envh.core.state import Request
 from envh.core.vault import Vault
 from tests.conftest import PASSPHRASE, Harness, make_auto
@@ -289,6 +290,23 @@ def test_oversized_preset_document_is_refused_before_parsing(harness: Harness) -
         harness.broker.validate_preset_yaml(huge)
     with pytest.raises(RequestError, match="larger than"):
         harness.broker.request_preset(huge, "big", harness.provenance())
+
+
+async def test_oversized_import_presets_are_refused_before_parsing(harness: Harness) -> None:
+    presets = {f"bot-{index}": {"env": {f"VAR_{index}": "OPENAI_API_KEY"}} for index in range(2000)}
+    with pytest.raises(RequestError, match="larger than"):
+        harness.broker.request_import({"OPENAI_API_KEY": "sk-openai"}, presets, "big", harness.provenance())
+    assert harness.broker.state.pending() == []
+
+
+async def test_import_presets_small_as_json_but_large_as_yaml_are_refused_before_parsing(harness: Harness) -> None:
+    def nested_env(depth: int) -> Any:
+        return "OPENAI_API_KEY" if depth == 0 else {"env": nested_env(depth - 1)}
+
+    presets = {f"bot-{index}": nested_env(60) for index in range(30)}
+    assert len(json.dumps(presets)) < MAX_PRESET_BYTES < len(dump_presets(presets))
+    with pytest.raises(RequestError, match="larger than"):
+        harness.broker.request_import({"OPENAI_API_KEY": "sk-openai"}, presets, "nested", harness.provenance())
 
 
 async def test_session_runs_refuse_secrets_that_became_per_run(harness: Harness) -> None:

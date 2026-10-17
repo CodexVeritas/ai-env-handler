@@ -18,6 +18,7 @@ from envh.core.vault import VaultError
 MAX_LINE = 1024 * 1024
 MAX_SOCKET_PATH = 100
 MAX_REASON = 1000
+MAX_LOGGED_COMMAND = 4000
 # A client that has passed the uid check but sends no request is dropped after this long, so idle
 # connections cannot be held open to exhaust the broker's file descriptors.
 FIRST_LINE_TIMEOUT_SECONDS = 30
@@ -26,6 +27,15 @@ FIRST_LINE_TIMEOUT_SECONDS = 30
 MAX_CONNECTIONS = 256
 MAX_CONNECTIONS_PER_UID = 32
 HandledErrors = (RequestError, StateError, ConfigError, VaultError)
+
+
+def logged_command(text: str) -> str:
+    """A command line as the audit log keeps it, cut to MAX_LOGGED_COMMAND characters so that a client nobody approves
+    (an unlisted uid, keys marked auto, a run inside a session) cannot write megabytes to the log. Nothing is refused
+    for a long command line."""
+    if len(text) <= MAX_LOGGED_COMMAND:
+        return text
+    return f"{text[:MAX_LOGGED_COMMAND]}… ({len(text) - MAX_LOGGED_COMMAND} more characters)"
 
 
 class ControlServer:
@@ -59,7 +69,7 @@ class ControlServer:
         uid = connection.provenance.uid
         if len(self._open_writers) >= MAX_CONNECTIONS or self._per_uid.get(uid, 0) >= MAX_CONNECTIONS_PER_UID:
             self.broker.audit.event("connection_rejected", uid=uid, pid=connection.provenance.pid, open=len(self._open_writers))
-            await connection.send({"ok": False, "error": "the broker has too many open connections; close some and retry"})
+            await connection.send({"ok": False, "error": f"too many envh commands are running or waiting (at most {MAX_CONNECTIONS_PER_UID} per user, {MAX_CONNECTIONS} in all); retry when one finishes"})
             await self._shut(writer)
             return
         self._open_writers.add(writer)
@@ -112,7 +122,7 @@ class Connection:
 
     async def serve(self) -> None:
         if self.provenance.uid not in self.broker.config.allowed_uids:
-            self.broker.audit.event("rejected_uid", uid=self.provenance.uid, pid=self.provenance.pid, cmdline=self.provenance.cmdline)
+            self.broker.audit.event("rejected_uid", uid=self.provenance.uid, pid=self.provenance.pid, cmdline=logged_command(self.provenance.cmdline))
             raise RequestError(f"uid {self.provenance.uid} is not in the broker's users list; a listed user can add it on the console under /settings")
         try:
             line = await asyncio.wait_for(self.reader.readline(), FIRST_LINE_TIMEOUT_SECONDS)
@@ -249,7 +259,7 @@ class Connection:
 
     async def _start_run(self, mapping: dict[str, str], session_id: str | None, reason: str | None, command: tuple[str, ...]) -> None:
         run = self.broker.state.start_run(mapping, session_id, reason, command, self.provenance)
-        self.broker.audit.event("run_start", run=run.id, uid=run.provenance.uid, vars=sorted(mapping), session=session_id, pid=self.provenance.pid, command=" ".join(command))
+        self.broker.audit.event("run_start", run=run.id, uid=run.provenance.uid, vars=sorted(mapping), session=session_id, pid=self.provenance.pid, command=logged_command(" ".join(command)))
         exit_code: int | None = None
         lingering_terminated: int | None = None
         try:

@@ -12,7 +12,7 @@ Your API keys stop living in `.env` files. They move into a vault owned by a sep
 
 This project was largely AI-written ("vibe-coded"), then tested locally and red-teamed with AI; the caveats that surfaced are documented below in [What envh does not do](#what-envh-does-not-do). It is **defense in depth, not a guarantee** — someone determined, with enough same-user access, can still get past it.
 
-It is still a real improvement over the usual alternative, a plaintext `.env` sitting in your project folder. Against that baseline, envh keeps keys out of files anything running as you can read at will; it **significantly** lowers the chance of prompt-injection exfiltration (a key is released only for a run you approved, and you see it in the log); it lowers the chance of a supply-chain dependency silently taking **every** key even more; and if something does slip through, it shrinks the blast radius to the few keys in one approved run rather than everything on disk.
+It is still a real improvement over the usual alternative, a plaintext `.env` sitting in your project folder. Against that baseline, envh keeps keys out of files anything running as you can read at will; it **significantly** lowers the chance of prompt-injection exfiltration (a key is released only to a run or session you approved, unless you marked it `auto`, and every use is logged); it lowers the chance of a supply-chain dependency silently taking **every** key even more; and if something does slip through, it shrinks the blast radius to the few keys in one approved run or session rather than everything on disk.
 
 Think of it as a locked door on what was an open entryway: stronger protection exists (a hardware token, phone approval, running agents in a VM), but a locked door beats leaving your secrets out in the open.
 
@@ -245,6 +245,7 @@ envh session end <id>
 - `--with` narrows a run to some of the session's variables, or maps variables ad hoc: `--with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY`.
 - `--reason` is optional but the console shows its absence loudly. Write what you would want to read before approving.
 - A running command is never killed when its session expires; expiry only stops new approvals. When the command itself exits, any process it left running is terminated so the values do not outlive the run (`--keep-background` to opt out).
+- One user can have 32 `envh` commands running or waiting at once; another is refused until one finishes. A `--reason` can be up to 1,000 characters, and the audit log keeps the first 4,000 characters of a command line.
 - `envh status` shows pending requests, active runs and live sessions as JSON. Neither it nor `envh list` shows session ids: `envh session start` prints yours, and the console's `/sessions` shows them all.
 
 Exit codes: 3 broker not running, 4 denied, 5 request error (unknown preset, variable not in session), otherwise the command's own exit code.
