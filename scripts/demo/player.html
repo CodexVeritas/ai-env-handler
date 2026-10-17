@@ -270,17 +270,9 @@ python3 scripts/setup_wizard.py</pre>
     return ZOOM_IN_SECONDS + segment.hold + ZOOM_OUT_SECONDS;
   }
 
-  function cutSegments(cut) {
-    if (cut === "full") return SEGMENTS;
-    if (cut !== "core") throw new Error(`unknown cut ${cut}; use full or core`);
-    const first = SEGMENTS.findIndex(segment => segment.intro && segment.at === "ask");
-    const last = SEGMENTS.findIndex(segment => segment.hold && segment.at === "ran");
-    return SEGMENTS.slice(first, last + 1).filter(segment => !segment.intro);
-  }
-
-  function loadDemo(data, cut = "full") {
+  function loadDemo(data) {
     recording = data;
-    const segments = cutSegments(cut);
+    const segments = SEGMENTS;
     const missing = segments.flatMap(segment => segment.play || (segment.at ? [segment.at] : [])).filter(mark => !(mark in data.marks));
     if (missing.length) throw new Error(`the recording has no marks named ${missing.join(", ")}`);
     let start = 0;

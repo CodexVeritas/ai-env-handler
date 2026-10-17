@@ -283,7 +283,7 @@ def agent_session(agent: Pane, console: Pane, passphrase: str, clock: Clock) -> 
     output = agent.wait_for("expires", since)
     time.sleep(0.6)
     clock.mark("approved")
-    session_id = re.search(r"session ([0-9a-f]+) approved", output).group(1)
+    session_id = re.search(r"session ([a-z]+-[a-z]+) approved", output).group(1)
     time.sleep(0.4)
 
     clock.log("The agent runs a script inside the session")
