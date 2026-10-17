@@ -8,6 +8,7 @@ import os
 import pwd
 import shlex
 import socket
+import stat
 import struct
 import subprocess
 from dataclasses import dataclass
@@ -78,12 +79,13 @@ def parent_and_terminal(pid: int) -> tuple[int, int]:
 
 
 def terminal_path(device: int) -> Path:
-    for path in [*Path("/dev/pts").iterdir(), *Path("/dev").glob("tty*")]:
+    for path in [*Path("/dev/pts").iterdir(), *Path("/dev").iterdir()]:
         try:
-            if path.stat().st_rdev == device:
-                return path
+            status = path.lstat()
         except OSError:
             continue
+        if stat.S_ISCHR(status.st_mode) and status.st_rdev == device:
+            return path
     raise PlatformError(f"no node in /dev for terminal device {os.major(device)}:{os.minor(device)}")
 
 

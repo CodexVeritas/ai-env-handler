@@ -58,11 +58,13 @@ def test_the_helper_locks_the_terminal_sudo_relays_from_as_well_as_its_own(tmp_p
         (fakes / name).chmod(0o755)
     helper = tmp_path / "envh-console"
     helper.write_text(command.HELPER_SCRIPT)
-    outer, inner = run_in_relayed_terminal(f"sh {shlex.quote(str(helper))}", tmp_path, {"PATH": f"{fakes}:{os.environ['PATH']}"})
+    owners = tmp_path / "owners"
+    record_owners = f'stat -c "%n %u:%a" "$(cat {shlex.quote(str(tmp_path / "outer-tty"))})" "$(tty)" > {shlex.quote(str(owners))}'
+    run_in_relayed_terminal(f"{record_owners}; sh {shlex.quote(str(helper))}", tmp_path, {"PATH": f"{fakes}:{os.environ['PATH']}"})
     lines = calls.read_text().splitlines()
     launch = lines.index(f"runuser -u {command.SERVICE_USER} -- {command.ENVH_BIN} serve")
     locked, restored = lines[:launch], lines[launch + 1 :]
-    for terminal in (inner, outer):
+    for terminal, owner_and_mode in (line.split() for line in owners.read_text().splitlines()):
+        owner, mode = owner_and_mode.split(":")
         assert {f"chown {command.SERVICE_USER} {terminal}", f"chmod 600 {terminal}"} <= set(locked)
-        assert f"chown {os.getuid()} {terminal}" in restored
-        assert any(line.startswith("chmod ") and line.endswith(f" {terminal}") and line != f"chmod 600 {terminal}" for line in restored)
+        assert {f"chown {owner} {terminal}", f"chmod {mode} {terminal}"} <= set(restored)
