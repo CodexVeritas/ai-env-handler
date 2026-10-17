@@ -21,3 +21,15 @@ runs as root with no `SUDO_USER`; CI runs them non-root and they pass).
 Note on V8: the Claude/Cursor hook is explicitly **not** a security boundary (the console always
 re-prompts for the vault passphrase). These fixes harden the in-app "a passphrase will be needed"
 heads-up so it is not silently skipped; they do not change the trust model.
+
+## Client-tool hardening (the two REJECTED robustness gaps)
+
+Two supply-chain findings were graded REJECTED (client-side only, no broker impact, no §4 win) but
+were real robustness gaps, now fixed in `tools/importer.py`:
+
+- **A non-UTF-8 `.env` crashed `envh import`** — `parse_env_file` read with strict UTF-8, so one stray
+  byte in any discovered file aborted the whole import with a traceback. It now decodes with
+  `errors="replace"`, matching the scanner. Test: `test_importer.py::test_parse_env_file_tolerates_non_utf8_bytes`.
+- **`envh import` had no size cap** — a large file was parsed whole, while the scanner already caps at
+  25 MB. `parse_env_file` now refuses a file over `MAX_IMPORT_BYTES` (25 MB) with a clear error. Test:
+  `test_importer.py::test_parse_env_file_refuses_an_oversized_file`.

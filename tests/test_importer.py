@@ -12,6 +12,7 @@ from envh.tools.importer import (
     default_backup_root,
     discover,
     looks_secret,
+    parse_env_file,
     parse_env_text,
     review_classification,
     review_names,
@@ -304,3 +305,20 @@ def test_a_comment_holding_a_key_is_never_a_group_name() -> None:
     said: list[str] = []
     review_classification([parsed], lambda prompt: "", said.append)
     assert not any("sk-proj" in line or "fakepass" in line for line in said)
+
+
+def test_parse_env_file_tolerates_non_utf8_bytes(tmp_path: Path) -> None:
+    # One stray non-UTF-8 byte in a discovered file must not abort the whole import with a traceback.
+    bad = tmp_path / ".env"
+    bad.write_bytes(b"API_KEY=" + b"\xff\xfe" + b"value1234567890\nLOG_LEVEL=info\n")
+    parsed = parse_env_file(bad)
+    assert {assignment.name for assignment in parsed.assignments} == {"API_KEY", "LOG_LEVEL"}
+
+
+def test_parse_env_file_refuses_an_oversized_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # envh import now caps file size (the scanner already does), so a huge file cannot balloon memory.
+    monkeypatch.setattr("envh.tools.importer.MAX_IMPORT_BYTES", 16)
+    big = tmp_path / ".env"
+    big.write_text("API_KEY=sk-1234567890\n")
+    with pytest.raises(ClientError, match="over envh import's"):
+        parse_env_file(big)

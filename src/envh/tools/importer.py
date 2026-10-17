@@ -21,6 +21,7 @@ SKIP_DIRS = {"node_modules", ".venv", "venv", ".git", "__pycache__", ".tox", ".m
 SKIP_SUFFIXES = (".example", ".template", ".sample", ".dist")
 ENVH_NOTE = "-> envh secret"
 LONG_TOKEN = 16
+MAX_IMPORT_BYTES = 25 * 1024 * 1024
 Ask = Callable[[str], str]
 
 
@@ -152,7 +153,11 @@ def looks_like_header(comment: str) -> bool:
 
 
 def parse_env_file(path: Path) -> ParsedFile:
-    return parse_env_text(path, path.read_text())
+    size = path.stat().st_size
+    if size > MAX_IMPORT_BYTES:
+        raise ClientError(f"{path} is {size // (1024 * 1024)} MB, over envh import's {MAX_IMPORT_BYTES // (1024 * 1024)} MB limit; deselect it, or point envh import at the real .env file", 2)
+    # errors="replace" so one stray non-UTF-8 byte in a discovered file does not abort the whole import.
+    return parse_env_text(path, path.read_text(encoding="utf-8", errors="replace"))
 
 
 def looks_secret(name: str, value: str) -> bool:
