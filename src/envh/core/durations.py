@@ -4,7 +4,11 @@ import re
 from datetime import timedelta
 
 MAX_SESSION = timedelta(hours=24)
-_PATTERN = re.compile(r"^(\d+)([smh])$")
+# Bound the digit count: the hard cap is 24h, so no legitimate duration needs more than a few
+# digits. Capping here keeps a hostile value (thousands of digits) from reaching int()/timedelta,
+# where CPython's int->str limit raises ValueError and a huge amount overflows timedelta — both of
+# which escaped DurationError before and surfaced as a broker "internal error" plus a traceback.
+_PATTERN = re.compile(r"^(\d{1,8})([smh])$")
 _UNITS = {"s": "seconds", "m": "minutes", "h": "hours"}
 
 
@@ -15,11 +19,14 @@ class DurationError(ValueError):
 def parse_duration(text: str) -> timedelta:
     match = _PATTERN.match(text.strip())
     if not match:
-        raise DurationError(f"invalid duration {text!r}: use a whole number followed by s, m or h, like 30m")
+        raise DurationError(f"invalid duration {text!r}: use a whole number (up to 8 digits) followed by s, m or h, like 30m")
     amount = int(match.group(1))
     if amount <= 0:
         raise DurationError(f"invalid duration {text!r}: must be greater than zero")
-    return timedelta(**{_UNITS[match.group(2)]: amount})
+    try:
+        return timedelta(**{_UNITS[match.group(2)]: amount})
+    except OverflowError as error:
+        raise DurationError(f"invalid duration {text!r}: too large") from error
 
 
 def format_duration(duration: timedelta) -> str:

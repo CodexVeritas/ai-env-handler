@@ -1,0 +1,59 @@
+{
+  "agent_id": "w2-supply",
+  "surface": "supply-chain + client tools (F11): tools/importer.py, tools/scanner.py, install/command.py, scripts/setup_wizard.py, client invocation/sys.path",
+  "candidates": [
+    {
+      "id": "w2-supply-1",
+      "title": "envh import aborts with an unhandled UnicodeDecodeError on a non-UTF-8 .env file (agent-plantable import DoS)",
+      "win_condition": "DoS / INTEGRITY (client-tool availability; agent-plantable)",
+      "repro_cmds": [
+        "sudo -u redteam mkdir -p /home/redteam/w2supply/envfiles",
+        "sudo -u redteam env HOME=/home/redteam /opt/ctf/venv/bin/python -c \"open('/home/redteam/w2supply/envfiles/.env.badutf8','wb').write(b'API_KEY='+b'\\xff\\xfe\\xff'+b'value12345\\n')\"",
+        "yes '' | head -40 | sudo -u redteam env HOME=/home/redteam /opt/ctf/venv/bin/python -m envh import --dry-run /home/redteam/w2supply/envfiles/.env.badutf8"
+      ],
+      "observed_output": "Traceback (most recent call last):\n  File \".../envh/tools/importer.py\", line 517, in run_wizard\n    files = [parse_env_file(path) for path in selected]\n  File \".../envh/tools/importer.py\", line 155, in parse_env_file\n    return parse_env_text(path, path.read_text())\n  File \".../pathlib.py\", line 1028, in read_text\n    return f.read()\nUnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 8: invalid start byte",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Not in README/SECURITY. parse_env_file() calls Path.read_text() in strict UTF-8 with no error handling, so any discovered .env that contains an invalid UTF-8 byte crashes the whole `envh import <dir>` run with a raw traceback before anything is written. Contrast scanner.read_if_text(), which decodes with errors='replace'. An agent/other-writer that drops a .env with one stray byte anywhere in a tree the user imports aborts the entire import flow (the wizard's step 3).",
+      "severity": "LOW",
+      "self_assessment": "REJECTED",
+      "notes": "Real, reproducible, novel robustness defect, BUT does not meet a CHARTER §4 win condition: client-side only, no broker impact, no secret exfil, no code execution, no persistent state corruption (nothing is written). A grader working to §4 will likely REJECT it as 'no qualifying impact' / hardening. Recorded because the task explicitly asked to hunt importer crashes on malformed .env and this is the one unhandled exception found."
+    },
+    {
+      "id": "w2-supply-2",
+      "title": "scanner and importer have no aggregate memory/CPU bound: an agent-planted sub-limit file amplifies to >1GB RSS (scan --json) / no size cap at all in import",
+      "win_condition": "DoS / INTEGRITY (client-tool resource exhaustion; agent-plantable)",
+      "repro_cmds": [
+        "# SCANNER: one ~24MB file of maximal named-assignment hits (UNDER the 25MB per-file cap)",
+        "sudo -u redteam env HOME=/home/redteam /opt/ctf/venv/bin/python -c \"import secrets,string; open('/home/redteam/w2supply/maxhits.env.txt','w').write(''.join('AWS_SECRET_KEY='+''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(20))+'\\n' for _ in range(666000)))\"",
+        "sudo -u redteam env HOME=/home/redteam /opt/ctf/venv/bin/python -m envh scan /home/redteam/w2supply/maxhits.env.txt            # ~440MB RSS, ~9s",
+        "sudo -u redteam env HOME=/home/redteam /opt/ctf/venv/bin/python -m envh scan --json /home/redteam/w2supply/maxhits.env.txt     # ~1379MB RSS, ~17s",
+        "# IMPORTER: no --max-size at all; parse loads whole file; 9MB/200k assignments -> 278MB RSS",
+        "sudo -u redteam env HOME=/home/redteam /opt/ctf/venv/bin/python -c \"open('/home/redteam/w2supply/envfiles/.env.many','w').write(''.join(f'API_KEY_{i}=value'+'x'*20+str(i)+'\\n' for i in range(200000)))\"",
+        "yes '' | head -60 | sudo -u redteam env HOME=/home/redteam /opt/ctf/venv/bin/python -m envh import --dry-run /home/redteam/w2supply/envfiles/.env.many"
+      ],
+      "observed_output": "rc=0 wall=9.07s peakRSS=440.0MB target=maxhits.env.txt\nrc=1 wall=17.12s peakRSS=1378.9MB target=maxhits.env.txt extra=['--json']   (scanned 1 text file; 666643 key-shaped strings)\nimport 9MB/200k assignments: rc=0 wall=6.85s peakRSS=278.4MB   (import has NO size cap; a 242MB .env was still parsing at >120s before I killed it)",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "README line 196 acknowledges ONLY the scanner's per-file 25MB cap and the skipped installed-code/cache folders. It does NOT acknowledge (a) that a single UNDER-limit (~24MB) crafted file blows RSS to ~440MB, or ~1.4GB with --json (~57x), because scan_files accumulates every Hit for every file into one in-memory list before reporting and --json materializes the whole structure; (b) that N such files multiply linearly with no total cap; (c) that `envh import` has NO size limit whatsoever (parse_env_file reads the entire file; ~30x structural amplification). Both tools are the exact commands the setup wizard tells every user (and every agent) to run (`envh scan ~`, `envh import <folder>`), and an agent operating in the user's account can plant the files.",
+      "severity": "LOW",
+      "self_assessment": "REJECTED",
+      "notes": "Real and reproducible, and genuinely agent-abusable (the threat envh targets), BUT not a CHARTER §4 win condition: it is a client-side resource DoS, not a broker crash/wedge from the socket, and no secret/exfil/code-exec. Recoverable (bounded by planted file size; OOM-killer reaps the process). A §4 grader will likely REJECT; recorded as a hardening gap because the task explicitly asked for scanner pathological-memory and malformed/huge-file handling. Fix: cap total hits/output and add a --max-size to import mirroring scan."
+    }
+  ],
+  "negative_results": [
+    "ReDoS ruled out across ALL scanner regexes. Timed adversarial inputs as redteam: database-url `redis://`+5MB 'a' (no @) = 0.25s/30MB; sendgrid `SG.`+3MB no-dot = 0.14s; jwt `eyJ`+1MB+`.eyJ`+1MB (no 3rd dot) = 0.11s; all-20-markers + 6MB of 'sk-' near-misses = 2.20s (worst, still linear ~0.37s/MB); ASSIGNMENT_REGEX `.`+131'A' x40000 (5.3MB) = 0.33s; 24MB single line = 0.98s. No catastrophic backtracking: every VALUE_PATTERN segment is separated by literal dots/`:`/`@` NOT in its char class (deterministic splits), there are no nested (X+)+ quantifiers, and ASSIGNMENT_REGEX's name is bounded {0,130} with a `(?<![A-Za-z0-9_])` lookbehind that defeats the classic quadratic. Confirms wave-1's 'regexes are all linear' for the client tools too.",
+    "backup_originals() path handling is SAFE against traversal/symlink. Tested as redteam by calling it directly: (a) normal absolute path lands strictly inside backup_dir (ESCAPED OUTSIDE=[]); (b) a `../../../etc/hostname` input does NOT escape — os.path.abspath() lexically collapses `..` before .relative_to('/'), so the target is always rooted under backup_dir; (c) a symlink source is read via read_bytes() but its copy still lands inside backup_dir under the symlink's own path; (d) two inputs mapping to the same target -> os.open(O_CREAT|O_EXCL) raises FileExistsError -> ClientError (fails closed). The stamp dir is created with mkdir(mode=0700) WITHOUT exist_ok (fails if pre-existing) and backup runs BEFORE any write_rewrites, so a backup failure aborts the import before any file is touched. No clobber/escape/symlink-follow achievable.",
+    "import --dry-run never discloses a secret VALUE. Planted a sentinel CTF-SENTINEL-abc123def456 in a .env and ran dry-run: output shows only fingerprint-style redactions (e.g. `CT…56 (25 chars, id 8b5258)` = first-2 + last-2 chars + length + sha256 prefix) in steps 2/3/5, and rewritten lines are only `# VAR -> envh secret NAME (presets: ...)`. `grep CTF-SENTINEL` of the full output = 0 matches.",
+    "The SHIPPED entrypoint is NOT sys.path-plantable. pyproject declares a console_script `envh = envh.cli:main`; the generated /opt/ctf/venv/bin/envh runs with sys.path[0]=<venv/bin>, NOT the CWD. Planted secrets.py/signal.py in an attacker CWD were loaded by `python -m envh` (sys.path[0]='') but NOT by `/opt/ctf/venv/bin/envh` (no marker files written). So the only CWD-planting path is the CTF test wrapper's `python -m envh`, not the real client.",
+    "No PATH-based exec in the untrusted-content tools. scanner.py and importer.py run NO subprocesses and import only already-loaded stdlib + envh submodules (resolved from the package __path__, not CWD). No binary is invoked by bare name from the import/scan code paths.",
+    "The apply path (backup + rewrite + broker op=import) is unreachable without a console approval: apply_plan() sends op=import then blocks on conn.recv_ok() waiting for the broker decision, which with no approver can only ever become 'withdrawn'. So backup_originals/write_rewrites never execute in the arena without an approval."
+  ],
+  "out_of_scope_observations": [
+    "`python -m envh` loads a planted secrets.py/signal.py from the current directory (sys.path[0]=''), executing attacker code AS the invoking user. PROVEN as redteam (marker files written). OUT OF SCOPE / not a real envh bug: (1) it is an artifact of the CTF wrapper /opt/ctf/envh-rt which uses `python -m envh`; the shipped console_script entrypoint does NOT add CWD to sys.path (verified above); (2) same-uid: the planting agent and the running user are both redteam, so running code as redteam gains no privilege. No cross-user or privilege gain.",
+    "write_rewrites() does target=path.resolve() (follows symlinks, intentionally/documented) and os.replace()s the file with rewritten content. A TOCTOU where another writer swaps a discovered .env for a symlink to a victim-owned file between parse and write would clobber the victim file — BUT (a) it requires a console approval (apply path is gated, see negatives), (b) the rewritten content holds NO secret values (only `# VAR -> envh secret NAME` comments), and (c) it needs the swapper to have write access to the imported directory. Approval-gated integrity/DoS; out of the no-approval scope of this exercise.",
+    "scanner report/--json intentionally discloses the first 4 characters + exact length + sha256[:8] of every key-shaped string (redact()). This is same-user, on the user's own files, by design (README: 'Shows where each copy is, never the key itself'), not a cross-user leak. Noted, not claimed.",
+    "The editable install points at the agent-writable clone /home/user/ai-env-handler/src (and the CTF venv runs it), so an agent could edit the CLIENT's code directly — already noted KNOWN/acknowledged by wave-1 (w1-hook F11); not re-claimed.",
+    "install/command.py and setup_wizard.py writes all land under root-only locations (/opt/envh, /usr/local/*, /var/lib/envh) via write_root_file/stage_build_files/build_environment and only run under sudo/root; a non-root user cannot trigger or plant into them. uv_for_root/ensure_uv shutil.which + `curl|sudo sh` are the already-noted (KNOWN) root-trust surfaces. All root-only -> OUT OF SCOPE per CHARTER §3."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "agent_id": "w2-clientrun",
+  "surface": "client-side-run (F7)",
+  "summary": "Studied envh client post-run termination logic (client/commands.py: spawn, processes_with_marker, terminate_lingering, marker env-injection, signal/exit-code handling), run AS redteam/redteam2. Found NO flag exfil, NO cross-user kill, NO approval/marker subversion. The run-marker cleanup is sound precisely because /proc/<pid>/environ is uid-restricted (0400) and the marker is a 128-bit CSPRNG value injected only into the spawned child. One LOW client-robustness gap (uncaught PermissionError on a pid-reuse TOCTOU) causes attacker-self-harm only; REJECTED as a charter win.",
+  "candidates": [
+    {
+      "id": "w2-clientrun-1",
+      "title": "terminate_lingering() catches only ProcessLookupError; an os.kill EPERM from a pid-reuse TOCTOU propagates uncaught and crashes the attacker's own client",
+      "win_condition": "DoS (client-side, self-inflicted only)",
+      "repro_cmds": [
+        "# As redteam2, create a cross-user stand-in pid (simulates a pid reused by another uid between enumerate and kill):",
+        "sudo -u redteam2 env ENVH_RUN_MARKER=x sh -c 'echo $$ > /tmp/rt2.pid; chmod 644 /tmp/rt2.pid; exec sleep 120' &",
+        "VPID=$(cat /tmp/rt2.pid)",
+        "# As redteam, force that pid into the kill list and call the client's own terminate_lingering:",
+        "sudo -u redteam /opt/ctf/venv/bin/python -c \"import sys,envh.client.commands as c; c.processes_with_marker=lambda m:[int(sys.argv[1])]; c.terminate_lingering('m')\" $VPID"
+      ],
+      "observed_output": "PermissionError(1, 'Operation not permitted') propagates out of terminate_lingering uncaught (the function wraps os.kill only in `except ProcessLookupError`, commands.py lines 106-109 and 113-117). The cross-user victim is NOT signalled (EPERM blocks delivery) and stays alive; only the attacker's own client process would crash.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "F7 was untouched in Wave 1; this exception-handling gap is not mentioned in README/SECURITY.md. However it has no cross-user/broker/flag impact.",
+      "severity": "LOW",
+      "self_assessment": "REJECTED",
+      "notes": "Not a charter win: (1) requires an unreliable pid-reuse race (pid enumerated by processes_with_marker exits and is reused before os.kill, ~<2.1s window); (2) EPERM means no other user's process is actually signalled, so no cross-user harm; (3) worst case is the attacker's OWN client crashing or mis-signalling the attacker's OWN unrelated same-uid process (self-harm); (4) the broker is never involved. A hardening fix would also catch PermissionError. Recorded so later waves don't re-chase it as a cross-user primitive."
+    }
+  ],
+  "negative_results": [
+    "CROSS-USER KILL IS BLOCKED (primary result, proven). redteam2 runs `sleep 300` carrying ENVH_RUN_MARKER=CROSSMARKER_511bd34b3c4809f3. /proc/<pid>/environ of that process is mode -r-------- owned by redteam2. As redteam: direct read of /proc/<pid>/environ -> PermissionError [Errno 13]; client's processes_with_marker(marker) -> [] (victim NOT in list); os.kill(pid,0) -> PermissionError [Errno 1] EPERM. So envh's run cleanup can NEVER enumerate or kill another user's process: the environ-match gate is itself the uid boundary.",
+    "MARKER NOT GUESSABLE/FORCEABLE. Marker is secrets.token_hex(16) = 128-bit CSPRNG, generated fresh per run in cmd_run (line 54). No cross-run reuse, never printed, never sent over the socket. Cannot be brute-forced or predicted to pre-mark a victim.",
+    "PRE-SET ENVH_RUN_MARKER CANNOT SUBVERT TERMINATION (proven). Ran `sudo -u redteam env ENVH_RUN_MARKER=ATTACKER_CHOSEN_VALUE python ...` reproducing cmd_run's exact env merge `{**os.environ, RUN_MARKER_VAR: fresh}` (line 55): the child receives the FRESH random marker (attacker's pre-set value is overridden because extra_env is applied last); terminate_lingering(fresh) does NOT touch a victim pre-marked with the attacker-chosen value (victim stayed alive). Pre-setting the var has zero effect on which pids are killed.",
+    "CLIENT/SHELL DO NOT SELF-MATCH (proven). The fresh marker is placed only in the spawned child's environ, never in the client's own os.environ (verified: client's own /proc/self/environ does not contain the marker) and processes_with_marker excludes os.getpid(). The parent shell is unreadable anyway (it is the setuid-root `sudo` wrapper -> PermissionError). So `envh run` cannot kill its own client, its parent shell, or any ancestor via the marker.",
+    "SAME-USER CLEANUP WORKS AS INTENDED (control, not a vuln). As redteam, spawning an own child with the marker then calling terminate_lingering kills exactly that child (SIGTERM, returncode -15). This is the designed behavior (an attacker terminating only its own same-uid processes is no privilege gain, since it can already kill them directly). Not a finding.",
+    "EXIT-CODE MATH IS CORRECT. spawn() returns `128 - returncode` when returncode<0 (signal death) = 128+signum (e.g. SIGKILL->137, SIGTERM->143), else the raw exit status; standard shell convention, no off-by-one, no overflow (Popen exit codes 0-255).",
+    "SIGNAL FORWARDING HAS NO SECURITY IMPACT. Client ignores SIGINT, forwards SIGTERM/SIGHUP to the child; child.send_signal wrapped in `except ProcessLookupError`. No way to redirect a signal to a non-child process.",
+    "--keep-background leaving values in surviving processes is explicitly documented in the client help ('do not terminate processes the command leaves running (they keep the values)') and matches README's acknowledged same-user value exposure; not novel."
+  ],
+  "out_of_scope_observations": [
+    "processes_with_marker reads every readable /proc/<pid>/environ and terminate_lingering re-scans up to ~42 times (2s / 0.05s) per run; this is attacker-self-cost on the attacker's own client only, never touches the broker, so it is not a broker DoS and is out of scope for a charter win.",
+    "The only way the F7 marker scan could ever read another user's process environ is as root (ptrace_may_access bypass) -- out of scope per CHARTER 3.3 (reading another uid's /proc/<pid>/environ)."
+  ]
+}

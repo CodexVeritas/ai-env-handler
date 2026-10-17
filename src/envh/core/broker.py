@@ -38,6 +38,9 @@ from envh.core.vault import MIN_PASSPHRASE_LENGTH, Vault, VaultError, move_into_
 MAX_UNKNOWN_SESSION_IDS = 20
 
 
+MAX_PRESET_BYTES = 64 * 1024
+
+
 class RequestError(ValueError):
     """A request that cannot be granted as asked; the message is shown to the requester."""
 
@@ -91,6 +94,7 @@ class Broker:
         self.audit.event(
             "request",
             id=request.id,
+            uid=request.provenance.uid,
             kind=request.kind,
             pid=request.provenance.pid,
             reason=request.reason or "(no reason given)",
@@ -269,6 +273,11 @@ class Broker:
         return request
 
     def validate_preset_yaml(self, text: str) -> dict[str, Any]:
+        # Refuse an oversized document before parsing it. YAML parsing (and the validation that
+        # follows) runs synchronously on the broker's single event loop, so a large payload would
+        # block every other client and the console; presets are small, so this cap is generous.
+        if len(text) > MAX_PRESET_BYTES:
+            raise RequestError(f"preset document is larger than {MAX_PRESET_BYTES // 1024} KiB; presets are small, so it is refused before parsing")
         _, raw = parse_presets(text, set(self.vault.names()))
         return raw
 
@@ -316,11 +325,19 @@ class Broker:
             require_secret_name(name)
             if not isinstance(value, str) or not value:
                 raise RequestError(f"secret {name} has an empty value")
-        resolution = self.import_resolution(secrets, presets)
+        # Validate the SUBMITTED presets against the names the client actually provided (plus the
+        # vault), NOT against the post-dedup rename targets. import_resolution classifies each value
+        # by equality with a stored secret and invents a rename target (NAME_2) for a value that
+        # differs; validating the renamed result before approval let a client point a preset at that
+        # target and read the equality bit back from whether the reply was an error or pending — an
+        # unapproved value oracle on any stored secret. This check is value-independent, so the
+        # pre-approval reply no longer depends on whether a submitted value matches a stored one. The
+        # authoritative check on the renamed presets still runs at approval time (merged_for_approval).
         try:
-            parse_presets(dump_presets(resolution["additions"]), set(self.vault.names()) | set(resolution["secrets"]))
+            parse_presets(dump_presets(presets), set(self.vault.names()) | set(secrets))
         except ConfigError as error:
             raise RequestError(str(error)) from error
+        resolution = self.import_resolution(secrets, presets)
         merged = self.merged_presets(resolution["additions"])
         request = self.state.new_request(
             kind="import",
@@ -415,11 +432,11 @@ class Broker:
             self.write_presets(merged)
             self.audit.event("import_applied", added=request.summary["added"], reused=request.summary["reused"], renamed=request.summary["renamed"], presets=request.summary["presets"])
         self.state.decide(request, approved=True, by=by)
-        self.audit.event("decision", id=request.id, outcome="approved", by=by)
+        self.audit.event("decision", id=request.id, uid=request.provenance.uid, outcome="approved", by=by)
 
     def deny(self, request: Request, by: str = "console") -> None:
         self.state.decide(request, approved=False, by=by)
-        self.audit.event("decision", id=request.id, outcome="denied", by=by)
+        self.audit.event("decision", id=request.id, uid=request.provenance.uid, outcome="denied", by=by)
 
     def check_rename(self, old: str, new: str) -> tuple[str | None, str | None, Config]:
         """Check that old can be renamed to new, changing nothing. Returns the new config.yaml and presets.yaml texts

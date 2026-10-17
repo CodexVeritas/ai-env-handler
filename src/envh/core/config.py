@@ -34,6 +34,27 @@ class ConfigError(ValueError):
     pass
 
 
+def _describe(value: Any, limit: int = 100) -> str:
+    """A short, safe description of a parsed YAML value for an error message.
+
+    Never repr()s a container: YAML keeps aliases as shared references, so a tiny document can
+    describe an astronomically large object graph, and repr() (unlike safe_load) materialises the
+    whole width**depth expansion. Never str()s an oversized int either (CPython's int->str limit
+    raises). So a hostile preset can no longer turn a validation error into a multi-gigabyte string
+    that wedges the event loop or OOM-kills the broker."""
+    if isinstance(value, str):
+        return repr(value if len(value) <= limit else value[:limit] + "…")
+    if isinstance(value, bool) or value is None or isinstance(value, float):
+        return repr(value)
+    if isinstance(value, int):
+        try:
+            text = str(value)
+        except ValueError:
+            return "a very large integer"
+        return text if len(text) <= limit else text[:limit] + "…"
+    return f"a {type(value).__name__}"
+
+
 @dataclass(frozen=True)
 class SecretPolicy:
     name: str
@@ -132,20 +153,20 @@ def _expect_mapping(value: Any, where: str) -> dict[str, Any]:
 
 
 def _reject_unknown(mapping: dict[str, Any], allowed: tuple[str, ...], where: str) -> None:
-    unknown = sorted(set(mapping) - set(allowed))
+    unknown = sorted(_describe(key) for key in set(mapping) - set(allowed))
     if unknown:
         raise ConfigError(f"{where}: unknown field(s) {', '.join(unknown)}; allowed: {', '.join(allowed)}")
 
 
 def _parse_approval(value: Any, where: str, allowed: tuple[str, ...] = APPROVALS) -> str:
     if value not in allowed:
-        raise ConfigError(f"{where}: approval must be one of {', '.join(allowed)}, got {value!r}")
+        raise ConfigError(f"{where}: approval must be one of {', '.join(allowed)}, got {_describe(value)}")
     return value
 
 
 def _parse_session_duration(value: Any, where: str) -> timedelta:
     if not isinstance(value, str):
-        raise ConfigError(f"{where}: max_session must be a string like 2h, got {value!r}")
+        raise ConfigError(f"{where}: max_session must be a string like 2h, got {_describe(value)}")
     try:
         duration = parse_duration(value)
     except DurationError as error:
@@ -157,7 +178,7 @@ def _parse_session_duration(value: Any, where: str) -> timedelta:
 
 def _parse_description(value: Any, where: str) -> str:
     if not isinstance(value, str):
-        raise ConfigError(f"{where}: description must be text, got {value!r}")
+        raise ConfigError(f"{where}: description must be text, got {_describe(value)}")
     if len(value) > DESCRIPTION_LIMIT:
         raise ConfigError(f"{where}: description is longer than {DESCRIPTION_LIMIT} characters")
     if printable(value) != value:
@@ -182,7 +203,7 @@ def parse_users(value: Any) -> tuple[tuple[str, ...], frozenset[int]]:
 def parse_notify(text: str) -> bool:
     value = _expect_mapping(_load_yaml(text, CONFIG_FILE), CONFIG_FILE).get("notify", True)
     if not isinstance(value, bool):
-        raise ConfigError(f"{CONFIG_FILE}: notify must be true or false, got {value!r}")
+        raise ConfigError(f"{CONFIG_FILE}: notify must be true or false, got {_describe(value)}")
     return value
 
 
@@ -294,7 +315,7 @@ def parse_presets(text: str, known_secrets: set[str] | None) -> tuple[dict[str, 
 
 
 def parse_preset(name: Any, raw: Any, known_secrets: set[str] | None) -> Preset:
-    where = f"preset {name!r}"
+    where = f"preset {_describe(name)}"
     if not isinstance(name, str) or not PRESET_NAME.match(name):
         raise ConfigError(f"{where}: preset names are lowercase, like forecasting-bot or news-bot.team")
     fields = _expect_mapping(raw, where)
@@ -307,7 +328,7 @@ def parse_preset(name: Any, raw: Any, known_secrets: set[str] | None) -> Preset:
         raise ConfigError(f"{where}: env must map at least one variable to a secret")
     env: dict[str, PresetVar] = {}
     for var, spec in raw_env.items():
-        var_where = f"{where}: env.{var}"
+        var_where = f"{where}: env.{_describe(var)}"
         if not isinstance(var, str) or not VAR_NAME.match(var):
             raise ConfigError(f"{var_where}: environment variable names must be identifiers")
         if isinstance(spec, str):
@@ -320,7 +341,7 @@ def parse_preset(name: Any, raw: Any, known_secrets: set[str] | None) -> Preset:
             secret = spec_fields["secret"]
             approval = _parse_approval(spec_fields["approval"], var_where) if "approval" in spec_fields else None
         if not isinstance(secret, str) or not SECRET_NAME.match(secret):
-            raise ConfigError(f"{var_where}: secret names must be UPPER_CASE identifiers, got {secret!r}")
+            raise ConfigError(f"{var_where}: secret names must be UPPER_CASE identifiers, got {_describe(secret)}")
         if known_secrets is not None and secret not in known_secrets:
             raise ConfigError(f"{var_where}: secret {secret} is not in the vault")
         env[var] = PresetVar(var=var, secret=secret, approval=approval)

@@ -17,6 +17,14 @@ from envh.core.vault import VaultError
 
 MAX_LINE = 1024 * 1024
 MAX_SOCKET_PATH = 100
+MAX_REASON = 1000
+# A client that has passed the uid check but sends no request is dropped after this long, so idle
+# connections cannot be held open to exhaust the broker's file descriptors.
+FIRST_LINE_TIMEOUT_SECONDS = 30
+# Caps on concurrently open connections, overall and per user, so one listed user cannot pin every
+# descriptor (idle-hold, or holding many waits) and wedge the broker and console for everyone.
+MAX_CONNECTIONS = 256
+MAX_CONNECTIONS_PER_UID = 32
 HandledErrors = (RequestError, StateError, ConfigError, VaultError)
 
 
@@ -27,6 +35,7 @@ class ControlServer:
         self.socket_mode = socket_mode
         self._server: asyncio.AbstractServer | None = None
         self._open_writers: set[asyncio.StreamWriter] = set()
+        self._per_uid: dict[int, int] = {}
 
     async def start(self) -> None:
         if len(str(self.socket_path).encode()) > MAX_SOCKET_PATH:
@@ -46,8 +55,15 @@ class ControlServer:
         self.socket_path.unlink(missing_ok=True)
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        self._open_writers.add(writer)
         connection = Connection(self.broker, reader, writer)
+        uid = connection.provenance.uid
+        if len(self._open_writers) >= MAX_CONNECTIONS or self._per_uid.get(uid, 0) >= MAX_CONNECTIONS_PER_UID:
+            self.broker.audit.event("connection_rejected", uid=uid, pid=connection.provenance.pid, open=len(self._open_writers))
+            await connection.send({"ok": False, "error": "the broker has too many open connections; close some and retry"})
+            await self._shut(writer)
+            return
+        self._open_writers.add(writer)
+        self._per_uid[uid] = self._per_uid.get(uid, 0) + 1
         try:
             await connection.serve()
         except HandledErrors as error:
@@ -59,11 +75,18 @@ class ControlServer:
             await connection.send({"ok": False, "error": "internal error in the broker; see its console"})
         finally:
             self._open_writers.discard(writer)
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except (ConnectionError, OSError):
-                pass
+            self._per_uid[uid] = max(self._per_uid.get(uid, 1) - 1, 0)
+            if not self._per_uid[uid]:
+                self._per_uid.pop(uid, None)
+            await self._shut(writer)
+
+    @staticmethod
+    async def _shut(writer: asyncio.StreamWriter) -> None:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except (ConnectionError, OSError):
+            pass
 
 
 class Connection:
@@ -91,7 +114,11 @@ class Connection:
         if self.provenance.uid not in self.broker.config.allowed_uids:
             self.broker.audit.event("rejected_uid", uid=self.provenance.uid, pid=self.provenance.pid, cmdline=self.provenance.cmdline)
             raise RequestError(f"uid {self.provenance.uid} is not in the broker's users list; a listed user can add it on the console under /settings")
-        line = await self.reader.readline()
+        try:
+            line = await asyncio.wait_for(self.reader.readline(), FIRST_LINE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError as error:
+            self.broker.audit.event("idle_timeout", uid=self.provenance.uid, pid=self.provenance.pid)
+            raise RequestError("no request received before the idle timeout; the connection was closed") from error
         if not line:
             return
         try:
@@ -123,6 +150,8 @@ class Connection:
         reason = message.get("reason")
         if reason is not None and not isinstance(reason, str):
             raise RequestError(f"reason must be a string, got {type(reason).__name__}")
+        if isinstance(reason, str) and len(reason) > MAX_REASON:
+            raise RequestError(f"reason is too long ({len(reason)} characters); keep it under {MAX_REASON}")
         return reason
 
     async def _decided_or_withdrawn(self, request: Request) -> bool:
@@ -130,7 +159,7 @@ class Connection:
         if await self._wait_decision(request):
             return True
         self.broker.state.withdraw(request)
-        self.broker.audit.event("withdrawn", id=request.id)
+        self.broker.audit.event("withdrawn", id=request.id, uid=request.provenance.uid)
         return False
 
     async def _wait_decision(self, request: Request) -> bool:
@@ -176,8 +205,8 @@ class Connection:
         await self._attend(request)
 
     async def op_session_wait(self, message: dict[str, Any]) -> None:
-        request = self.broker.state.requests.get(int(message.get("request_id") or 0))
-        if request is None or request.kind != "session" or request.provenance.uid != self.provenance.uid:
+        request = self.broker.state.requests.get((self.provenance.uid, int(message.get("request_id") or 0)))
+        if request is None or request.kind != "session":
             raise RequestError("unknown session request id")
         request.abandon_at = None
         await self.send({"ok": True, "request_id": request.id, "pending": request.pending, "notify": self.broker.config.notify})
@@ -191,7 +220,7 @@ class Connection:
             await self._reply_decision(request)
         else:
             self.broker.state.mark_detached(request)
-            self.broker.audit.event("detached", id=request.id, grace_until=request.abandon_at)
+            self.broker.audit.event("detached", id=request.id, uid=request.provenance.uid, grace_until=request.abandon_at)
 
     async def op_session_end(self, message: dict[str, Any]) -> None:
         session = self.broker.end_session(str(message.get("session_id") or ""), by=f"pid {self.provenance.pid}", uid=self.provenance.uid)
@@ -220,7 +249,7 @@ class Connection:
 
     async def _start_run(self, mapping: dict[str, str], session_id: str | None, reason: str | None, command: tuple[str, ...]) -> None:
         run = self.broker.state.start_run(mapping, session_id, reason, command, self.provenance)
-        self.broker.audit.event("run_start", run=run.id, vars=sorted(mapping), session=session_id, pid=self.provenance.pid, command=" ".join(command))
+        self.broker.audit.event("run_start", run=run.id, uid=run.provenance.uid, vars=sorted(mapping), session=session_id, pid=self.provenance.pid, command=" ".join(command))
         exit_code: int | None = None
         lingering_terminated: int | None = None
         try:
@@ -238,10 +267,11 @@ class Connection:
                     lingering_terminated = note.get("lingering_terminated")
                     break
         finally:
-            self.broker.state.end_run(run.id)
+            self.broker.state.end_run(run)
             self.broker.audit.event(
                 "run_end",
                 run=run.id,
+                uid=run.provenance.uid,
                 exit_code=exit_code if exit_code is not None else "client gone",
                 lingering_terminated=lingering_terminated if lingering_terminated is not None else "unknown",
             )

@@ -27,3 +27,11 @@ def test_format_round_trip() -> None:
 def test_cap_session() -> None:
     assert cap_session(timedelta(hours=30)) == timedelta(hours=24)
     assert cap_session(timedelta(minutes=5)) == timedelta(minutes=5)
+
+
+@pytest.mark.parametrize("text", ["9" * 6000 + "h", "9" * 500 + "h", "9" * 9 + "h"])
+def test_absurdly_long_durations_are_clean_errors_not_crashes(text: str) -> None:
+    # A huge digit string must not reach int()/timedelta (where CPython's int->str limit raises
+    # ValueError and a large amount overflows timedelta); it is rejected as a DurationError instead.
+    with pytest.raises(DurationError):
+        parse_duration(text)

@@ -93,18 +93,25 @@ class Run:
 class StateTable:
     def __init__(self, clock: Callable[[], datetime]) -> None:
         self._clock = clock
-        self._next_id = 1
-        self.requests: dict[int, Request] = {}
+        self.requests: dict[tuple[int, int], Request] = {}
         self.sessions: dict[str, Session] = {}
-        self.runs: dict[int, Run] = {}
+        self.runs: dict[tuple[int, int], Run] = {}
+        self._next_seq: dict[int, int] = {}
 
     def now(self) -> datetime:
         return self._clock()
 
-    def _allocate_id(self) -> int:
-        allocated = self._next_id
-        self._next_id += 1
-        return allocated
+    def _allocate_id(self, uid: int) -> int:
+        """A per-user sequence number for a request or run, shown to that user as `#1`, `#2`, … and shared
+        across that user's requests and runs. Counting per user (not one global counter) keeps the id short
+        and readable AND closes a cross-user leak: a single monotonic counter lets a client that sees its own
+        id infer how many requests and runs OTHER listed users allocated between two of its own. Each user's
+        counter advances only on its own actions, and the tables are keyed by (uid, seq), so one user's
+        numbers reveal nothing about another's. The counter is monotonic for the broker's lifetime (never
+        recomputed from the live tables), so pruning history never recycles a number a client still holds."""
+        seq = self._next_seq.get(uid, 1)
+        self._next_seq[uid] = seq + 1
+        return seq
 
     def new_request(
         self,
@@ -121,7 +128,7 @@ class StateTable:
         if sum(1 for request in self.pending() if request.provenance.uid == provenance.uid) >= MAX_PENDING_PER_USER:
             raise StateError(f"uid {provenance.uid} already has {MAX_PENDING_PER_USER} requests waiting on the console; wait for those to be decided")
         request = Request(
-            id=self._allocate_id(),
+            id=self._allocate_id(provenance.uid),
             kind=kind,
             mapping=dict(mapping),
             presets=tuple(presets),
@@ -134,7 +141,7 @@ class StateTable:
             summary=dict(summary or {}),
             decision=asyncio.get_running_loop().create_future(),
         )
-        self.requests[request.id] = request
+        self.requests[(provenance.uid, request.id)] = request
         return request
 
     def pending(self) -> list[Request]:
@@ -236,7 +243,7 @@ class StateTable:
         provenance: Provenance,
     ) -> Run:
         run = Run(
-            id=self._allocate_id(),
+            id=self._allocate_id(provenance.uid),
             mapping=dict(mapping),
             session_id=session_id,
             reason=reason,
@@ -244,11 +251,10 @@ class StateTable:
             provenance=provenance,
             started_at=self.now(),
         )
-        self.runs[run.id] = run
+        self.runs[(provenance.uid, run.id)] = run
         return run
 
-    def end_run(self, run_id: int) -> Run:
-        run = self.runs[run_id]
+    def end_run(self, run: Run) -> Run:
         if run.ended_at is None:
             run.ended_at = self.now()
         return run

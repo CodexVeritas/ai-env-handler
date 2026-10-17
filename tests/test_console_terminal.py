@@ -73,7 +73,7 @@ async def test_the_console_runs_full_screen_and_puts_the_terminal_back(harness: 
         session.type(b"/keys\r")
         await session.wait_for("Keys")
         request = harness.broker.request_run({"OPENAI_API_KEY": "OPENAI_API_KEY"}, [], "e2e", ("python", "x.py"), harness.provenance())
-        await session.wait_for("Run request #1")
+        await session.wait_for(f"Run request #{request.id}")
         session.type(PASSPHRASE.encode() + b"\r")
         await asyncio.wait_for(asyncio.shield(request.decision), 5)
         assert request.decision.result().outcome == "approved"

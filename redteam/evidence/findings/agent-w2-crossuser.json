@@ -1,0 +1,43 @@
+{
+  "agent_id": "w2-crossuser",
+  "surface": "F12 cross-user / multiuser (redteam uid=30033 vs redteam2 uid=30035, both listed)",
+  "candidates": [
+    {
+      "id": "w2-crossuser-1",
+      "title": "Shared monotonic request/run id counter leaks another listed user's broker-activity volume across the per-user isolation boundary",
+      "win_condition": "CROSS-USER",
+      "repro_cmds": [
+        "# ids are allocated by a single shared counter StateTable._next_id (state.py:93) via _allocate_id (101-104),",
+        "# used by BOTH new_request (state.py:121) and start_run (state.py:229). Every request a client makes returns its id.",
+        "# The official client prints it: transport.py:76 -> 'envh: waiting for approval in the envh console (request #N)' on stderr.",
+        "# Oracle via the official client only (no raw sockets):",
+        "A=$(timeout 2 /opt/ctf/envh-rt run --with GITHUB_TOKEN --reason A -- true 2>&1 | grep -oE 'request #[0-9]+' | grep -oE '[0-9]+')",
+        "for i in 1 2; do timeout 2 /opt/ctf/envh-rt2 run --with GITHUB_TOKEN --reason rt2 -- true >/dev/null 2>&1; done",
+        "B=$(timeout 2 /opt/ctf/envh-rt run --with GITHUB_TOKEN --reason B -- true 2>&1 | grep -oE 'request #[0-9]+' | grep -oE '[0-9]+')",
+        "echo \"redteam A=$A B=$B -> inferred redteam2 ops = $((B-A-1))\""
+      ],
+      "observed_output": "redteam A=21  redteam B=24  -> inferred redteam2 ops between = 2 (expected 2). Earlier raw-socket run of the same technique: A=3, 3 redteam2 run-requests, B=7, inferred 3 (expected 3). Throughout, redteam's `status`/`list` showed redteam2's activity as NOTHING (pending:[], sessions:[]), yet the id gap revealed the exact count.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "README line 79 ('Per-user sessions') acknowledges only that a session/pending request 'can be used, waited on, listed or ended only by the user who opened it' and that 'only the console sees everything'. It does NOT acknowledge that the request-id counter is global/sequential, so a non-console user can infer the COUNT of request+run allocations made by every OTHER listed user between two of its own requests -- information the uid-filtering of status/list is specifically designed to hide. Not in README/SECURITY.md; not in Wave-1 findings.",
+      "severity": "LOW",
+      "self_assessment": "CONFIRMED",
+      "notes": "Borderline LOW: reproducible as non-root via the official client, cross-user, novel, in scope -- but the ONLY thing disclosed is an aggregate activity count (request+run allocations) of other users; no secret value, no secret/var name, no reason, no pid, no timestamp, and no ability to act on, wait on, end, or corrupt another user's request. A grader may rate it LOW hardening or REJECT for thin impact. Fix: allocate per-request opaque/random ids, or at least don't return the raw global counter to clients. Sessions already use token_hex(8) and are immune; this is specifically the integer request/run id."
+    }
+  ],
+  "negative_results": [
+    "CORE ISOLATION HOLDS (and is ACKNOWLEDGED in README line 79, so KNOWN not novel): with redteam2 a second LISTED user, every per-op uid ownership check still blocks cross-user use.",
+    "status/list for_uid filtering works on PENDING REQUESTS, proven with concurrent real data: while redteam2 held a pending session request id=1 (reason 'rt2-secret-pending', var GITHUB_TOKEN), redteam `status` returned pending:[] / sessions:[] and `list` returned sessions:[] -- redteam2's request was invisible. Simultaneously redteam owned id=25 (another concurrent agent, reason 'r1a', var FLAG_VALUE); redteam2 `status` showed only its own id=1, never id=25. Each user sees ONLY its own pending/runs/sessions.",
+    "op_session_wait is uid-checked (control.py:180 request.provenance.uid != self.provenance.uid): redteam session_wait on redteam2's real request id=1 -> {\"ok\":false,\"error\":\"unknown session request id\"} -- IDENTICAL to a nonexistent id=9999 and id=0. No existence/ownership/differential oracle across users. The abandon_at=None reset happens only after the uid check, so redteam cannot touch redteam2's detached-grace timer.",
+    "op_session_end is uid-checked via broker.owned_session (control.py:197 passes uid). Guessed session id -> {\"ok\":false,\"error\":\"unknown session 0000000000000000\"}.",
+    "op_run --session is uid-checked via resolve_run_in_session -> owned_session (control.py:205). Guessed session id -> 'unknown session ...'. (No live session can exist in this no-approver arena anyway, since create_session is console/approve-only.)",
+    "MAX_PENDING_PER_USER (state.py:118) is counted PER-UID (request.provenance.uid == provenance.uid), so redteam cannot exhaust redteam2's 20 pending slots and vice-versa; there is no GLOBAL pending cap, so no cross-user pending-slot DoS. Proper isolation.",
+    "Cross-user CORRUPTION of a pending request is NOT socket-reachable: the only code that mutates another user's pending request/session mapping+summary is broker.rename_secret / _follow_rename_in_waiting_requests / state.rename_secret, and that path is reached ONLY from the console admin rename (passphrase-gated). No op_* in control.py calls rename_secret/store_secret/save_settings/save_presets/approve/deny. A socket client (redteam) therefore cannot trigger any action that alters redteam2's pending requests. The global cross-user mutation inside rename_secret is by design (documented in its docstring) and is an admin/console action, not an agent capability.",
+    "state.names_in_use() aggregates names across ALL users' live sessions + pending requests, but is consumed only by check_rename (console rename), not by any socket op, so one user's pending request cannot block/affect another via this path from the socket.",
+    "No value/fingerprint bytes leak cross-user over status/list: the secrets[]/presets[] arrays are global config (same for every listed user, equivalent to `envh list`), not another user's private data; sessions[]/runs[]/pending[] are strictly for_uid-filtered."
+  ],
+  "out_of_scope_observations": [
+    "owned_session() (broker.py:200-204) calls state.session(id) BEFORE the uid check, so state.session's distinct errors ('unknown session {id}', 'session {id} was ended', 'session {id} expired at HH:MM:SS') are returned before the 'belongs to another user' branch. IF an attacker possessed a valid 64-bit session id of another user, these would confirm existence/ownership and even leak the victim session's expiry time. But session ids are token_hex(8) (64-bit CSPRNG), never returned to a non-owner, and in this no-approver arena NO session can ever be created (create_session is reached only from approve()), so the branch is unreachable. Gated behind an unguessable secret; already partially noted by Wave 1.",
+    "Left pending (will auto-clean): redteam2 request id=1 (session_start, reason 'rt2-secret-pending') was detached when my client closed and auto-withdraws via the 10-min DETACHED_GRACE sweep; it occupies 1 of redteam2's 20 pending slots, is invisible to others, and exposes no value. All my other probes used op_run / official `envh run`, which withdraw immediately on client disconnect. id=25 (reason 'r1a', var FLAG_VALUE) is a CONCURRENT agent's redteam-owned request, not mine."
+  ]
+}

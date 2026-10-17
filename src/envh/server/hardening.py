@@ -19,6 +19,14 @@ class HardeningError(RuntimeError):
 
 def harden_process() -> None:
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    # Raise the open-file soft limit to the hard limit so a burst of client connections cannot
+    # exhaust the broker's descriptors at the low default (the control server also caps concurrent
+    # connections; this widens the headroom below that cap).
+    try:
+        _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+    except (ValueError, OSError):
+        pass
     os.umask(0o077)
     make_non_dumpable()
 
