@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -204,6 +205,16 @@ async def test_an_overlong_reason_is_refused_before_any_request_exists(control: 
     assert harness.broker.state.pending() == []
 
 
+async def test_the_audit_log_keeps_only_the_start_of_a_long_command(control: Path, harness: Harness) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    async with Client(control) as client:
+        await client.send(op="run", **{"with": ["OPENAI_API_KEY"]}, command=["echo", "x" * 100_000])
+        assert (await client.recv())["ok"] is True
+    audit_lines = (harness.data_dir / "audit.jsonl").read_text().splitlines()
+    run_start = next(record for record in map(json.loads, audit_lines) if record["event"] == "run_start")
+    assert run_start["command"].startswith("echo xxx") and run_start["command"].endswith("(96005 more characters)")
+
+
 async def test_an_idle_connection_is_dropped(control: Path, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(control_mod, "FIRST_LINE_TIMEOUT_SECONDS", 0.2)
     async with Client(control) as client:
@@ -225,7 +236,7 @@ async def test_one_user_cannot_hold_more_than_the_connection_cap(control: Path, 
         async with Client(control) as extra:
             await extra.send(op="list")
             reply = await extra.recv()
-            assert reply["ok"] is False and "too many open connections" in reply["error"]
+            assert reply["ok"] is False and "too many envh commands" in reply["error"]
     finally:
         for client in held:
             await client.__aexit__()

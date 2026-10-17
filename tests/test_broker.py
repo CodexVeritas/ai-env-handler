@@ -291,6 +291,13 @@ def test_oversized_preset_document_is_refused_before_parsing(harness: Harness) -
         harness.broker.request_preset(huge, "big", harness.provenance())
 
 
+async def test_oversized_import_presets_are_refused_before_parsing(harness: Harness) -> None:
+    presets = {f"bot-{index}": {"env": {f"VAR_{index}": "OPENAI_API_KEY"}} for index in range(2000)}
+    with pytest.raises(RequestError, match="larger than"):
+        harness.broker.request_import({"OPENAI_API_KEY": "sk-openai"}, presets, "big", harness.provenance())
+    assert harness.broker.state.pending() == []
+
+
 async def test_session_runs_refuse_secrets_that_became_per_run(harness: Harness) -> None:
     broker = harness.broker
     mapping, presets = broker.mapping_from_presets(["team"], [])

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import difflib
+import json
 from collections import Counter
 from dataclasses import replace
 from datetime import timedelta
@@ -58,6 +59,13 @@ def renamed_presets(presets: dict[str, Any], final_names: dict[str, str]) -> dic
             elif isinstance(entry, dict) and isinstance(entry.get("secret"), str):
                 entry["secret"] = final_names.get(entry["secret"], entry["secret"])
     return renamed
+
+
+def refuse_oversized_presets(size: int) -> None:
+    """Presets are small, and parsing and diffing them runs on the broker's single event loop, so a large document,
+    which would block every other client and the console, is refused before any of that work."""
+    if size > MAX_PRESET_BYTES:
+        raise RequestError(f"the presets are larger than {MAX_PRESET_BYTES // 1024} KiB; presets are small, so they are refused before parsing")
 
 
 def require_secret_name(name: str) -> None:
@@ -273,11 +281,7 @@ class Broker:
         return request
 
     def validate_preset_yaml(self, text: str) -> dict[str, Any]:
-        # Refuse an oversized document before parsing it. YAML parsing (and the validation that
-        # follows) runs synchronously on the broker's single event loop, so a large payload would
-        # block every other client and the console; presets are small, so this cap is generous.
-        if len(text) > MAX_PRESET_BYTES:
-            raise RequestError(f"preset document is larger than {MAX_PRESET_BYTES // 1024} KiB; presets are small, so it is refused before parsing")
+        refuse_oversized_presets(len(text))
         _, raw = parse_presets(text, set(self.vault.names()))
         return raw
 
@@ -321,6 +325,7 @@ class Broker:
     ) -> Request:
         if not secrets and not presets:
             raise RequestError("nothing to import")
+        refuse_oversized_presets(len(json.dumps(presets)))
         for name, value in secrets.items():
             require_secret_name(name)
             if not isinstance(value, str) or not value:
