@@ -338,8 +338,10 @@ class Broker:
         # unapproved value oracle on any stored secret. This check is value-independent, so the
         # pre-approval reply no longer depends on whether a submitted value matches a stored one. The
         # authoritative check on the renamed presets still runs at approval time (merged_for_approval).
+        presets_text = dump_presets(presets)
+        refuse_oversized_presets(len(presets_text))
         try:
-            parse_presets(dump_presets(presets), set(self.vault.names()) | set(secrets))
+            parse_presets(presets_text, set(self.vault.names()) | set(secrets))
         except ConfigError as error:
             raise RequestError(str(error)) from error
         resolution = self.import_resolution(secrets, presets)

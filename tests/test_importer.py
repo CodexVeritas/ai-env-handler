@@ -307,11 +307,20 @@ def test_a_comment_holding_a_key_is_never_a_group_name() -> None:
     assert not any("sk-proj" in line or "fakepass" in line for line in said)
 
 
-def test_parse_env_file_refuses_non_utf8_bytes_naming_the_line(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("content", "line"),
+    [
+        (b"LOG_LEVEL=info\nAPI_KEY=\xff\xfevalue1234567890\n", 2),
+        (b"LOG_LEVEL=info\rAPI_KEY=\xff\xfevalue1234567890\r", 2),
+        (b"LOG_LEVEL=info\r\n\r\nAPI_KEY=\xffvalue\r\n", 3),
+        (b"\xffAPI_KEY=value\n", 1),
+    ],
+)
+def test_parse_env_file_refuses_non_utf8_bytes_naming_the_line(tmp_path: Path, content: bytes, line: int) -> None:
     # Decoding with replacement would store a wrong secret and rewrite untouched lines, so it is a clear error instead.
     bad = tmp_path / ".env"
-    bad.write_bytes(b"LOG_LEVEL=info\nAPI_KEY=" + b"\xff\xfe" + b"value1234567890\n")
-    with pytest.raises(ClientError, match=r"\.env:2 is not valid UTF-8"):
+    bad.write_bytes(content)
+    with pytest.raises(ClientError, match=rf"\.env:{line} is not valid UTF-8"):
         parse_env_file(bad)
 
 

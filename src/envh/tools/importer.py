@@ -160,7 +160,8 @@ def parse_env_file(path: Path) -> ParsedFile:
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as error:
-        line = data.count(b"\n", 0, error.start) + 1
+        # split as parse_env_text does; the appended character stands for the line holding the bad byte
+        line = len((data[: error.start].decode("utf-8") + "?").splitlines())
         raise ClientError(f"{path}:{line} is not valid UTF-8; fix that line or deselect the file, then import again", 2) from error
     return parse_env_text(path, text)
 
