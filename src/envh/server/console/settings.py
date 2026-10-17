@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 SECTIONS = {"notify": "When a request waits", "users": "Who can ask", "approval": "Defaults for every key", "rule": "Rules for single keys"}
 LABELS = {"notify": "Notifications", "users": "Allowed users", "approval": "Approval", "max_session": "Longest session", "add": "+ Add a rule for a key…"}
 EXPLANATIONS = {
-    "notify": "A desktop notification with a chime, and the console's bell, when a request waits. Reminders follow after 30 s, 1, 2 and 5 minutes, then every 5.",
+    "notify": "A desktop notification with a chime, and the console's bell, when a request waits. Reminders follow every 5 minutes.",
     "users": "Logins whose scripts and agents may ask this console for keys. Each one sees only their own sessions.",
     "approval": "session: one approval opens a session that many runs share. per-run: every run asks you.",
     "max_session": "The longest session that may include a key; a key's own rule or a preset can lower it. Up to 24h.",
