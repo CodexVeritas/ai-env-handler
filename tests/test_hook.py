@@ -47,15 +47,9 @@ DECISIONS = pytest.mark.parametrize(
         ("envh --socket /nonexistent/envh-dev/ctl.sock session start p --minutes 5", "ask"),
         ("envh --socket=/nonexistent/envh-dev/ctl.sock run --with A -- true", "ask"),
         ("envh run --session abc --reason y -- python x.py", None),
-        ("ENVH_SESSION=abc envh run -- python x.py", None),
-        ("env ENVH_SESSION=abc envh run -- python x.py", None),
-        ("export ENVH_SESSION=abc && envh run -- python x.py", None),
-        ("export ENVH_SESSION=abc; echo $(envh run -- python x.py)", None),
-        # a bare (unexported) assignment is NOT inherited by the envh child, so the run is session-less
-        ("ENVH_SESSION=abc; envh run -- python x.py", "ask"),
-        ("grep ENVH_SESSION= README.md && envh run --with A -- true", "ask"),
-        ("envh run --with A -- true  # ENVH_SESSION= later", "ask"),
-        ("envh run --with A -- env ENVH_SESSION=abc true", "ask"),
+        # envh doesn't read ENVH_SESSION, so only --session puts a run in a session
+        ("ENVH_SESSION=abc envh run -- python x.py", "ask"),
+        ("export ENVH_SESSION=abc && envh run -- python x.py", "ask"),
         ("envh import --dry-run ~/code", None),
         ("envh session start --help", None),
         ("envh list", None),
@@ -145,17 +139,9 @@ DECISIONS = pytest.mark.parametrize(
         # a runner value-option before a NON-envh command must still not over-ask
         ("uv run --with rich python script.py", None),
         ("uv run --python 3.12 pytest -q", None),
-        # an empty session (env var or flag) is not a session -> session-less run prompts
-        ("ENVH_SESSION= envh run --reason r -- echo hi", "ask"),
-        ('ENVH_SESSION="" envh run --reason r -- cmd', "ask"),
+        # an empty --session is not a session -> session-less run prompts
         ("envh run --session= -- true", "ask"),
         ("envh run --session '' -- true", "ask"),
-        # a session that is set then stripped by env before envh runs is not a session
-        ("ENVH_SESSION=deadbeef env -i envh run --reason r -- echo hi", "ask"),
-        ("ENVH_SESSION=deadbeef env -u ENVH_SESSION envh run --reason r -- echo hi", "ask"),
-        ("ENVH_SESSION=deadbeef env -uENVH_SESSION envh run --reason r -- echo hi", "ask"),
-        ("ENVH_SESSION=deadbeef env - envh run --reason r -- echo hi", "ask"),
-        ("export ENVH_SESSION=abc && env -i envh run --reason r -- echo hi", "ask"),
         # env --split-string / -S runs a nested command the hook must read
         ('env --split-string="envh run --reason r -- echo hi"', "ask"),
         ("env -S'envh session start p --minutes 5'", "ask"),

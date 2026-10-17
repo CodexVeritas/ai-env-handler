@@ -19,7 +19,6 @@ from envh.tools.scanner import main as scan_main, skipped_folders_help
 from envh.platform import socket_path as default_socket_path
 from envh.client.transport import EXIT_USAGE, ClientError, Connection, waiting_notice
 
-SESSION_ENV_VAR = "ENVH_SESSION"
 RUN_MARKER_VAR = "ENVH_RUN_MARKER"
 LINGER_GRACE_SECONDS = 2.0
 CONSOLE_COMMANDS = (
@@ -42,9 +41,8 @@ def cmd_run(args: argparse.Namespace, sock: Path) -> int:
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
-    session_id = args.session or os.environ.get(SESSION_ENV_VAR)
     with Connection(sock) as conn:
-        conn.send(op="run", session=session_id, presets=parse_list(args.presets), reason=args.reason, command=command, **{"with": parse_list(args.with_)})
+        conn.send(op="run", session=args.session, presets=parse_list(args.presets), reason=args.reason, command=command, **{"with": parse_list(args.with_)})
         reply = conn.recv_ok()
         if reply.get("pending"):
             with waiting_notice(reply, None):
@@ -64,10 +62,8 @@ def cmd_run(args: argparse.Namespace, sock: Path) -> int:
 
 
 def spawn(command: list[str], extra_env: dict[str, str]) -> int:
-    """The command doesn't inherit ENVH_SESSION, so a run narrowed with --with can't reach the rest of the session."""
-    inherited = {name: value for name, value in os.environ.items() if name != SESSION_ENV_VAR}
     try:
-        child = subprocess.Popen(command, env={**inherited, **extra_env})
+        child = subprocess.Popen(command, env={**os.environ, **extra_env})
     except FileNotFoundError as error:
         raise ClientError(f"command not found: {command[0]}", EXIT_USAGE) from error
 
@@ -154,16 +150,12 @@ def print_session(reply: dict[str, Any], quiet: bool) -> int:
         return 0
     print(f"session {session_id} approved, expires {reply['expires_at']}")
     print(f"use it with:  envh run --session {session_id} --reason \"...\" -- <command>")
-    print(f"or export it: export {SESSION_ENV_VAR}={session_id}")
     return 0
 
 
 def cmd_session_end(args: argparse.Namespace, sock: Path) -> int:
-    session_id = args.session_id or os.environ.get(SESSION_ENV_VAR)
-    if not session_id:
-        raise ClientError(f"no session to end: name one, or set {SESSION_ENV_VAR}", EXIT_USAGE)
     with Connection(sock) as conn:
-        conn.send(op="session_end", session_id=session_id)
+        conn.send(op="session_end", session_id=args.session_id)
         conn.recv_ok()
     print("session ended")
     return 0
@@ -263,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command_name", required=True)
 
     run = commands.add_parser("run", help="run a command with secrets in its environment")
-    run.add_argument("--session", help=f"session id (default: ${SESSION_ENV_VAR})")
+    run.add_argument("--session", help="session id")
     run.add_argument("--preset", dest="presets", action="append", metavar="PRESET[,PRESET...]", help="repeat or use commas to combine presets")
     run.add_argument("--with", dest="with_", action="append", metavar="VAR[=SECRET],...")
     run.add_argument("--reason", help="why you need these secrets; shown to the approver")
@@ -285,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
     wait.add_argument("--quiet", action="store_true")
     wait.set_defaults(func=cmd_session_wait)
     end = session_commands.add_parser("end")
-    end.add_argument("session_id", nargs="?")
+    end.add_argument("session_id")
     end.set_defaults(func=cmd_session_end)
 
     commands.add_parser("list", help="secrets (names and descriptions), presets and live sessions").set_defaults(func=cmd_list)

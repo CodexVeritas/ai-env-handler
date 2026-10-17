@@ -79,23 +79,12 @@ async def test_session_start_then_run_and_end(control: Path, harness: Harness) -
     code, out, err = await run_cli(control, "run", "--session", session_id, "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", "import os; print(sorted(k for k in os.environ if k in {'OPENAI_API_KEY','OPENROUTER_API_KEY'}))")
     assert code == 0, err
     assert out.strip() == "['OPENAI_API_KEY']"
-    code, out, err = await run_cli(control, "run", "--", sys.executable, "-c", "import os; print(os.environ['OPENROUTER_API_KEY'], os.environ.get('ENVH_SESSION'))", env={"ENVH_SESSION": session_id})
-    assert code == 0 and out.split() == ["sk-or-team", "None"]
-    nested_run = [sys.executable, "-m", "envh", "--socket", str(control), "run", "--with", "OPENAI_API_KEY", "--", "true"]
-    task = asyncio.create_task(run_cli(control, "run", "--with", "OPENROUTER_API_KEY", "--", *nested_run, env={"ENVH_SESSION": session_id}))
-    for _ in range(500):
-        if harness.broker.state.pending() or task.done():
-            break
-        await asyncio.sleep(0.01)
-    [nested_request] = harness.broker.state.pending()
-    assert nested_request.kind == "run" and nested_request.mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}
-    harness.broker.deny(nested_request)
-    code, out, err = await asyncio.wait_for(task, timeout=20)
-    assert code == 4, err
+    code, out, err = await run_cli(control, "run", "--session", session_id, "--", sys.executable, "-c", "import os; print(os.environ['OPENROUTER_API_KEY'])")
+    assert code == 0 and out.strip() == "sk-or-team"
     code, out, err = await run_cli(control, "run", "--session", session_id, "--with", "DATABASE_URL", "--", "true")
     assert code == 5 and "not covered" in err
-    code, out, err = await run_cli(control, "session", "end", env={"ENVH_SESSION": ""})
-    assert code == 2 and "no session to end" in err
+    code, out, err = await run_cli(control, "session", "end")
+    assert code == 2 and "required: session_id" in err
     code, out, err = await run_cli(control, "session", "end", session_id)
     assert code == 0
     code, out, err = await run_cli(control, "list")

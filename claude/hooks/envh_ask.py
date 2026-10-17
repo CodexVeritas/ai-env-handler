@@ -30,8 +30,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 PASSPHRASE_FORM = re.compile(r"(?<![\w.-])(?:[\w./-]*/)?envh\s+(?:--socket(?:=\S+|\s+\S+)\s+)?(?:session\s+start|preset\s+propose|import|run)\b")
-SESSION_ASSIGNMENT = "ENVH_SESSION="
-SESSION_VAR = "ENVH_SESSION"
 ASSIGNMENT = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
 RESERVED_WORDS = {"{", "}", "!", "if", "then", "else", "elif", "do", "while", "until", "coproc", "function"}
 # each wrapper's options that take a value
@@ -94,11 +92,10 @@ METACHARACTERS = set(" \t\n;&|<>()")
 REDIRECT_FD = re.compile(r"\d+|\{\w+\}")
 
 
-def run_in_session(arguments: list[str], session_assigned: bool) -> tuple[bool, bool]:
+def run_in_session(arguments: list[str]) -> tuple[bool, bool]:
     """For `envh run` options (those before `--` or the command): whether the run uses a session (a
-    NON-EMPTY --session value, or an already-assigned ENVH_SESSION) and whether it only asks for help.
-    An empty --session value is not a session, matching the client's own `args.session or env` and the
-    broker's `if session_id:`."""
+    NON-EMPTY --session value) and whether it only asks for help. An empty --session value is not a
+    session, matching the broker's `if session_id:`."""
     session_value: str | None = None
     saw_help = False
     index = 0
@@ -115,7 +112,7 @@ def run_in_session(arguments: list[str], session_assigned: bool) -> tuple[bool, 
             index += 1
             continue
         index += 2 if option in RUN_OPTIONS_WITH_VALUE else 1
-    return session_assigned or bool(session_value), saw_help
+    return bool(session_value), saw_help
 
 
 def socket_and_arguments(arguments: list[str], script_sets_socket: bool) -> tuple[str | None, list[str]]:
@@ -133,7 +130,7 @@ def socket_and_arguments(arguments: list[str], script_sets_socket: bool) -> tupl
     return (socket_path if socket_path and posixpath.isabs(socket_path) else None), arguments
 
 
-def passphrase_reason(arguments: list[str], session_assigned: bool) -> str | None:
+def passphrase_reason(arguments: list[str]) -> str | None:
     """Why the envh console will ask for the vault passphrase for this invocation, or None when it will not."""
     match arguments:
         case ["session", "start", *rest] if not HELP & set(rest):
@@ -143,7 +140,7 @@ def passphrase_reason(arguments: list[str], session_assigned: bool) -> str | Non
         case ["import", *rest] if not ({"--dry-run"} | HELP) & set(rest):
             return IMPORT_REASON
         case ["run", *rest]:
-            in_session, saw_help = run_in_session(rest, session_assigned)
+            in_session, saw_help = run_in_session(rest)
             return None if in_session or saw_help else RUN_REASON
     return None
 
@@ -404,55 +401,6 @@ def split_commands(tokens: list[Word | str]) -> list[Command]:
     return commands
 
 
-def assigns_session(word: str) -> bool:
-    """An `ENVH_SESSION=<non-empty>` assignment. An empty value is not a session (the client sends
-    `args.session or env`, so an empty env var is falsy, and the broker's `if session_id:` ignores it)."""
-    return word.startswith(SESSION_ASSIGNMENT) and word[len(SESSION_ASSIGNMENT):] != ""
-
-
-def env_clears_session(env_args: list[str]) -> bool:
-    """Whether this `env` invocation starts its child with ENVH_SESSION unset: `-i`/`-`/`--ignore-environment`,
-    or `-u ENVH_SESSION` / `-uENVH_SESSION` / `--unset ENVH_SESSION`. So a counted ENVH_SESSION the command then
-    strips is not treated as a live session."""
-    index = 0
-    while index < len(env_args):
-        word = env_args[index]
-        if not word.startswith("-"):
-            return False
-        if word in ("-", "-i", "--ignore-environment", "-u" + SESSION_VAR) or (not word.startswith("--") and "i" in word):
-            return True
-        if word in ("-u", "--unset"):
-            if env_args[index + 1 : index + 2] == [SESSION_VAR]:
-                return True
-            index += 2
-            continue
-        if word.startswith("--unset="):
-            if word[len("--unset="):] == SESSION_VAR:
-                return True
-            index += 1
-            continue
-        if word in ("-C", "--chdir", "-S", "--split-string"):
-            index += 2
-            continue
-        index += 1
-    return False
-
-
-def session_live_through(prefix: list[str], session_set: bool) -> bool:
-    """Whether ENVH_SESSION reaches the envh command, given an already-exported session and the inline
-    prefix: assignments set it (empty unsets it), and an `env` that ignores/unsets the environment clears it."""
-    live = session_set
-    index = 0
-    while index < len(prefix):
-        word = prefix[index]
-        if word.startswith(SESSION_ASSIGNMENT):
-            live = word[len(SESSION_ASSIGNMENT):] != ""
-        elif posixpath.basename(word) == "env" and env_clears_session(prefix[index + 1:]):
-            live = False
-        index += 1
-    return live
-
-
 def env_split_string(env_words: list[str]) -> str | None:
     """The command string of `env -S STRING` / `env --split-string=STRING`, or None if this `env` has no
     split-string option. GNU env splits that string into a command and runs it, like `bash -c`."""
@@ -573,16 +521,13 @@ def decide(command: str) -> tuple[str, str] | None:
         commands = simple_commands(command)
     except (ValueError, RecursionError):
         return ("ask", UNREADABLE_REASON) if PASSPHRASE_FORM.search(command) else None
-    session_set = socket_set = False
+    socket_set = False
     for words in commands:
         name_and_arguments = command_words(words)
-        if name_and_arguments[:1] == ["export"]:
-            session_set = session_set or any(assigns_session(word) for word in words)
-        elif name_and_arguments and posixpath.basename(name_and_arguments[0]) == "envh":
+        if name_and_arguments and posixpath.basename(name_and_arguments[0]) == "envh":
             prefix = words[: len(words) - len(name_and_arguments)]
-            in_session = session_live_through(prefix, session_set)
             socket_path, arguments = socket_and_arguments(name_and_arguments[1:], socket_set or any(SOCKET_ENV_VAR in word for word in prefix))
-            reason = passphrase_reason(arguments, in_session)
+            reason = passphrase_reason(arguments)
             if reason is not None and not granted_at_once(reason, arguments, socket_path):
                 return "ask", reason
         socket_set = socket_set or any(SOCKET_ENV_VAR in word for word in words)
