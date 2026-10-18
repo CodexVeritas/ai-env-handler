@@ -133,6 +133,8 @@ KEY_QUALIFIERS = {
     "master", "signing", "encryption", "deploy", "app", "webhook", "personal",
 }
 ENCODING_SUFFIXES = {"b64", "base64", "json"}
+# A name starting with one of these is a function or a flag, such as getAccessToken or withCredentials, not a key.
+ACTION_WORDS = {"with", "has", "is", "use", "uses", "get", "set", "create", "update", "add", "remove", "delete", "fetch", "load", "read", "write", "validate", "check", "should", "can", "needs", "require", "requires", "invalid", "missing"}
 SERVICE_WORDS = {
     "anthropic": "anthropic", "claude": "anthropic", "openai": "openai", "openrouter": "openrouter", "perplexity": "perplexity", "pplx": "perplexity",
     "gemini": "gemini", "google": "google", "gcp": "google", "gmail": "google", "sheets": "google", "groq": "groq", "mistral": "mistral",
@@ -155,7 +157,7 @@ CONFIDENCE_ORDER = ("high", "medium", "low", "fake")
 UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 DEMO_WORDS = ("demo", "example", "sample", "dummy", "fake", "placeholder")
 NAME_LIKE_VALUE = re.compile(
-    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+|[a-z]+(?:[_-][a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[a-z]+(?:[A-Z][a-z]+)+"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+|[a-z]+(?:[_-][a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[a-z]+(?:[A-Z][a-z]+)+|(?:[A-Z][a-z]+){2,}"
 )
 # Placeholders in docs and tests: a counting run, a short unit repeated, or a word no real key holds. The format's
 # fixed prefix is left out of the check.
@@ -173,7 +175,7 @@ PLACES = (
     ("docker", re.compile(r"/\.local/share/docker/|/var/lib/docker/")),
     ("credential files", re.compile(
         r"^~/(?:\.claude/\.credentials\.json|\.codex/auth\.json|\.gemini/oauth_creds\.json|\.config/(?:cursor/auth\.json|gh/hosts\.yml|gcloud/)"
-        r"|\.git-credentials|\.netrc|\.npmrc|\.pypirc|\.docker/config\.json|\.aws/|\.kube/config|\.cache/huggingface/|\.ssh/)"
+        r"|\.claude/ide/|\.git-credentials|\.netrc|\.npmrc|\.pypirc|\.docker/config\.json|\.aws/|\.kube/config|\.cache/huggingface/|\.ssh/)"
     )),
     ("agent transcripts", re.compile(
         r"^~/\.claude/(?:projects|file-history|sessions|todos|shell-snapshots)/|^~/\.claude/history\.jsonl$|^~/\.cursor/projects/"
@@ -324,6 +326,7 @@ def classify_name(name: str) -> tuple[str, str]:
     last = words[-1] if words else ""
     before = words[-2] if len(words) > 1 else ""
     credential = last in CREDENTIAL_WORDS or (last in QUALIFIED_WORDS and (before in KEY_QUALIFIERS or service is not None))
+    credential = credential and not (len(words) > 1 and words[0] in ACTION_WORDS)
     return ("medium" if credential else "low"), (service or "unknown")
 
 

@@ -296,6 +296,10 @@ def test_the_out_folder_gets_the_dated_results_folder(tmp_path: Path, capsys: py
     ("prompt_tokens", "low", "unknown"),
     ("NOPASSWD", "low", "unknown"),
     ("publicKeyToken", "low", "unknown"),
+    ("getAccessToken", "low", "unknown"),
+    ("withCredentials", "low", "unknown"),
+    ("updateApiKey", "low", "unknown"),
+    ("refresh_token", "medium", "unknown"),
 ])
 def test_names_set_the_confidence_and_service(name: str, confidence: str, service: str) -> None:
     assert classify_name(name) == (confidence, service)
@@ -346,6 +350,7 @@ def test_code_that_reads_a_key_is_not_reported() -> None:
         "OPENROUTER_API_KEY: OPENROUTER_API_KEY_PROD",
         "const secretKey = process.env.STRIPE_SECRET_KEY",
         "authToken: refreshAccessTokenNow",
+        "private_key = CertificateIssuerTypes",
         f"FRED_API_KEY={FRED}",
     ])
     assert [hit.name for hit in scan_text(Path("app.py"), text)] == ["FRED_API_KEY"]
@@ -355,7 +360,8 @@ def test_code_that_reads_a_key_is_not_reported() -> None:
     ("/h/.config/Cursor/User/History/-1a2b/abcd", "editor history"),
     ("/h/.claude/projects/x/session.jsonl", "agent transcripts"),
     ("/h/.codex/sessions/2026/x.jsonl", "agent transcripts"),
-    ("/h/.claude/ide/26078.lock", "agent app data"),
+    ("/h/.claude/ide/26078.lock", "credential files"),
+    ("/h/.claude/todos/x.json", "agent transcripts"),
     ("/h/.claude/.credentials.json", "credential files"),
     ("/h/.config/gh/hosts.yml", "credential files"),
     ("/h/.aws/credentials", "credential files"),
