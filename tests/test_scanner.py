@@ -353,13 +353,35 @@ def test_code_that_reads_a_key_is_not_reported() -> None:
 @pytest.mark.parametrize(("path", "place"), [
     ("/h/.config/Cursor/User/History/-1a2b/abcd", "editor history"),
     ("/h/.claude/projects/x/session.jsonl", "agent transcripts"),
+    ("/h/.codex/sessions/2026/x.jsonl", "agent transcripts"),
+    ("/h/.claude/ide/26078.lock", "agent app data"),
+    ("/h/.claude/.credentials.json", "credential files"),
+    ("/h/.config/gh/hosts.yml", "credential files"),
+    ("/h/.aws/credentials", "credential files"),
+    ("/h/.codex/.tmp/plugins/x/README.md", "agent app data"),
+    ("/h/code/app/.claude/worktrees/fix-x/README.md", "worktree copies"),
+    ("/h/code/app/.kilo/worktrees/meteor/.env.template", "worktree copies"),
     ("/h/code/app/logs/run.log", "logs"),
+    ("/h/code/app/temp/1_bot_logs/run_bot.txt", "logs"),
     ("/h/code/app/tests/test_keys.py", "tests"),
     ("/h/code/app/README.md", "docs and notes"),
     ("/h/code/app/.env.local", ".env files"),
+    ("/h/code/app/output_runs/traces.jsonl", "data and output"),
     ("/h/code/app/main.py", "code and config"),
+    ("/h/code/app/catalog/blog/post", "other"),
     ("/h/.local/share/Trash/files/.env", "trash"),
-    ("/h/notes", "other"),
+    ("/elsewhere/.claude/projects/x.py", "code and config"),
 ])
 def test_each_hit_gets_a_place(path: str, place: str) -> None:
-    assert place_of(path) == place
+    assert place_of(path, home="/h") == place
+
+
+@pytest.mark.parametrize(("url", "fake"), [
+    ("postgres://postgres:postgres@localhost:5432/metaculus", True),
+    ("postgres://app:" + random_text("db", 24) + "@localhost/app", True),
+    ("mysql://admin:admin@db.internal:3306/app", True),
+    ("postgres://app:" + random_text("db", 24) + "@db.internal.acme-prod.net:5432/app", False),
+])
+def test_default_and_local_database_logins_are_fake(url: str, fake: bool) -> None:
+    [hit] = scan_text(Path("README.md"), f"DATABASE_URL={url}\n")
+    assert (hit.kind, hit.confidence == "fake") == ("database-url", fake)

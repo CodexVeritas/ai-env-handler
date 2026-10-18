@@ -158,18 +158,36 @@ FAKE_WORDS = ("example", "sample", "dummy", "fake", "placeholder", "your", "xxxx
 COUNTING_RUNS = ("123456789", "abcdefghij", "ABCDEFGHIJ", "qwertyuiop")
 REPEATED_UNIT = re.compile(r"(.{2,16}?)\1{2,}")
 REPEAT_CHECK_LIMIT = 200
+# Matched in order against the path with the home folder written as ~, so an agent's own folders in your home are told
+# apart from a project's .claude folder. Where a file is stored comes first, then what kind of file it is. Credential
+# files are the ones an app signs in with, such as gh's hosts.yml: they are meant to hold a key.
 PLACES = (
     ("editor history", re.compile(r"/User/History/")),
     ("trash", re.compile(r"/\.local/share/Trash/")),
     ("envh backups", re.compile(r"/\.local/state/envh/|/envh-backups-and-scans/")),
     ("docker", re.compile(r"/\.local/share/docker/|/var/lib/docker/")),
-    ("agent transcripts", re.compile(r"/\.claude/|/\.cursor/projects/|/\.codex/")),
-    ("logs", re.compile(r"\.log(?:\.[0-9]+)?$|/logs?/")),
+    ("credential files", re.compile(
+        r"^~/(?:\.claude/\.credentials\.json|\.codex/auth\.json|\.gemini/oauth_creds\.json|\.config/(?:cursor/auth\.json|gh/hosts\.yml|gcloud/)"
+        r"|\.git-credentials|\.netrc|\.npmrc|\.pypirc|\.docker/config\.json|\.aws/|\.kube/config|\.cache/huggingface/|\.ssh/)"
+    )),
+    ("agent transcripts", re.compile(
+        r"^~/\.claude/(?:projects|file-history|sessions|todos|shell-snapshots)/|^~/\.claude/history\.jsonl$|^~/\.cursor/projects/"
+        r"|^~/\.codex/(?:sessions|archived_sessions)/|^~/\.codex/history\.jsonl$"
+    )),
+    ("agent app data", re.compile(r"^~/\.(?:claude|cursor|codex|kilocode|gemini)/")),
+    ("worktree copies", re.compile(r"/\.[A-Za-z]+/worktrees/")),
+    ("logs", re.compile(r"\.log(?:\.[0-9]+)?$|[/_-]logs?/")),
     ("tests", re.compile(r"/(?:tests?|testing|fixtures?|__tests__|spec)/|/test_[^/]*$|_test\.[A-Za-z]+$|\.test\.[A-Za-z]+$")),
     ("docs and notes", re.compile(r"\.(?:md|rst|txt|ipynb)$|/docs?/", re.IGNORECASE)),
     (".env files", re.compile(r"/\.env[^/]*$")),
+    ("data and output", re.compile(r"\.(?:jsonl|csv|tsv|html?|xml)$", re.IGNORECASE)),
     ("code and config", re.compile(r"\.(?:py|ts|tsx|js|jsx|mjs|go|rs|rb|java|sh|toml|ya?ml|json|cfg|ini|conf)$")),
 )
+# A database login that is a default or local one, such as postgres://postgres:postgres@localhost, is a dev setup in
+# docs and compose files, not a secret.
+DATABASE_LOGIN = re.compile(r"[^:/]+://([^:/@]*):([^@]*)@([^:/?]+)")
+DEFAULT_PASSWORDS = {"postgres", "password", "pass", "passwd", "pw", "pwd", "root", "admin", "secret", "example", "changeme", "test", "dev", "user", "mysql", "redis", "guest", "1234", "12345", "123456"}
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "db", "database", "postgres", "postgresql", "mysql", "redis", "mongo", "mongodb"}
 
 # Folders of installed code, caches and app data that hold no keys of yours but can hold millions of files. A name with
 # a slash matches only that path below the folder being scanned (usually your home folder).
@@ -178,7 +196,7 @@ SKIP_DIR_NAMES = {
     ".pyenv", ".conda", "miniconda3", "anaconda3", "miniforge3", "mambaforge", ".local/lib", ".local/share/uv", ".local/share/pipx",
     ".local/share/virtualenvs", ".local/share/virtualenv", ".local/share/heroku", ".npm", ".yarn", ".pnpm-store", ".bun", ".nvm", ".cargo",
     ".rustup", ".gradle", ".m2", ".julia", ".gem", "go/pkg", ".terraform", ".next", ".vscode/extensions", ".vscode-insiders/extensions",
-    ".cursor/extensions", ".vscode-server", ".cursor-server", ".claude/plugins", ".cache", "Cache", "Code Cache", "GPUCache", "DawnCache",
+    ".cursor/extensions", ".antigravity/extensions", ".vscode-server", ".cursor-server", ".claude/plugins", ".cache", "Cache", "Code Cache", "GPUCache", "DawnCache",
     "CacheStorage", ".local/share/flatpak", ".var/app", ".local/share/containers", ".local/share/Steam", ".steam", ".wine", "snap",
     ".mozilla", "google-chrome", "chromium", "BraveSoftware", "Microsoft Edge", ".thunderbird", "Trash/expunged", f"{FOLDER_NAME}/{SCANS}",
 }
@@ -268,8 +286,18 @@ def looks_fake(value: str, fixed: int = 0) -> bool:
     return repeated * 10 >= len(rest) * 4
 
 
-def place_of(path: str) -> str:
-    return next((place for place, pattern in PLACES if pattern.search(path)), "other")
+def place_of(path: str, home: str | None = None) -> str:
+    home = home or str(Path.home())
+    shown = "~" + path[len(home):] if path.startswith(home + "/") else path
+    return next((place for place, pattern in PLACES if pattern.search(shown)), "other")
+
+
+def default_login(value: str) -> bool:
+    match = DATABASE_LOGIN.match(value)
+    if match is None:
+        return False
+    user, password, host = match.groups()
+    return password.lower() in DEFAULT_PASSWORDS or password == user or host.lower() in LOCAL_HOSTS
 
 
 def classify_name(name: str) -> tuple[str, str]:
@@ -323,7 +351,7 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
         spans = matches_by_line.get(index, [])
         for start, end, kind, fixed in spans:
             value = line[start:end]
-            confidence = "fake" if looks_fake(value, fixed) else "high"
+            confidence = "fake" if looks_fake(value, fixed) or (kind == "database-url" and default_login(value)) else "high"
             yield Hit(path, index + 1, start, confidence, kind, "", shown_value(value, fixed), value_id(value), len(value), fixed)
         for match in ASSIGNMENT_REGEX.finditer(line):
             name = match.group("name")
@@ -522,7 +550,7 @@ def confidence_lines(hits: list[Hit]) -> list[str]:
         f"High confidence, a known key format: {spread(tiers['high'])}. Start here.",
         f"Medium confidence, a credential-style name such as OPENAI_API_KEY=...: {spread(tiers['medium'])}.",
         f"Low confidence, other names holding KEY, TOKEN, SECRET or PASS, such as cache_key: {spread(tiers['low'])}. Mostly not keys.",
-        f"Fake, values that look like placeholders (counting or repeating, or words like example): {spread(tiers['fake'])}.",
+        f"Fake, placeholders (counting or repeating, words like example) and default or local database logins: {spread(tiers['fake'])}.",
     ]
 
 
