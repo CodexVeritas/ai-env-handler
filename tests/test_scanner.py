@@ -250,13 +250,13 @@ def test_results_are_saved_to_a_private_folder_and_the_terminal_gets_a_summary(t
     assert (report_dir / "files.txt").read_text().splitlines() == expected
     assert len(json.loads((report_dir / "hits.json").read_text())["hits"]) == 90
     report = (report_dir / "report.txt").read_text()
-    assert report.index("== Summary ==") < report.index("== High confidence") < report.index("== Medium confidence") < report.index("== Low confidence") < report.index("== Every hit by file ==")
+    assert report.index("== Summary ==") < report.index("== Likely keys") < report.index("== Possible keys") < report.index("== Unlikely keys") < report.index("== Placeholders") < report.index("== Every hit by file ==")
     assert f"{shown_value(OPENAI, len('sk-'))} ({len(OPENAI)} chars, id {value_id(OPENAI)})  openai: in 30 files, 30 places" in report
     assert f"{peek(FRED)} ({len(FRED)} chars, id {value_id(FRED)})  fred  FRED_API_KEY: in 30 files, 30 places" in report
     assert any("In short (details at the top)" in line for line in report.splitlines()[-6:])
     shown = capsys.readouterr().out
     assert f"Results saved in ~/envh-backups-and-scans/scans/{report_dir.name}" in shown and "notes.md" not in shown
-    assert "90 key-shaped strings in 30 files" in shown and "known key format: 1 distinct value in 30 files" in shown
+    assert "90 key-shaped strings in 30 files" in shown and "Likely keys, in a provider's key format: 1 distinct value in 30 files" in shown
     for entry in report_dir.iterdir():
         assert OPENAI not in entry.read_text() and FRED not in entry.read_text()
     assert scan_paths([report_dir], 1024 * 1024)[0] == []
