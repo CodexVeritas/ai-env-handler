@@ -96,9 +96,9 @@ EXPLORER_PANEL = [
     "Lists each key the scan found, the files it is in, and the lines",
     "around each copy. Keys stay hidden unless you press s.",
     "",
-    "  ↑↓ →←  move and open           Tab   High, Medium, Low, Fake, All",
-    "  g      group by place          v     only keys in your vault",
-    "  x      replace every copy under a row with a placeholder",
+    "  Tab    switch list: Likely, Possible, Unlikely keys, Placeholders",
+    "  ↑↓ →←  move and open          g   group by place",
+    "  v      only keys in your vault x   replace every copy under a row",
     "  q      close it and continue setup",
 ]
 
