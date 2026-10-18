@@ -198,7 +198,7 @@ def test_the_real_view_on_a_terminal_shows_the_key_only_on_request(tmp_path: Pat
         raise AssertionError(f"{text!r} never appeared")
 
     try:
-        wait_for("in your vault first?")
+        wait_for("against your vault? [Y/n]")
         os.write(master, b"n\r")
         wait_for("x replace")
         for keys, then in ((b"\r", "1 key in 1 file"), (b"\x1b[B\x1b[C", "1 file"), (b"\x1b[B\r", "s show the key")):
