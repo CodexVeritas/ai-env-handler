@@ -42,6 +42,7 @@ CURSOR_HOOK_MATCHER = "envh"
 INSTALL_PREFIX = Path("/opt/envh")
 INSTALL_RECORD = INSTALL_PREFIX / "installed-from"
 ENVH_BIN = Path("/usr/local/bin/envh")
+SAVED_FILES = Path.home() / "envh-backups-and-scans"
 ROOT_FLAG = "--install-as-root"
 PREFLIGHT_EXIT = 3
 SUDO = "/usr/bin/sudo"
@@ -74,12 +75,12 @@ Keep that window open: closing it ends every session.
 You can also open it from the "envh console" app launcher."""
 X11_MORE = 'On X11, other programs you run can read and type into that window. See README, "Who else can see".'
 IMPORT_MORE = """Shows what will change and asks before writing anything.
-Backs up each .env file first.
+Backs up each .env file first, into ~/envh-backups-and-scans unless you pick another folder.
 Names keys after the project, like MYAPP_OPENAI_API_KEY.
 Import more projects later with: envh import <folder>"""
 SCAN_MORE = """Checks shell history, Claude Code transcripts, notebooks and other repos.
 Skips installed packages, caches and browser profiles; the report lists what it skipped.
-Shows where each copy is, never the key itself.
+Saves where each copy is, never the key itself, into ~/envh-backups-and-scans unless you pick another folder.
 Scan somewhere else with: envh scan <folder>"""
 
 
@@ -471,7 +472,7 @@ def step_import() -> Outcome:
     if returncode != 0:
         return Outcome(False, f"stopped (exit code {returncode})")
     say()
-    warn("Once the project works, delete the backup folder shown above. It holds the old keys.")
+    warn("Once the project works, delete its backup in ~/envh-backups-and-scans/import-backups. It holds the old keys.")
     return Outcome(True, "imported")
 
 
@@ -489,7 +490,7 @@ def step_scan() -> Outcome:
         ok("No stray keys found")
         return Outcome(True, "nothing found")
     if returncode == 1:
-        warn("Delete the copies above, or rotate those keys.")
+        warn("Open report.txt in the folder named above; its summary is at the top. Delete the copies it lists, or rotate those keys.")
         return Outcome(True, "found copies")
     return Outcome(False, f"failed (exit code {returncode})")
 
@@ -697,6 +698,8 @@ def print_summary(results: list[tuple[str, Outcome]]) -> None:
     for title, _ in STEPS[len(results):]:
         line(f"{dim('·')} {title:<20} {dim('not reached')}")
     say()
+    if SAVED_FILES.exists():
+        line(dim("Import backups and scan results are in ~/envh-backups-and-scans; its README.txt says what each holds."))
     line(dim("Rerun this any time to update envh or import more projects."))
     line(dim("To see, rename or describe your keys, type /keys in the console."))
     say()

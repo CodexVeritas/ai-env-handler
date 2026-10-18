@@ -228,7 +228,7 @@ def start_console(launch: Callable[[], Pane], passphrase: str, clock: Clock) -> 
     return console
 
 
-def import_env(shell: Pane, console: Pane, passphrase: str, clock: Clock) -> None:
+def import_env(shell: Pane, console: Pane, passphrase: str, backups: Path, clock: Clock) -> None:
     clock.log("Importing the .env file")
     clock.mark("import")
     shell.send(CLEAR_SCREEN)
@@ -245,6 +245,10 @@ def import_env(shell: Pane, console: Pane, passphrase: str, clock: Clock) -> Non
     time.sleep(1.0)
     since = shell.checkpoint()
     shell.send(ENTER)
+    shell.wait_for("or type another folder:", since)
+    time.sleep(0.8)
+    since = shell.checkpoint()
+    shell.run(str(backups))
     shell.wait_for("Proceed?", since)
     time.sleep(0.8)
     since = console.checkpoint()
@@ -363,7 +367,6 @@ def record(output: Path) -> None:
             "TERM": "xterm-256color",
             "TZ": "UTC",
             "ENVH_SOCKET": str(socket),
-            "XDG_STATE_HOME": str(work / "state"),
         }
 
         def launch_console() -> Pane:
@@ -378,7 +381,7 @@ def record(output: Path) -> None:
         show_problem(shell, clock)
         clock.log("Starting a development broker and its console")
         console = start_console(launch_console, passphrase, clock)
-        import_env(shell, console, passphrase, clock)
+        import_env(shell, console, passphrase, work / "backups", clock)
         agent_session(shell, console, passphrase, clock)
         auto_approved_run(shell, console, clock)
         denied_request(shell, console, clock)

@@ -4,12 +4,12 @@ from pathlib import Path
 import pytest
 
 from envh.client.transport import ClientError
+from envh.tools.saved_files import IMPORT_BACKUPS, saved_files_root
 from envh.tools.importer import (
     apply_renames,
     backup_originals,
     build_plan,
     build_presets,
-    default_backup_root,
     discover,
     looks_secret,
     parse_env_file,
@@ -173,12 +173,15 @@ def test_backup_mirrors_each_original_in_a_private_folder(tmp_path: Path) -> Non
         backup_originals([env_file], tmp_path / "backups", "20261003-120000")
 
 
-def test_default_backup_root_follows_xdg_state_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    assert default_backup_root() == tmp_path / "state" / "envh" / "import-backups"
-    monkeypatch.delenv("XDG_STATE_HOME")
+def test_backups_in_the_shared_folder_come_with_its_readme(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert default_backup_root() == tmp_path / ".local" / "state" / "envh" / "import-backups"
+    env_file = tmp_path / "repo" / ".env"
+    env_file.parent.mkdir()
+    env_file.write_text("OPENAI_API_KEY=sk-original\n")
+    backup_dir = backup_originals([env_file], saved_files_root() / IMPORT_BACKUPS, "20261003-120000")
+    assert backup_dir == tmp_path / "envh-backups-and-scans" / "import-backups" / "20261003-120000"
+    assert "rm -r ~/envh-backups-and-scans/import-backups" in (tmp_path / "envh-backups-and-scans" / "README.txt").read_text()
+    assert stat.S_IMODE((tmp_path / "envh-backups-and-scans").stat().st_mode) == 0o700
 
 
 def test_write_rewrites_follows_symlinks(tmp_path: Path) -> None:
@@ -245,7 +248,7 @@ def test_the_plan_shows_the_new_lines_and_never_a_value() -> None:
     decisions = suggest_secret_names([parsed], flags_for(parsed))
     plan = build_plan([parsed], decisions, build_presets([parsed], decisions))
     said: list[str] = []
-    show_plan(plan, [parsed], Path("/backups"), said.append)
+    show_plan(plan, [parsed], said.append)
     output = "\n".join(said)
     for original in ("gh-token-1234567890", "pw@localhost", "sk-or-team-000000", "an-team-000000", "sk-or-personal-1111111", "an-personal-1111111", "LOG_LEVEL=info"):
         assert original not in output

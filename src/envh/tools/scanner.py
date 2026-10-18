@@ -17,39 +17,128 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator, TextIO
 
+from envh.common import peek
+from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, saved_files_root, shown_path
+
 # Provider formats that are distinctive enough to recognize anywhere, including transcripts and shell history, each with
 # the literal markers one of which every match contains. A file holding none of a pattern's markers skips that pattern;
-# most files hold none, which is what keeps the scan fast.
+# most files hold none, which is what keeps the scan fast. Where gitleaks (github.com/gitleaks/gitleaks) has a rule for a
+# provider, the format follows it.
 VALUE_PATTERNS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("openrouter", r"sk-or-v1-[a-f0-9]{64}", ("sk-or-v1-",)),
     ("anthropic", r"sk-ant-[A-Za-z0-9_-]{32,}", ("sk-ant-",)),
     ("openai", r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{32,}", ("sk-proj-", "sk-svcacct-", "sk-admin-")),
     ("openai-legacy", r"sk-[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}", ("T3BlbkFJ",)),
+    ("xai", r"xai-[A-Za-z0-9]{70,}", ("xai-",)),
+    ("deepseek", r"sk-[a-f0-9]{32}", ("sk-",)),
     ("perplexity", r"pplx-[A-Za-z0-9]{32,}", ("pplx-",)),
-    ("google-gemini", r"AIza[0-9A-Za-z_-]{35}", ("AIza",)),
-    ("e2b", r"e2b_[a-f0-9]{32,}", ("e2b_",)),
-    ("github", r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}", ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")),
-    ("slack", r"xox[abprs]-[A-Za-z0-9-]{10,}", ("xoxa-", "xoxb-", "xoxp-", "xoxr-", "xoxs-")),
-    ("aws-access-key", r"(?:AKIA|ASIA)[0-9A-Z]{16}", ("AKIA", "ASIA")),
-    ("stripe", r"(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}", ("_live_", "_test_")),
-    ("huggingface", r"hf_[A-Za-z0-9]{30,}", ("hf_",)),
+    ("google-api-key", r"AIza[0-9A-Za-z_-]{35}", ("AIza",)),
+    ("google-oauth", r"GOCSPX-[A-Za-z0-9_-]{28}|ya29\.[A-Za-z0-9_-]{30,}", ("GOCSPX-", "ya29.")),
+    ("google-service-account", r"(?:eyJ0eXBlIjoic2VydmljZV9hY2NvdW50|eyJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu|ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu)[A-Za-z0-9+/=]{100,}", ("eyJ0eXBlIjoic2VydmljZV9hY2NvdW50", "eyJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu", "ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu")),
     ("groq", r"gsk_[A-Za-z0-9]{40,}", ("gsk_",)),
-    ("tavily", r"tvly-[A-Za-z0-9_-]{20,}", ("tvly-",)),
+    ("together", r"tgp_v1_[A-Za-z0-9_-]{30,}", ("tgp_v1_",)),
+    ("fireworks", r"fw_[A-Za-z0-9]{20,}", ("fw_",)),
+    ("cerebras", r"csk-[a-z0-9]{40,}", ("csk-",)),
+    ("huggingface", r"hf_[A-Za-z0-9]{30,}|api_org_[A-Za-z]{34}", ("hf_", "api_org_")),
     ("replicate", r"r8_[A-Za-z0-9]{30,}", ("r8_",)),
-    ("notion", r"(?:ntn_|secret_)[A-Za-z0-9]{40,}", ("ntn_", "secret_")),
+    ("elevenlabs", r"sk_[a-f0-9]{48}", ("sk_",)),
+    ("e2b", r"e2b_[a-f0-9]{32,}", ("e2b_",)),
+    ("tavily", r"tvly-[A-Za-z0-9_-]{20,}", ("tvly-",)),
+    ("firecrawl", r"fc-[a-f0-9]{32}", ("fc-",)),
+    ("langsmith", r"lsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}", ("lsv2_",)),
+    ("pinecone", r"pcsk_[A-Za-z0-9_]{50,}", ("pcsk_",)),
+    ("supabase", r"sbp_[a-f0-9]{40}|sb_secret_[A-Za-z0-9_-]{20,}", ("sbp_", "sb_secret_")),
+    ("github", r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}", ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")),
+    ("gitlab", r"gl(?:pat|dt|rt|ft|imt|soat|ffct|oas|agent|ptt)-[A-Za-z0-9_-]{20,}|glcbt-[A-Za-z0-9]{1,5}_[A-Za-z0-9_-]{20,}", ("glpat-", "gldt-", "glrt-", "glft-", "glimt-", "glsoat-", "glffct-", "gloas-", "glagent-", "glptt-", "glcbt-")),
+    ("slack", r"xox[abeoprs]-[A-Za-z0-9-]{10,}|xapp-[0-9]-[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+", ("xoxa-", "xoxb-", "xoxe-", "xoxo-", "xoxp-", "xoxr-", "xoxs-", "xapp-")),
+    ("slack-webhook", r"https://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}", ("hooks.slack.com",)),
+    ("discord-webhook", r"https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]{50,}", ("/api/webhooks/",)),
+    ("telegram", r"[0-9]{8,10}:AA[A-Za-z0-9_-]{33}", (":AA",)),
+    ("twilio", r"SK[0-9a-fA-F]{32}", ("SK",)),
     ("sendgrid", r"SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}", ("SG.",)),
+    ("mailchimp", r"[a-f0-9]{32}-us[0-9]{1,2}", ("-us",)),
+    ("stripe", r"(?:sk|rk)_(?:live|test|prod)_[A-Za-z0-9]{20,}", ("sk_live_", "sk_test_", "sk_prod_", "rk_live_", "rk_test_", "rk_prod_")),
+    ("stripe-webhook", r"whsec_[A-Za-z0-9]{32,}", ("whsec_",)),
+    ("shopify", r"shp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}", ("shpat_", "shpca_", "shppa_", "shpss_")),
+    ("square", r"sq0(?:atp|csp)-[A-Za-z0-9_-]{22,60}", ("sq0atp-", "sq0csp-")),
+    ("aws-access-key", r"(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}", ("A3T", "AKIA", "ASIA", "ABIA", "ACCA")),
+    ("aws-bedrock", r"ABSK[A-Za-z0-9+/]{109,269}={0,2}", ("ABSK",)),
+    ("azure-client-secret", r"[A-Za-z0-9_~.]{3}[0-9]Q~[A-Za-z0-9_~.-]{31,34}", ("Q~",)),
+    ("cloudflare-origin-ca", r"v1\.0-[a-f0-9]{24}-[a-f0-9]{146}", ("v1.0-",)),
+    ("digitalocean", r"do[opr]_v1_[a-f0-9]{64}", ("doo_v1_", "dop_v1_", "dor_v1_")),
+    ("heroku", r"HRKU-AA[A-Za-z0-9_-]{58}", ("HRKU-AA",)),
+    ("flyio", r"fo1_[A-Za-z0-9_-]{43}|fm1[ar]_[A-Za-z0-9+/]{100,}={0,3}|fm2_[A-Za-z0-9+/]{100,}={0,3}", ("fo1_", "fm1a_", "fm1r_", "fm2_")),
+    ("planetscale", r"pscale_(?:tkn|oauth|pw)_[A-Za-z0-9_=.-]{32,64}", ("pscale_tkn_", "pscale_oauth_", "pscale_pw_")),
+    ("databricks", r"dapi[a-f0-9]{32}(?:-[0-9])?", ("dapi",)),
+    ("doppler", r"dp\.pt\.[A-Za-z0-9]{43}", ("dp.pt.",)),
+    ("hashicorp-vault", r"hvs\.[A-Za-z0-9_-]{90,120}|hvb\.[A-Za-z0-9_-]{138,300}", ("hvs.", "hvb.")),
+    ("terraform-cloud", r"[A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9_=-]{60,70}", (".atlasv1.",)),
+    ("grafana", r"glc_[A-Za-z0-9+/]{32,400}={0,3}|glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}|eyJrIjoi[A-Za-z0-9]{70,400}={0,3}", ("glc_", "glsa_", "eyJrIjoi")),
+    ("sentry", r"sntryu_[a-f0-9]{64}|sntrys_eyJpYXQiO[A-Za-z0-9+/=_]{50,}", ("sntryu_", "sntrys_")),
+    ("sentry-dsn", r"https://[a-f0-9]{32}@[A-Za-z0-9.-]*sentry\.io/[0-9]+", ("sentry.io",)),
+    ("new-relic", r"NRAK-[A-Za-z0-9]{27}", ("NRAK-",)),
+    ("posthog", r"phx_[A-Za-z0-9]{40,}", ("phx_",)),
+    ("linear", r"lin_api_[A-Za-z0-9]{40}", ("lin_api_",)),
+    ("atlassian", r"ATATT3[A-Za-z0-9_=-]{186}", ("ATATT3",)),
+    ("airtable", r"pat[A-Za-z0-9]{14}\.[a-f0-9]{64}", ("pat",)),
+    ("notion", r"(?:ntn_|secret_)[A-Za-z0-9]{40,}", ("ntn_", "secret_")),
+    ("postman", r"PMAK-[a-fA-F0-9]{24}-[a-fA-F0-9]{34}", ("PMAK-",)),
+    ("npm", r"npm_[A-Za-z0-9]{36}", ("npm_",)),
+    ("pypi", r"pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,1000}", ("pypi-AgEIcHlwaS5vcmc",)),
+    ("onepassword", r"A3-[A-Z0-9]{6}-(?:[A-Z0-9]{11}|[A-Z0-9]{6}-[A-Z0-9]{5})-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}|ops_eyJ[A-Za-z0-9+/]{250,}={0,3}", ("A3-", "ops_eyJ")),
+    ("age-secret-key", r"AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}", ("AGE-SECRET-KEY-1",)),
+    ("resend", r"re_[A-Za-z0-9]{8}_[A-Za-z0-9]{24}", ("re_",)),
+    ("browserbase", r"bb_live_[A-Za-z0-9_-]{20,}", ("bb_live_",)),
     ("jwt", r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", ("eyJ",)),
-    ("private-key", r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY(?: BLOCK)?-----", ("PRIVATE KEY",)),
+    ("private-key", r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----|PuTTY-User-Key-File-[0-9]", ("PRIVATE KEY", "PuTTY-User-Key-File-")),
     ("database-url", r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^\s:/@\"']+:[^\s@\"']+@[^\s\"']+", ("://",)),
 )
+# Formats whose prefix is short or common enough to turn up inside longer strings: a match counts only when it stands
+# alone, with no letter, digit or underscore on either side. Checked after matching so each pattern still starts with
+# its literal prefix, which is what lets the regex engine skip quickly to candidates.
+STANDALONE_KINDS = {
+    "deepseek", "fireworks", "cerebras", "elevenlabs", "firecrawl", "telegram", "twilio", "mailchimp", "aws-access-key", "azure-client-secret",
+    "databricks", "airtable", "npm", "onepassword", "resend",
+}
+WORD_CHARACTER = re.compile(r"[A-Za-z0-9_]")
 
 # Named assignments: NAME=value / NAME: value / "NAME": "value" where NAME holds a secret word and value looks random.
 # The regex takes any identifier followed by an assignment and the secret word is checked afterwards; searching for the
 # word inside the regex backtracked over every identifier and made the scan several times slower.
 ASSIGNMENT_REGEX = re.compile(r"(?<![A-Za-z0-9_])(?P<name>[A-Za-z_][A-Za-z0-9_]{0,130})[\"']?\s*[=:]\s*[\"']?(?P<value>[A-Za-z0-9_\-./+=]{16,})")
-SECRET_WORD = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|CLIENT_ID", re.IGNORECASE)
+SECRET_WORD = re.compile(r"KEY|TOKEN|SECRET|PASS|CREDENTIAL|CLIENT_ID", re.IGNORECASE)
 PLACEHOLDER_WORDS = ("example", "your", "placeholder", "changeme", "xxxx", "redacted", "dummy", "insert", "replace", "envh-proxy", "sk-proj-abc", "<", ">", "$", "%")
-NAME_ONLY_PROVIDERS = ("serp", "fred", "asknews", "hyperbrowser", "metaculus", "exa", "mistral", "cohere", "together", "deepseek", "fireworks")
+NAME_ONLY_PROVIDERS = ("Serp", "FRED", "AskNews", "Hyperbrowser", "Metaculus", "Exa", "Deepgram", "Parallel", "Radiant", "ACLED", "Mistral", "Cohere", "AWS secret access keys")
+
+# A named assignment is medium confidence when its name ends like a credential (API_KEY, ACCESS_TOKEN, CLIENT_SECRET,
+# PASSWORD) or names a service and ends in KEY or TOKEN; otherwise it is low (cache_key, prompt_tokens, monkeypatch).
+CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+NAME_SEPARATOR = re.compile(r"[^A-Za-z0-9]+")
+CREDENTIAL_WORDS = {"secret", "password", "passwd", "pass", "credentials", "credential", "apikey", "secretkey", "accesstoken", "authtoken", "privatekey"}
+QUALIFIED_WORDS = {"key", "token"}
+KEY_QUALIFIERS = {
+    "api", "secret", "private", "access", "auth", "oauth", "bearer", "refresh", "session", "bot", "client", "management", "service", "admin",
+    "master", "signing", "encryption", "deploy", "app", "webhook", "personal",
+}
+ENCODING_SUFFIXES = {"b64", "base64", "json"}
+SERVICE_WORDS = {
+    "anthropic": "anthropic", "claude": "anthropic", "openai": "openai", "openrouter": "openrouter", "perplexity": "perplexity", "pplx": "perplexity",
+    "gemini": "gemini", "google": "google", "gcp": "google", "gmail": "google", "sheets": "google", "groq": "groq", "mistral": "mistral",
+    "cohere": "cohere", "together": "together", "togetherai": "together", "deepseek": "deepseek", "fireworks": "fireworks", "xai": "xai",
+    "grok": "xai", "huggingface": "huggingface", "hf": "huggingface", "replicate": "replicate", "exa": "exa", "serp": "serp", "serpapi": "serp",
+    "tavily": "tavily", "asknews": "asknews", "fred": "fred", "hyperbrowser": "hyperbrowser", "metaculus": "metaculus", "metac": "metaculus",
+    "e2b": "e2b", "github": "github", "gh": "github", "gitlab": "gitlab", "slack": "slack", "discord": "discord", "telegram": "telegram",
+    "twilio": "twilio", "sendgrid": "sendgrid", "mailgun": "mailgun", "mailchimp": "mailchimp", "stripe": "stripe", "aws": "aws", "azure": "azure",
+    "notion": "notion", "linear": "linear", "jira": "atlassian", "atlassian": "atlassian", "confluence": "atlassian", "figma": "figma",
+    "sentry": "sentry", "datadog": "datadog", "posthog": "posthog", "supabase": "supabase", "firebase": "firebase", "vercel": "vercel",
+    "netlify": "netlify", "cloudflare": "cloudflare", "pinecone": "pinecone", "langsmith": "langsmith", "langchain": "langsmith",
+    "wandb": "wandb", "brave": "brave", "firecrawl": "firecrawl", "elevenlabs": "elevenlabs", "deepgram": "deepgram", "assemblyai": "assemblyai",
+    "cerebras": "cerebras", "browserbase": "browserbase", "apify": "apify", "newsapi": "newsapi", "parallel": "parallel", "radiant": "radiant",
+    "acled": "acled", "postgres": "database", "mysql": "database", "redis": "database", "mongo": "database", "mongodb": "database",
+    "database": "database", "db": "database", "npm": "npm", "pypi": "pypi", "docker": "docker", "heroku": "heroku", "airtable": "airtable",
+    "digitalocean": "digitalocean", "resend": "resend", "algolia": "algolia", "mapbox": "mapbox", "kalshi": "kalshi", "polymarket": "polymarket",
+}
+CONFIDENCE_ORDER = ("high", "medium", "low")
 
 # Folders of installed code, caches and app data that hold no keys of yours but can hold millions of files. A name with
 # a slash matches only that path below the folder being scanned (usually your home folder).
@@ -60,7 +149,7 @@ SKIP_DIR_NAMES = {
     ".rustup", ".gradle", ".m2", ".julia", ".gem", "go/pkg", ".terraform", ".next", ".vscode/extensions", ".vscode-insiders/extensions",
     ".cursor/extensions", ".vscode-server", ".cursor-server", ".claude/plugins", ".cache", "Cache", "Code Cache", "GPUCache", "DawnCache",
     "CacheStorage", ".local/share/flatpak", ".var/app", ".local/share/containers", ".local/share/Steam", ".steam", ".wine", "snap",
-    ".mozilla", "google-chrome", "chromium", "BraveSoftware", "Microsoft Edge", ".thunderbird", "Trash/expunged",
+    ".mozilla", "google-chrome", "chromium", "BraveSoftware", "Microsoft Edge", ".thunderbird", "Trash/expunged", f"{FOLDER_NAME}/{SCANS}",
 }
 SKIPPED_SUMMARY = (
     "Skipped: installed packages and environments (.venv, node_modules, conda, uv's Pythons and more), caches (.cache, app",
@@ -84,20 +173,31 @@ DEFAULT_MAX_BYTES = 25 * 1024 * 1024
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 BAR_WIDTH = 20
 REDRAW_SECONDS = 0.1
+SUMMARY_TOP = 15
+NAMES_SHOWN = 3
 
 
 @dataclass(frozen=True)
 class Hit:
+    """One key-shaped string. kind is the key format, or for a named assignment the service its name mentions."""
+
     path: Path
     line: int
+    confidence: str
     kind: str
     name: str
-    prefix: str
+    shown: str
     fingerprint: str
     length: int
 
     def to_json(self) -> dict[str, object]:
-        return {"path": str(self.path), "line": self.line, "kind": self.kind, "name": self.name, "prefix": self.prefix, "fingerprint": self.fingerprint, "length": self.length}
+        return {
+            "path": str(self.path), "line": self.line, "confidence": self.confidence, "kind": self.kind, "name": self.name, "shown": self.shown,
+            "fingerprint": self.fingerprint, "length": self.length,
+        }
+
+    def describe(self) -> str:
+        return f"{self.shown} ({self.length} chars, id {self.fingerprint})"
 
 
 def entropy(text: str) -> float:
@@ -111,9 +211,38 @@ def looks_placeholder(value: str) -> bool:
     return any(word in lowered for word in PLACEHOLDER_WORDS) or entropy(value) < 3.0
 
 
-def redact(value: str) -> tuple[str, str]:
-    digest = hashlib.sha256(value.encode()).hexdigest()[:8]
-    return value[:4] + "\u2026", digest
+def value_id(value: str) -> str:
+    """Eight hex characters of the value's SHA-256; the envh console shows the first six for a stored key."""
+    return hashlib.sha256(value.encode()).hexdigest()[:8]
+
+
+def name_words(name: str) -> list[str]:
+    return [word.lower() for word in NAME_SEPARATOR.split(CAMEL_BOUNDARY.sub(r"\1_\2", name)) if word]
+
+
+def service_named(words: list[str]) -> str | None:
+    """The service a name mentions, preferring the one nearest its end: METACULUS_OPENAI_API_KEY is an OpenAI key."""
+    for index in reversed(range(len(words))):
+        for candidate in ((words[index - 1] + words[index]) if index else "", words[index]):
+            if candidate in SERVICE_WORDS:
+                return SERVICE_WORDS[candidate]
+    return None
+
+
+def classify_name(name: str) -> tuple[str, str]:
+    """(confidence, service) for a NAME=value hit; the service is "unknown" when the name mentions none."""
+    words = name_words(name)
+    while len(words) > 1 and words[-1] in ENCODING_SUFFIXES:
+        words.pop()
+    service = service_named(words)
+    last = words[-1] if words else ""
+    before = words[-2] if len(words) > 1 else ""
+    credential = last in CREDENTIAL_WORDS or (last in QUALIFIED_WORDS and (before in KEY_QUALIFIERS or service is not None))
+    return ("medium" if credential else "low"), (service or "unknown")
+
+
+def standalone(line: str, start: int, end: int) -> bool:
+    return not (start > 0 and WORD_CHARACTER.match(line[start - 1])) and not (end < len(line) and WORD_CHARACTER.match(line[end]))
 
 
 def present_kinds(text: str) -> tuple[str, ...]:
@@ -135,19 +264,21 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
             for match in values.finditer(line):
                 value = match.group(0)
                 kind = (match.lastgroup or "value").replace("_", "-")
-                prefix, digest = redact(value)
+                if kind in STANDALONE_KINDS and not standalone(line, *match.span()):
+                    continue
                 seen_spans.append(match.span())
-                yield Hit(path, line_number, kind, "", prefix, digest, len(value))
+                yield Hit(path, line_number, "high", kind, "", peek(value), value_id(value), len(value))
         for match in ASSIGNMENT_REGEX.finditer(line):
-            if SECRET_WORD.search(match.group("name"), 1) is None:
+            name = match.group("name")
+            if SECRET_WORD.search(name, 1) is None:
                 continue
             value = match.group("value").rstrip(".,;")
             if looks_placeholder(value):
                 continue
             if any(start <= match.start("value") < end for start, end in seen_spans):
                 continue
-            prefix, digest = redact(value)
-            yield Hit(path, line_number, "named-assignment", match.group("name"), prefix, digest, len(value))
+            confidence, service = classify_name(name)
+            yield Hit(path, line_number, confidence, service, name, peek(value), value_id(value), len(value))
 
 
 def read_if_text(path: Path) -> str | None:
@@ -259,7 +390,7 @@ def shown_folder(folder: Path) -> str:
     try:
         parts = folder.relative_to(Path.home()).parts
     except ValueError:
-        return "/".join(folder.parts[:4])
+        return str(Path(*folder.parts[:4]))
     return "~/" + "/".join(parts[:3]) if parts else "~"
 
 
@@ -307,11 +438,33 @@ def skipped_folders_help() -> str:
     return f"Skipped folders: {', '.join(sorted(SKIP_DIR_NAMES, key=str.lower))}, and any folder tagged with {CACHE_TAG}."
 
 
+def plural(count: int, word: str) -> str:
+    return f"{count:,} {word}" + ("" if count == 1 else "s")
+
+
+def spread(hits: list[Hit]) -> str:
+    return f"{plural(len({hit.fingerprint for hit in hits}), 'distinct value')} in {plural(len({hit.path for hit in hits}), 'file')}"
+
+
+def group_by(hits: list[Hit], key: Callable[[Hit], str]) -> dict[str, list[Hit]]:
+    groups: dict[str, list[Hit]] = defaultdict(list)
+    for hit in hits:
+        groups[key(hit)].append(hit)
+    return groups
+
+
 def headline(hits: list[Hit], scanned: int, elapsed: float) -> str:
-    file_count = len({hit.path for hit in hits})
-    strings = f"{len(hits):,} key-shaped string" + ("" if len(hits) == 1 else "s")
-    files = f"{file_count:,} file" + ("" if file_count == 1 else "s")
-    return f"scanned {scanned:,} text files in {readable_duration(elapsed)}; {strings} in {files}"
+    files = plural(len({hit.path for hit in hits}), "file")
+    return f"scanned {scanned:,} text files in {readable_duration(elapsed)}; {plural(len(hits), 'key-shaped string')} in {files}"
+
+
+def confidence_lines(hits: list[Hit]) -> list[str]:
+    tiers = group_by(hits, lambda hit: hit.confidence)
+    return [
+        f"High confidence, a known key format: {spread(tiers['high'])}. Start here.",
+        f"Medium confidence, a credential-style name such as OPENAI_API_KEY=...: {spread(tiers['medium'])}.",
+        f"Low confidence, other names holding KEY, TOKEN, SECRET or PASS, such as cache_key: {spread(tiers['low'])}. Mostly not keys.",
+    ]
 
 
 def notes(unreadable: list[Path], say: Callable[[str], None]) -> None:
@@ -323,61 +476,105 @@ def notes(unreadable: list[Path], say: Callable[[str], None]) -> None:
     say(f"Keys without a distinctive format ({', '.join(NAME_ONLY_PROVIDERS)}) are only recognized inside named assignments such as FRED_API_KEY=...; a bare copy of one in a transcript cannot be identified reliably.")
 
 
-def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, say: Callable[[str], None] = print) -> None:
-    by_path: dict[Path, list[Hit]] = defaultdict(list)
-    for hit in hits:
-        by_path[hit.path].append(hit)
+def summary_section(hits: list[Hit], say: Callable[[str], None]) -> None:
+    say(f"  {'type':<24} {'confidence':<10} {'strings':>9} {'distinct':>9} {'files':>7}")
+    by_type = group_by(hits, lambda hit: f"{CONFIDENCE_ORDER.index(hit.confidence)} {hit.kind}")
+    for _, group in sorted(by_type.items(), key=lambda item: (item[0][0], -len(item[1]))):
+        first = group[0]
+        say(f"  {first.kind:<24} {first.confidence:<10} {len(group):>9,} {len({hit.fingerprint for hit in group}):>9,} {len({hit.path for hit in group}):>7,}")
+    tiers = group_by(hits, lambda hit: hit.confidence)
+    for confidence in ("high", "medium"):
+        if tiers[confidence]:
+            say(f"\nWhere the {confidence}-confidence values are (top {SUMMARY_TOP} folders):")
+            by_folder = group_by(tiers[confidence], lambda hit: shown_folder(hit.path.parent))
+            for folder, group in sorted(by_folder.items(), key=lambda item: -len({hit.fingerprint for hit in item[1]}))[:SUMMARY_TOP]:
+                say(f"  {spread(group):<40} {folder}")
+    if tiers["low"]:
+        say(f"\nMost common names among the low-confidence hits (top {SUMMARY_TOP}):")
+        by_name = group_by(tiers["low"], lambda hit: hit.name)
+        for name, group in sorted(by_name.items(), key=lambda item: -len(item[1]))[:SUMMARY_TOP]:
+            say(f"  {name[:40]:<40} {plural(len(group), 'string'):>16}, {spread(group)}")
+
+
+def values_section(hits: list[Hit], say: Callable[[str], None], with_paths: bool) -> None:
+    """One entry per distinct value, most widespread first."""
+    by_value = group_by(hits, lambda hit: hit.fingerprint)
+    for _, group in sorted(by_value.items(), key=lambda item: (-len({hit.path for hit in item[1]}), item[0])):
+        first = group[0]
+        names = sorted({hit.name for hit in group if hit.name})
+        label = first.kind + ("  " + ", ".join(names[:NAMES_SHOWN]) if names else "") + (f" and {len(names) - NAMES_SHOWN} more" if len(names) > NAMES_SHOWN else "")
+        paths = sorted({hit.path for hit in group})
+        say(("\n" if with_paths else "") + f"{first.describe()}  {label}: in {plural(len(paths), 'file')}, {plural(len(group), 'place')}")
+        if with_paths:
+            for path in paths:
+                say(f"    {path}")
+
+
+def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, roots: list[Path], finished: datetime, say: Callable[[str], None] = print) -> None:
+    tiers = group_by(hits, lambda hit: hit.confidence)
+    say("envh scan report")
+    say(f"Scanned {', '.join(str(root) for root in roots)}, finished {finished:%Y-%m-%d %H:%M}")
     say(headline(hits, scanned, elapsed))
-    for path in sorted(by_path):
+    for line in confidence_lines(hits):
+        say("  " + line)
+    say("")
+    say("No value is shown, only its first and last few characters (fewer for shorter values, as in the envh console), its length")
+    say("and an id. The same id means the same value, and the first 6 characters of an id match the id the envh console shows")
+    say('for a stored key. Search this file for "id <id>" to find every line a value is on.')
+    say("Sections: Summary, High confidence, Medium confidence, Low confidence, Every hit by file, Notes.")
+    say("\n== Summary ==")
+    summary_section(hits, say)
+    say("\n== High confidence: values in a known key format, with every file each is in ==")
+    say("Private-key ids come from the BEGIN ... PRIVATE KEY line, so keys of the same type share an id.")
+    values_section(tiers["high"], say, with_paths=True)
+    say("\n== Medium confidence: values assigned to credential-style names, with every file each is in ==")
+    values_section(tiers["medium"], say, with_paths=True)
+    say('\n== Low confidence: values assigned to other names, one line each (search for "id <id>" to find the files) ==')
+    values_section(tiers["low"], say, with_paths=False)
+    say("\n== Every hit by file ==")
+    for path, group in sorted(group_by(hits, lambda hit: str(hit.path)).items()):
         say(f"\n{path}")
-        for hit in sorted(by_path[path], key=lambda h: (h.line, h.kind)):
+        for hit in sorted(group, key=lambda h: (h.line, CONFIDENCE_ORDER.index(h.confidence), h.kind)):
             label = hit.kind if not hit.name else f"{hit.kind} {hit.name}"
-            say(f"  line {hit.line:<6} {label:<42} {hit.prefix:<6} {hit.length:>4} chars  id {hit.fingerprint}")
-    by_fingerprint: dict[str, set[Path]] = defaultdict(set)
-    for hit in hits:
-        by_fingerprint[hit.fingerprint].add(hit.path)
-    repeated = {digest: paths for digest, paths in by_fingerprint.items() if len(paths) > 1}
-    if repeated:
-        say("\nsame value found in several files (by id):")
-        for digest, paths in sorted(repeated.items(), key=lambda item: -len(item[1])):
-            say(f"  id {digest}: {len(paths)} files")
-            for path in sorted(paths):
-                say(f"      {path}")
+            say(f"  line {hit.line:<6} {hit.confidence:<6} {label:<44} {hit.describe()}")
+    say("\n== Notes ==")
     notes(unreadable, say)
+    say("\nIn short (details at the top): " + headline(hits, scanned, elapsed))
+    for line in confidence_lines(hits):
+        say("  " + line)
 
 
-def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, saved_to: Path, say: Callable[[str], None] = print) -> None:
+def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, report_dir: Path, say: Callable[[str], None] = print) -> None:
     """The terminal's short version of the report: a fixed number of lines however many keys were found."""
     say(headline(hits, scanned, elapsed))
     if hits:
-        by_kind = Counter(hit.kind for hit in hits)
-        say("  by kind: " + ", ".join(f"{kind} {count:,}" for kind, count in by_kind.most_common()))
-    say(f"Saved to {saved_to}: report.txt lists every hit, files.txt only the file paths, hits.json the same as --json.")
+        for line in confidence_lines(hits):
+            say("  " + line)
     notes(unreadable, say)
-
-
-def default_report_root() -> Path:
-    state_home = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(state_home) / "envh" / "scans"
+    say("")
+    say(f"Results saved in {shown_path(report_dir)}")
+    say("  report.txt starts with a summary, then each value by confidence, then every hit by file. files.txt lists just the paths.")
+    say(f"  They hold no values. Delete them when you are done: rm -r {shown_path(report_dir)}")
 
 
 def results_json(hits: list[Hit], scanned: int, unreadable: list[Path]) -> dict[str, object]:
     return {"scanned": scanned, "hits": [hit.to_json() for hit in hits], "unreadable": [str(path) for path in unreadable]}
 
 
-def save_results(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, report_dir: Path) -> None:
-    """Write report.txt, files.txt and hits.json to a new folder only its owner can open. They hold no values."""
+def save_results(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, roots: list[Path], parent: Path, finished: datetime) -> Path:
+    """Write report.txt, files.txt and hits.json to a new dated folder in parent. They hold no values."""
     report_lines: list[str] = []
-    report(hits, scanned, unreadable, elapsed, report_lines.append)
+    report(hits, scanned, unreadable, elapsed, roots, finished, report_lines.append)
     contents = {
         "report.txt": "\n".join(report_lines) + "\n",
         "files.txt": "".join(f"{path}\n" for path in sorted({hit.path for hit in hits})),
         "hits.json": json.dumps(results_json(hits, scanned, unreadable), indent=2) + "\n",
     }
-    report_dir.mkdir(mode=0o700, parents=True)
+    report_dir = new_dated_folder(parent, finished.strftime("%Y%m%d-%H%M%S"))
     for name, text in contents.items():
         with os.fdopen(os.open(report_dir / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
             handle.write(text)
+    return report_dir
 
 
 def main(args: argparse.Namespace) -> int:
@@ -385,6 +582,12 @@ def main(args: argparse.Namespace) -> int:
     missing = [root for root in roots if not root.exists()]
     if missing:
         print(f"envh scan: no such path: {', '.join(str(path) for path in missing)}", file=sys.stderr)
+        return 2
+    parent = Path(args.out).expanduser().absolute() if args.out else saved_files_root() / SCANS
+    if args.out is None and not args.json and sys.stdin.isatty() and sys.stdout.isatty():
+        parent = ask_where("the results", parent, input)
+    if parent.exists() and not parent.is_dir():
+        print(f"envh scan: {parent} is a file, not a folder", file=sys.stderr)
         return 2
     progress = Progress(sys.stderr) if sys.stderr.isatty() else None
     started = time.monotonic()
@@ -396,17 +599,18 @@ def main(args: argparse.Namespace) -> int:
         if progress is not None:
             progress.clear()
     elapsed = time.monotonic() - started
-    report_dir = default_report_root() / datetime.now().strftime("%Y%m%d-%H%M%S")
+    finished = datetime.now()
     try:
-        save_results(hits, scanned, unreadable, elapsed, report_dir)
+        report_dir = save_results(hits, scanned, unreadable, elapsed, roots, parent, finished)
     except OSError as error:
-        print(f"envh scan: could not save the results to {report_dir}: {error}", file=sys.stderr)
+        print(f"envh scan: could not save the results in {parent}: {error}", file=sys.stderr)
         if not args.json:
-            report(hits, scanned, unreadable, elapsed)
+            report(hits, scanned, unreadable, elapsed, roots, finished)
             return 1 if hits else 0
-    if args.json:
-        print(json.dumps(results_json(hits, scanned, unreadable), indent=2))
-        print(f"Saved to {report_dir}", file=sys.stderr)
     else:
-        summary(hits, scanned, unreadable, elapsed, report_dir)
+        if not args.json:
+            summary(hits, scanned, unreadable, elapsed, report_dir)
+            return 1 if hits else 0
+        print(f"Results saved in {shown_path(report_dir)}", file=sys.stderr)
+    print(json.dumps(results_json(hits, scanned, unreadable), indent=2))
     return 1 if hits else 0

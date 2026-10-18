@@ -191,7 +191,7 @@ The wizard walks through six steps and writes nothing until the last one:
 5. **Plan.** Secrets to store (names and fingerprints only), presets in full, and per file the lines that change, shown as they will read: each secret line becomes `# VAR -> envh secret NAME (presets: ...)`. The old lines are not shown, since they hold the values. Headers and config lines stay as they are. Choose per file whether to rewrite it.
 6. **Apply.** The console shows the same summary and asks for your vault passphrase. Then each original file is backed up and the files are rewritten.
 
-**The backup.** Before rewriting, the wizard copies each original file into a new folder, `~/.local/state/envh/import-backups/<date-time>/` (under `$XDG_STATE_HOME` if you set it), at its full path: `/home/you/code/bot/.env` is backed up as `.../<date-time>/home/you/code/bot/.env`. The folder is mode 0700 and the wizard prints its exact path, with the command to delete it. The copies hold the old values in plaintext, readable by anything running as you, just as the original files were. So once the rewritten files work, delete the folder (`rm -r ~/.local/state/envh/import-backups/<date-time>`). `envh scan ~` keeps reporting it until you do.
+**The backup.** Before rewriting, the wizard asks where to keep the backup; Enter accepts `~/envh-backups-and-scans/import-backups/`, a folder in your home that is easy to find again. Each original file is copied into a new dated folder there, at its full path: `/home/you/code/bot/.env` is backed up as `.../<date-time>/home/you/code/bot/.env`. The folder is mode 0700 and the wizard prints its exact path, with the command to delete it. The copies hold the old values in plaintext, readable by anything running as you, just as the original files were. So once the rewritten files work, delete the folder (`rm -r ~/envh-backups-and-scans/import-backups/<date-time>`). `envh scan ~` keeps reporting it until you do. A `README.txt` in `~/envh-backups-and-scans` says what each subfolder holds.
 
 To see a value later without the backup: `envh run --with VAR=SECRET --reason "recover" -- printenv VAR`, approved on the console.
 
@@ -202,16 +202,22 @@ Keys end up in more places than `.env` files: shell history, Claude Code transcr
 ```bash
 envh scan                      # your home directory
 envh scan ~/code ~/Downloads   # specific places; add --json for machine-readable output
+envh scan --out ~/Desktop      # save the results somewhere else
 ```
 
-For every hit it records the file, the line, what kind of key it looks like, the first four characters, the length and a short fingerprint, never the value. The fingerprint lets you see that the same key sits in several files. Exit code 1 means something was found. While it runs, a progress bar shows how much it has read and about how long is left.
+For every hit it records the file, the line, what kind of key it looks like and how sure it is, the length, an id, and the first and last few characters, as the console shows them (fewer for shorter values, none under 12 characters), never the value. The same id means the same value, and its first six characters match the id the console shows for a stored key, so you can tell which vault key a stray copy is. Exit code 1 means something was found. While it runs, a progress bar shows how much it has read and about how long is left.
 
-A home-folder scan can find thousands of hits, so the terminal gets a short summary (counts by kind) and the full results go to a new folder, `~/.local/state/envh/scans/<date-time>/` (under `$XDG_STATE_HOME` if you set it), mode 0700:
-- `report.txt`: every hit, grouped by file, and which values appear in several files.
+Each hit gets a confidence:
+- **High:** the value has a provider's distinctive format, such as `sk-or-v1-...` or `AIza...`.
+- **Medium:** the value is assigned to a credential-style name, such as `EXA_API_KEY=...`, `client_secret: ...` or `DB_PASSWORD=...`. The service is taken from the name when it mentions one.
+- **Low:** the value is assigned to some other name holding KEY, TOKEN, SECRET or PASS, such as `cache_key` or `prompt_tokens`. Mostly not keys.
+
+A home-folder scan can find thousands of hits, so the terminal gets a short summary and the full results go to a new dated folder. At a terminal the scan first asks where; Enter accepts `~/envh-backups-and-scans/scans/` (`--out` chooses without asking):
+- `report.txt`: a summary at the top (counts by type and confidence, where the keys are), then each distinct value with every file it is in, then every hit by file, then a short recap at the bottom.
 - `files.txt`: just the paths of the files with hits, one per line.
 - `hits.json`: the same data `--json` prints.
 
-These hold paths and fingerprints only, no values, so unlike the import backups they are safe to keep.
+These hold no values, so unlike the import backups they are safe to keep. Later scans skip them.
 
 To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of installed code and caches that hold none of your keys but can hold millions of files:
 - **Installed packages and environments:** `.venv`, `venv`, `node_modules`, `site-packages`, conda, uv's Pythons, pipx, `.cargo`, `go/pkg` and the like.
@@ -223,8 +229,8 @@ To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of 
 
 What it can and cannot identify:
 
-- **By value, anywhere:** OpenAI, OpenRouter, Anthropic, Perplexity, Google/Gemini, E2B, GitHub, Slack, AWS, Stripe, Hugging Face, Groq, Tavily, Replicate, Notion, SendGrid, JWTs, private keys, database URLs with passwords.
-- **Only in a named assignment** (`FRED_API_KEY=...`, `serp_api_key: "..."`): SerpAPI, FRED, AskNews, Hyperbrowser, Metaculus, Exa, Mistral, Cohere, Together and other keys that are plain hex or random strings. A bare copy of one of these in a transcript has no distinctive shape and is not reported; search for it yourself with a few characters you remember, for example `grep -rl 'first8chars' ~/.claude`.
+- **By value, anywhere:** KEY_FORMATS_PLACEHOLDER.
+- **Only in a named assignment** (`FRED_API_KEY=...`, `serp_api_key: "..."`): SerpAPI, FRED, AskNews, Hyperbrowser, Metaculus, Exa, Deepgram, Parallel, Mistral, Cohere, AWS secret access keys and other keys that are plain hex or random strings. A bare copy of one of these in a transcript has no distinctive shape and is not reported; search for it yourself with a few characters you remember, for example `grep -rl 'first8chars' ~/.claude`.
 - **Not scanned:** git object history (`git log -p -S<prefix>` inside a repo), binary databases such as browser profiles and VS Code state, encrypted stores such as the Claude desktop app's local environment, and mounted drives outside the paths given.
 
 The scan stays separate from the import wizard on purpose: the wizard moves values out of files you chose, the scan is a read-only audit of everything else. The wizard prints a reminder to run it.
@@ -381,7 +387,7 @@ What does:
 - **It does not stop a persistent same-user attacker from phishing you later.** An agent that can edit your shell startup files or desktop configuration could capture the sudo password or vault passphrase at the next start. Claude Code's protected-path rules reduce this; only running agents in a container removes it.
 - **It does not change your sudo settings.** sudo keeps remembering your password for several minutes in the terminal you typed it in, and anything running there can use it. Run the wizard and `sudo envh-console` in windows no agent can type into; the wizard runs `sudo -k` when it is done.
 - **The vault is only as strong as the passphrase**, which also approves requests. Copies of `vault.age` or `audit.jsonl` outside `/var/lib/envh` must be treated as secrets. The audit log holds command lines and reasons, never values.
-- **The import wizard leaves a plaintext backup until you delete it.** It copies each original file to `~/.local/state/envh/import-backups/<date-time>/` before rewriting it in place, and prints that path. Until you remove the folder, the old values are exactly as exposed as they were in the original files.
+- **The import wizard leaves a plaintext backup until you delete it.** It copies each original file to `~/envh-backups-and-scans/import-backups/<date-time>/` (or a folder you choose) before rewriting it in place, and prints that path. Until you remove the folder, the old values are exactly as exposed as they were in the original files.
 - **Requirements it will refuse without:** Linux 6.2+ with `legacy_tiocsti=0`, Yama ptrace scope 1 or more, sudo with a password, and your user outside root-granting groups.
 - **Not provided:** rotating or revoking keys at the provider, per-request network allow-lists, rate limits, remote use, macOS or Windows support, protection against root or physical access while the broker is running. Several local users can be listed in `users:` and each gets their own sessions, but they share one vault, one policy and one console.
 
@@ -443,7 +449,7 @@ Layout, in review order. The directory tree states the trust boundaries and a te
 | `src/envh/core/` | trusted logic, no sockets or terminals | `config.py` policy files, `durations.py`, `vault.py` (age encryption), `state.py` (requests, sessions, runs), `broker.py` (decisions and their side effects), `audit.py` |
 | `src/envh/server/` | the trusted process, runs as user `envh` | `control.py` (Unix-socket protocol, peer uid), `console/` (the full-screen console: `app.py`, the request card, the keys, presets, settings and sessions screens, and `tui.py`, its standard-library terminal toolkit), `hardening.py`, `serve.py` (startup), `init_cmd.py` |
 | `src/envh/client/` | the untrusted side, runs as you or an agent, standard library only | `transport.py` (socket client), `commands.py` (`envh run`, `session`, `list`, …) |
-| `src/envh/tools/` | set-aside utilities, standard library only | `importer.py` (the `.env` wizard), `scanner.py` (`envh scan`); deleting the package removes two subcommands and nothing else |
+| `src/envh/tools/` | set-aside utilities, standard library only | `importer.py` (the `.env` wizard), `scanner.py` (`envh scan`), `saved_files.py` (the folder both save into); deleting the package removes two subcommands and nothing else |
 | `src/envh/install/` | root-only system setup | `command.py` (`envh install` / `uninstall`, the console helper and launcher) |
 | `src/envh/platform.py`, `common.py`, `cli.py` | shared | OS facts (uid, socket path, prctl, preflight), the value fingerprint, command dispatch |
 

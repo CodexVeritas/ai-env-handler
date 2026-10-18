@@ -303,6 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan = commands.add_parser("scan", help="find where key-shaped strings live (paths and fingerprints, never values)", epilog=skipped_folders_help())
     scan.add_argument("paths", nargs="*", help="directories or files to scan (default: your home directory)")
     scan.add_argument("--json", action="store_true")
+    scan.add_argument("--out", metavar="FOLDER", help="save the results in a new dated folder inside FOLDER (default ~/envh-backups-and-scans/scans; asked at a terminal)")
     scan.add_argument("--max-size", type=int, default=25, help="skip files larger than this many MB (default 25)")
     scan.set_defaults(func=cmd_scan)
     return parser
