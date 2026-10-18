@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import functools
+import bisect
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -20,95 +21,94 @@ from typing import Callable, Iterator, TextIO
 from envh.common import peek
 from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, saved_files_root, shown_path
 
-# Provider formats that are distinctive enough to recognize anywhere, including transcripts and shell history, each with
-# the literal markers one of which every match contains. A file holding none of a pattern's markers skips that pattern;
-# most files hold none, which is what keeps the scan fast. Where gitleaks (github.com/gitleaks/gitleaks) has a rule for a
-# provider, the format follows it.
-VALUE_PATTERNS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("openrouter", r"sk-or-v1-[a-f0-9]{64}", ("sk-or-v1-",)),
-    ("anthropic", r"sk-ant-[A-Za-z0-9_-]{32,}", ("sk-ant-",)),
-    ("openai", r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{32,}", ("sk-proj-", "sk-svcacct-", "sk-admin-")),
-    ("openai-legacy", r"sk-[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}", ("T3BlbkFJ",)),
-    ("xai", r"xai-[A-Za-z0-9]{70,}", ("xai-",)),
-    ("deepseek", r"sk-[a-f0-9]{32}", ("sk-",)),
-    ("perplexity", r"pplx-[A-Za-z0-9]{32,}", ("pplx-",)),
-    ("google-api-key", r"AIza[0-9A-Za-z_-]{35}", ("AIza",)),
-    ("google-oauth", r"GOCSPX-[A-Za-z0-9_-]{28}|ya29\.[A-Za-z0-9_-]{30,}", ("GOCSPX-", "ya29.")),
-    ("google-service-account", r"(?:eyJ0eXBlIjoic2VydmljZV9hY2NvdW50|eyJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu|ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu)[A-Za-z0-9+/=]{100,}", ("eyJ0eXBlIjoic2VydmljZV9hY2NvdW50", "eyJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu", "ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu")),
-    ("groq", r"gsk_[A-Za-z0-9]{40,}", ("gsk_",)),
-    ("together", r"tgp_v1_[A-Za-z0-9_-]{30,}", ("tgp_v1_",)),
-    ("fireworks", r"fw_[A-Za-z0-9]{20,}", ("fw_",)),
-    ("cerebras", r"csk-[a-z0-9]{40,}", ("csk-",)),
-    ("huggingface", r"hf_[A-Za-z0-9]{30,}|api_org_[A-Za-z]{34}", ("hf_", "api_org_")),
-    ("replicate", r"r8_[A-Za-z0-9]{30,}", ("r8_",)),
-    ("elevenlabs", r"sk_[a-f0-9]{48}", ("sk_",)),
-    ("e2b", r"e2b_[a-f0-9]{32,}", ("e2b_",)),
-    ("tavily", r"tvly-[A-Za-z0-9_-]{20,}", ("tvly-",)),
-    ("firecrawl", r"fc-[a-f0-9]{32}", ("fc-",)),
-    ("langsmith", r"lsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}", ("lsv2_",)),
-    ("pinecone", r"pcsk_[A-Za-z0-9_]{50,}", ("pcsk_",)),
-    ("supabase", r"sbp_[a-f0-9]{40}|sb_secret_[A-Za-z0-9_-]{20,}", ("sbp_", "sb_secret_")),
-    ("github", r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,}", ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")),
-    ("gitlab", r"gl(?:pat|dt|rt|ft|imt|soat|ffct|oas|agent|ptt)-[A-Za-z0-9_-]{20,}|glcbt-[A-Za-z0-9]{1,5}_[A-Za-z0-9_-]{20,}", ("glpat-", "gldt-", "glrt-", "glft-", "glimt-", "glsoat-", "glffct-", "gloas-", "glagent-", "glptt-", "glcbt-")),
-    ("slack", r"xox[abeoprs]-[A-Za-z0-9-]{10,}|xapp-[0-9]-[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+", ("xoxa-", "xoxb-", "xoxe-", "xoxo-", "xoxp-", "xoxr-", "xoxs-", "xapp-")),
-    ("slack-webhook", r"https://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}", ("hooks.slack.com",)),
-    ("discord-webhook", r"https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]{50,}", ("/api/webhooks/",)),
-    ("telegram", r"[0-9]{8,10}:AA[A-Za-z0-9_-]{33}", (":AA",)),
-    ("twilio", r"SK[0-9a-fA-F]{32}", ("SK",)),
-    ("sendgrid", r"SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}", ("SG.",)),
-    ("mailchimp", r"[a-f0-9]{32}-us[0-9]{1,2}", ("-us",)),
-    ("stripe", r"(?:sk|rk)_(?:live|test|prod)_[A-Za-z0-9]{20,}", ("sk_live_", "sk_test_", "sk_prod_", "rk_live_", "rk_test_", "rk_prod_")),
-    ("stripe-webhook", r"whsec_[A-Za-z0-9]{32,}", ("whsec_",)),
-    ("shopify", r"shp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}", ("shpat_", "shpca_", "shppa_", "shpss_")),
-    ("square", r"sq0(?:atp|csp)-[A-Za-z0-9_-]{22,60}", ("sq0atp-", "sq0csp-")),
-    ("aws-access-key", r"(?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}", ("A3T", "AKIA", "ASIA", "ABIA", "ACCA")),
-    ("aws-bedrock", r"ABSK[A-Za-z0-9+/]{109,269}={0,2}", ("ABSK",)),
-    ("azure-client-secret", r"[A-Za-z0-9_~.]{3}[0-9]Q~[A-Za-z0-9_~.-]{31,34}", ("Q~",)),
-    ("cloudflare-origin-ca", r"v1\.0-[a-f0-9]{24}-[a-f0-9]{146}", ("v1.0-",)),
-    ("digitalocean", r"do[opr]_v1_[a-f0-9]{64}", ("doo_v1_", "dop_v1_", "dor_v1_")),
-    ("heroku", r"HRKU-AA[A-Za-z0-9_-]{58}", ("HRKU-AA",)),
-    ("flyio", r"fo1_[A-Za-z0-9_-]{43}|fm1[ar]_[A-Za-z0-9+/]{100,}={0,3}|fm2_[A-Za-z0-9+/]{100,}={0,3}", ("fo1_", "fm1a_", "fm1r_", "fm2_")),
-    ("planetscale", r"pscale_(?:tkn|oauth|pw)_[A-Za-z0-9_=.-]{32,64}", ("pscale_tkn_", "pscale_oauth_", "pscale_pw_")),
-    ("databricks", r"dapi[a-f0-9]{32}(?:-[0-9])?", ("dapi",)),
-    ("doppler", r"dp\.pt\.[A-Za-z0-9]{43}", ("dp.pt.",)),
-    ("hashicorp-vault", r"hvs\.[A-Za-z0-9_-]{90,120}|hvb\.[A-Za-z0-9_-]{138,300}", ("hvs.", "hvb.")),
-    ("terraform-cloud", r"[A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9_=-]{60,70}", (".atlasv1.",)),
-    ("grafana", r"glc_[A-Za-z0-9+/]{32,400}={0,3}|glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}|eyJrIjoi[A-Za-z0-9]{70,400}={0,3}", ("glc_", "glsa_", "eyJrIjoi")),
-    ("sentry", r"sntryu_[a-f0-9]{64}|sntrys_eyJpYXQiO[A-Za-z0-9+/=_]{50,}", ("sntryu_", "sntrys_")),
-    ("sentry-dsn", r"https://[a-f0-9]{32}@[A-Za-z0-9.-]*sentry\.io/[0-9]+", ("sentry.io",)),
-    ("new-relic", r"NRAK-[A-Za-z0-9]{27}", ("NRAK-",)),
-    ("posthog", r"phx_[A-Za-z0-9]{40,}", ("phx_",)),
-    ("linear", r"lin_api_[A-Za-z0-9]{40}", ("lin_api_",)),
-    ("atlassian", r"ATATT3[A-Za-z0-9_=-]{186}", ("ATATT3",)),
-    ("airtable", r"pat[A-Za-z0-9]{14}\.[a-f0-9]{64}", ("pat",)),
-    ("notion", r"(?:ntn_|secret_)[A-Za-z0-9]{40,}", ("ntn_", "secret_")),
-    ("postman", r"PMAK-[a-fA-F0-9]{24}-[a-fA-F0-9]{34}", ("PMAK-",)),
-    ("npm", r"npm_[A-Za-z0-9]{36}", ("npm_",)),
-    ("pypi", r"pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,1000}", ("pypi-AgEIcHlwaS5vcmc",)),
-    ("onepassword", r"A3-[A-Z0-9]{6}-(?:[A-Z0-9]{11}|[A-Z0-9]{6}-[A-Z0-9]{5})-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}|ops_eyJ[A-Za-z0-9+/]{250,}={0,3}", ("A3-", "ops_eyJ")),
-    ("age-secret-key", r"AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}", ("AGE-SECRET-KEY-1",)),
-    ("resend", r"re_[A-Za-z0-9]{8}_[A-Za-z0-9]{24}", ("re_",)),
-    ("browserbase", r"bb_live_[A-Za-z0-9_-]{20,}", ("bb_live_",)),
-    ("jwt", r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", ("eyJ",)),
-    ("private-key", r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----|PuTTY-User-Key-File-[0-9]", ("PRIVATE KEY", "PuTTY-User-Key-File-")),
-    ("database-url", r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^\s:/@\"']+:[^\s@\"']+@[^\s\"']+", ("://",)),
+# Provider formats that are distinctive enough to recognize anywhere, including transcripts and shell history. Each
+# regex starts with literal text, which lets the regex engine jump straight to candidates; one that started with a
+# character class would be tried at every position and make the scan several times slower. Where gitleaks
+# (github.com/gitleaks/gitleaks) has a rule for a provider, the format follows it.
+VALUE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("openrouter", (r"sk-or-v1-[a-f0-9]{64}",)),
+    ("anthropic", (r"sk-ant-[A-Za-z0-9_-]{32,}",)),
+    ("openai", (r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{32,}",)),
+    ("openai-legacy", (r"sk-[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}",)),
+    ("xai", (r"xai-[A-Za-z0-9]{70,}",)),
+    ("deepseek", (r"sk-[a-f0-9]{32}",)),
+    ("perplexity", (r"pplx-[A-Za-z0-9]{32,}",)),
+    ("google-api-key", (r"AIza[0-9A-Za-z_-]{35}",)),
+    ("google-oauth", (r"GOCSPX-[A-Za-z0-9_-]{28}", r"ya29\.[A-Za-z0-9_-]{30,}")),
+    ("google-service-account", (
+        r"eyJ0eXBlIjoic2VydmljZV9hY2NvdW50[A-Za-z0-9+/=]{100,}", r"eyJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu[A-Za-z0-9+/=]{100,}",
+        r"ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3Vu[A-Za-z0-9+/=]{100,}",
+    )),
+    ("groq", (r"gsk_[A-Za-z0-9]{40,}",)),
+    ("together", (r"tgp_v1_[A-Za-z0-9_-]{30,}",)),
+    ("fireworks", (r"fw_[A-Za-z0-9]{20,}",)),
+    ("cerebras", (r"csk-[a-z0-9]{40,}",)),
+    ("huggingface", (r"hf_[A-Za-z0-9]{30,}", r"api_org_[A-Za-z]{34}")),
+    ("replicate", (r"r8_[A-Za-z0-9]{30,}",)),
+    ("elevenlabs", (r"sk_[a-f0-9]{48}",)),
+    ("e2b", (r"e2b_[a-f0-9]{32,}",)),
+    ("tavily", (r"tvly-[A-Za-z0-9_-]{20,}",)),
+    ("firecrawl", (r"fc-[a-f0-9]{32}",)),
+    ("langsmith", (r"lsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}",)),
+    ("pinecone", (r"pcsk_[A-Za-z0-9_]{50,}",)),
+    ("supabase", (r"sbp_[a-f0-9]{40}", r"sb_secret_[A-Za-z0-9_-]{20,}")),
+    ("github", (r"gh[pousr]_[A-Za-z0-9]{36,}", r"github_pat_[A-Za-z0-9_]{60,}")),
+    ("gitlab", (r"gl(?:pat|dt|rt|ft|imt|soat|ffct|oas|agent|ptt)-[A-Za-z0-9_-]{20,}", r"glcbt-[A-Za-z0-9]{1,5}_[A-Za-z0-9_-]{20,}")),
+    ("slack", (r"xox[abeoprs]-[A-Za-z0-9-]{10,}", r"xapp-[0-9]-[A-Za-z0-9]+-[0-9]+-[A-Za-z0-9]+")),
+    ("slack-webhook", (r"https://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}",)),
+    ("discord-webhook", (r"https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]{50,}",)),
+    ("twilio", (r"SK[0-9a-fA-F]{32}",)),
+    ("sendgrid", (r"SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}",)),
+    ("stripe", (r"sk_(?:live|test|prod)_[A-Za-z0-9]{20,}", r"rk_(?:live|test|prod)_[A-Za-z0-9]{20,}")),
+    ("stripe-webhook", (r"whsec_[A-Za-z0-9]{32,}",)),
+    ("shopify", (r"shp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}",)),
+    ("square", (r"sq0(?:atp|csp)-[A-Za-z0-9_-]{22,60}",)),
+    ("aws-access-key", tuple(rf"{prefix}[A-Z2-7]{{16}}" for prefix in ("AKIA", "ASIA", "ABIA", "ACCA")) + (r"A3T[A-Z0-9][A-Z2-7]{16}",)),
+    ("aws-bedrock", (r"ABSK[A-Za-z0-9+/]{109,269}={0,2}",)),
+    ("cloudflare-origin-ca", (r"v1\.0-[a-f0-9]{24}-[a-f0-9]{146}",)),
+    ("digitalocean", (r"do[opr]_v1_[a-f0-9]{64}",)),
+    ("heroku", (r"HRKU-AA[A-Za-z0-9_-]{58}",)),
+    ("flyio", (r"fo1_[A-Za-z0-9_-]{43}", r"fm1[ar]_[A-Za-z0-9+/]{100,}={0,3}", r"fm2_[A-Za-z0-9+/]{100,}={0,3}")),
+    ("planetscale", (r"pscale_(?:tkn|oauth|pw)_[A-Za-z0-9_=.-]{32,64}",)),
+    ("databricks", (r"dapi[a-f0-9]{32}(?:-[0-9])?",)),
+    ("doppler", (r"dp\.pt\.[A-Za-z0-9]{43}",)),
+    ("hashicorp-vault", (r"hvs\.[A-Za-z0-9_-]{90,120}", r"hvb\.[A-Za-z0-9_-]{138,300}")),
+    ("grafana", (r"glc_[A-Za-z0-9+/]{32,400}={0,3}", r"glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}", r"eyJrIjoi[A-Za-z0-9]{70,400}={0,3}")),
+    ("sentry", (r"sntryu_[a-f0-9]{64}", r"sntrys_eyJpYXQiO[A-Za-z0-9+/=_]{50,}")),
+    ("sentry-dsn", (r"https://[a-f0-9]{32}@[A-Za-z0-9.-]*sentry\.io/[0-9]+",)),
+    ("new-relic", (r"NRAK-[A-Za-z0-9]{27}",)),
+    ("posthog", (r"phx_[A-Za-z0-9]{40,}",)),
+    ("linear", (r"lin_api_[A-Za-z0-9]{40}",)),
+    ("atlassian", (r"ATATT3[A-Za-z0-9_=-]{186}",)),
+    ("airtable", (r"pat[A-Za-z0-9]{14}\.[a-f0-9]{64}",)),
+    ("notion", (r"ntn_[A-Za-z0-9]{40,}", r"secret_[A-Za-z0-9]{40,}")),
+    ("postman", (r"PMAK-[a-fA-F0-9]{24}-[a-fA-F0-9]{34}",)),
+    ("npm", (r"npm_[A-Za-z0-9]{36}",)),
+    ("pypi", (r"pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,1000}",)),
+    ("onepassword", (r"A3-[A-Z0-9]{6}-(?:[A-Z0-9]{11}|[A-Z0-9]{6}-[A-Z0-9]{5})-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}", r"ops_eyJ[A-Za-z0-9+/]{250,}={0,3}")),
+    ("age-secret-key", (r"AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}",)),
+    ("resend", (r"re_[A-Za-z0-9]{8}_[A-Za-z0-9]{24}",)),
+    ("browserbase", (r"bb_live_[A-Za-z0-9_-]{20,}",)),
+    ("jwt", (r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",)),
+    ("private-key", (r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----", r"PuTTY-User-Key-File-[0-9]")),
+    ("database-url", tuple(rf"{scheme}://[^\s:/@\"']+:[^\s@\"']+@[^\s\"']+" for scheme in ("postgres", "postgresql", r"mongodb\+srv", "mongodb", "mysql", "redis", "amqp"))),
 )
+COMPILED_PATTERNS = tuple((kind, re.compile(pattern)) for kind, patterns in VALUE_PATTERNS for pattern in patterns)
 # Formats whose prefix is short or common enough to turn up inside longer strings: a match counts only when it stands
-# alone, with no letter, digit or underscore on either side. Checked after matching so each pattern still starts with
-# its literal prefix, which is what lets the regex engine skip quickly to candidates.
+# alone, with no letter, digit or underscore on either side.
 STANDALONE_KINDS = {
-    "deepseek", "fireworks", "cerebras", "elevenlabs", "firecrawl", "telegram", "twilio", "mailchimp", "aws-access-key", "azure-client-secret",
-    "databricks", "airtable", "npm", "onepassword", "resend",
+    "deepseek", "fireworks", "cerebras", "elevenlabs", "firecrawl", "twilio", "aws-access-key", "databricks", "airtable", "npm", "onepassword", "resend",
 }
 WORD_CHARACTER = re.compile(r"[A-Za-z0-9_]")
 
 # Named assignments: NAME=value / NAME: value / "NAME": "value" where NAME holds a secret word and value looks random.
 # The regex takes any identifier followed by an assignment and the secret word is checked afterwards; searching for the
-# word inside the regex backtracked over every identifier and made the scan several times slower.
-ASSIGNMENT_REGEX = re.compile(r"(?<![A-Za-z0-9_])(?P<name>[A-Za-z_][A-Za-z0-9_]{0,130})[\"']?\s*[=:]\s*[\"']?(?P<value>[A-Za-z0-9_\-./+=]{16,})")
+# word inside the regex backtracked over every identifier and made the scan several times slower. A name can start right
+# after an escaped newline or tab, as in transcripts' JSON strings, but never right after a bare backslash.
+ASSIGNMENT_REGEX = re.compile(r"(?:(?<=\\[nrt])|(?<![A-Za-z0-9_\\]))(?P<name>[A-Za-z_][A-Za-z0-9_]{0,130})[\"']?\s*[=:]\s*[\"']?(?P<value>[A-Za-z0-9_\-./+=]{16,})")
 SECRET_WORD = re.compile(r"KEY|TOKEN|SECRET|PASS|CREDENTIAL|CLIENT_ID", re.IGNORECASE)
 PLACEHOLDER_WORDS = ("example", "your", "placeholder", "changeme", "xxxx", "redacted", "dummy", "insert", "replace", "envh-proxy", "sk-proj-abc", "<", ">", "$", "%")
-NAME_ONLY_PROVIDERS = ("Serp", "FRED", "AskNews", "Hyperbrowser", "Metaculus", "Exa", "Deepgram", "Parallel", "Radiant", "ACLED", "Mistral", "Cohere", "AWS secret access keys")
+NAME_ONLY_PROVIDERS = ("Serp", "FRED", "AskNews", "Hyperbrowser", "Metaculus", "Exa", "Deepgram", "Parallel", "Radiant", "ACLED", "Mistral", "Cohere", "Telegram", "Mailchimp", "Azure", "AWS secret access keys")
 
 # A named assignment is medium confidence when its name ends like a credential (API_KEY, ACCESS_TOKEN, CLIENT_SECRET,
 # PASSWORD) or names a service and ends in KEY or TOKEN; otherwise it is low (cache_key, prompt_tokens, monkeypatch).
@@ -241,33 +241,40 @@ def classify_name(name: str) -> tuple[str, str]:
     return ("medium" if credential else "low"), (service or "unknown")
 
 
-def standalone(line: str, start: int, end: int) -> bool:
-    return not (start > 0 and WORD_CHARACTER.match(line[start - 1])) and not (end < len(line) and WORD_CHARACTER.match(line[end]))
+def standalone(text: str, start: int, end: int) -> bool:
+    return not (start > 0 and WORD_CHARACTER.match(text[start - 1])) and not (end < len(text) and WORD_CHARACTER.match(text[end]))
 
 
-def present_kinds(text: str) -> tuple[str, ...]:
-    return tuple(kind for kind, _, markers in VALUE_PATTERNS if any(marker in text for marker in markers))
-
-
-@functools.lru_cache(maxsize=None)
-def value_regex(kinds: tuple[str, ...]) -> re.Pattern[str] | None:
-    if not kinds:
-        return None
-    return re.compile("|".join(f"(?P<{kind.replace('-', '_')}>{pattern})" for kind, pattern, _ in VALUE_PATTERNS if kind in kinds))
+def value_matches(text: str) -> list[tuple[int, int, str]]:
+    """Every key-format match in the text as (start, end, kind), in order; one overlapping an earlier match is dropped."""
+    found: list[tuple[int, int, str]] = []
+    for kind, regex in COMPILED_PATTERNS:
+        for match in regex.finditer(text):
+            start, end = match.span()
+            if kind not in STANDALONE_KINDS or standalone(text, start, end):
+                found.append((start, end, kind))
+    found.sort(key=lambda item: (item[0], -item[1]))
+    kept: list[tuple[int, int, str]] = []
+    for start, end, kind in found:
+        if not kept or start >= kept[-1][1]:
+            kept.append((start, end, kind))
+    return kept
 
 
 def scan_text(path: Path, text: str) -> Iterator[Hit]:
-    values = value_regex(present_kinds(text))
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        seen_spans: list[tuple[int, int]] = []
-        if values is not None:
-            for match in values.finditer(line):
-                value = match.group(0)
-                kind = (match.lastgroup or "value").replace("_", "-")
-                if kind in STANDALONE_KINDS and not standalone(line, *match.span()):
-                    continue
-                seen_spans.append(match.span())
-                yield Hit(path, line_number, "high", kind, "", peek(value), value_id(value), len(value))
+    lines = text.split("\n")
+    matches_by_line: dict[int, list[tuple[int, int, str]]] = defaultdict(list)
+    matches = value_matches(text)
+    if matches:
+        line_starts = list(itertools.accumulate((len(line) + 1 for line in lines[:-1]), initial=0))
+        for start, end, kind in matches:
+            index = bisect.bisect_right(line_starts, start) - 1
+            matches_by_line[index].append((start - line_starts[index], end - line_starts[index], kind))
+    for index, line in enumerate(lines):
+        spans = matches_by_line.get(index, [])
+        for start, end, kind in spans:
+            value = line[start:end]
+            yield Hit(path, index + 1, "high", kind, "", peek(value), value_id(value), len(value))
         for match in ASSIGNMENT_REGEX.finditer(line):
             name = match.group("name")
             if SECRET_WORD.search(name, 1) is None:
@@ -275,10 +282,10 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
             value = match.group("value").rstrip(".,;")
             if looks_placeholder(value):
                 continue
-            if any(start <= match.start("value") < end for start, end in seen_spans):
+            if any(start <= match.start("value") < end for start, end, _ in spans):
                 continue
             confidence, service = classify_name(name)
-            yield Hit(path, line_number, confidence, service, name, peek(value), value_id(value), len(value))
+            yield Hit(path, index + 1, confidence, service, name, peek(value), value_id(value), len(value))
 
 
 def read_if_text(path: Path) -> str | None:
@@ -507,7 +514,7 @@ def values_section(hits: list[Hit], say: Callable[[str], None], with_paths: bool
         say(("\n" if with_paths else "") + f"{first.describe()}  {label}: in {plural(len(paths), 'file')}, {plural(len(group), 'place')}")
         if with_paths:
             for path in paths:
-                say(f"    {path}")
+                say(f"    {shown_path(path)}")
 
 
 def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, roots: list[Path], finished: datetime, say: Callable[[str], None] = print) -> None:
@@ -533,7 +540,7 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     values_section(tiers["low"], say, with_paths=False)
     say("\n== Every hit by file ==")
     for path, group in sorted(group_by(hits, lambda hit: str(hit.path)).items()):
-        say(f"\n{path}")
+        say(f"\n{shown_path(Path(path))}")
         for hit in sorted(group, key=lambda h: (h.line, CONFIDENCE_ORDER.index(h.confidence), h.kind)):
             label = hit.kind if not hit.name else f"{hit.kind} {hit.name}"
             say(f"  line {hit.line:<6} {hit.confidence:<6} {label:<44} {hit.describe()}")

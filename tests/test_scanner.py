@@ -1,5 +1,6 @@
 import argparse
 import io
+import re
 import json
 import os
 import stat
@@ -10,7 +11,7 @@ import pytest
 
 from envh.common import peek
 from envh.tools.saved_files import ask_where
-from envh.tools.scanner import STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_placeholder, main, present_kinds, scan_paths, scan_text, value_id
+from envh.tools.scanner import COMPILED_PATTERNS, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_placeholder, main, scan_paths, scan_text, value_id
 
 OPENAI = "sk-proj-" + "A1b2C3d4" * 6
 OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
@@ -51,6 +52,11 @@ def test_named_assignments_cover_formatless_keys_and_skip_placeholders() -> None
     assert names == ["FRED_API_KEY", "SERP_API_KEY", "api_key"]
     assert hits[0].fingerprint == hits[2].fingerprint
     assert looks_placeholder("xxxxxxxxxxxxxxxxxxxx") and not looks_placeholder(FRED)
+
+
+def test_an_escaped_newline_before_a_name_is_not_part_of_it() -> None:
+    [hit] = scan_text(Path("transcript.jsonl"), json.dumps({"content": f"ok\nFRED_API_KEY={FRED}"}))
+    assert (hit.name, hit.kind, hit.confidence) == ("FRED_API_KEY", "fred", "medium")
 
 
 def test_same_value_in_a_value_pattern_is_not_double_reported() -> None:
@@ -142,17 +148,14 @@ SAMPLES = {
     "slack": "xoxb-1234567890-abcdefghij",
     "slack-webhook": "https://hooks.slack.com/services/T00000000/B00000000/" + "Xx" * 12,
     "discord-webhook": "https://discord.com/api/webhooks/123456789012345678/" + "a1B2c3D4e5" * 6,
-    "telegram": "123456789:AA" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q",
     "twilio": "SK" + "0123456789abcdef" * 2,
     "sendgrid": "SG.a1B2c3D4e5f6g7h8.i9J0k1L2m3N4o5P6",
-    "mailchimp": "0123456789abcdef" * 2 + "-us12",
     "stripe": "sk_live_" + "a1B2c3D4" * 3,
     "stripe-webhook": "whsec_" + "a1B2c3D4e5" * 4,
     "shopify": "shpat_" + "0123456789abcdef" * 2,
     "square": "sq0atp-" + "a1B2c3D4e5F6g7H8i9J0k1L2",
     "aws-access-key": "AKIA" + "ABCDEFGHIJKLMNOP",
     "aws-bedrock": "ABSK" + "QmVkcm9jayBrZXk" * 8,
-    "azure-client-secret": "abc8Q~" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6",
     "cloudflare-origin-ca": "v1.0-" + "0123456789abcdef01234567" + "-" + "0123456789abcdef" * 9 + "01",
     "digitalocean": "dop_v1_" + "0123456789abcdef" * 4,
     "heroku": "HRKU-AA" + "a1B2c3D4e5" * 5 + "a1B2c3D4",
@@ -161,7 +164,6 @@ SAMPLES = {
     "databricks": "dapi" + "0123456789abcdef" * 2,
     "doppler": "dp.pt." + "a1B2c3D4e5" * 4 + "a1B",
     "hashicorp-vault": "hvs." + "a1B2c3D4e5" * 10,
-    "terraform-cloud": "a1B2c3D4e5F6g7" + ".atlasv1." + "a1B2c3D4e5" * 6,
     "grafana": "glsa_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6" + "_0123abcd",
     "sentry": "sntryu_" + "0123456789abcdef" * 4,
     "sentry-dsn": "https://" + "0123456789abcdef" * 2 + "@o123456.ingest.sentry.io/7654321",
@@ -185,17 +187,23 @@ SAMPLES = {
 
 
 def test_every_value_pattern_has_a_sample() -> None:
-    assert set(SAMPLES) == {kind for kind, _, _ in VALUE_PATTERNS}
+    assert set(SAMPLES) == {kind for kind, _ in VALUE_PATTERNS}
 
 
 @pytest.mark.parametrize(("kind", "sample"), SAMPLES.items())
-def test_each_key_format_is_found_through_its_markers(kind: str, sample: str) -> None:
+def test_each_key_format_is_found(kind: str, sample: str) -> None:
     hits = list(scan_text(Path("notes.md"), f"noise before {sample} and after\n"))
     assert [hit.kind for hit in hits] == [kind]
 
 
-def test_text_without_any_marker_skips_the_value_patterns() -> None:
-    assert present_kinds("def main():\n    return compute_everything()\n") == ()
+def test_every_format_starts_with_literal_text_so_the_scan_stays_fast() -> None:
+    for kind, regex in COMPILED_PATTERNS:
+        assert re.match(r"[A-Za-z0-9_-]{2}", regex.pattern), kind
+
+
+def test_overlapping_formats_report_the_value_once() -> None:
+    hits = list(scan_text(Path("f"), "sb_secret_" + "a1B2c3D4e5" * 4 + "\n"))
+    assert [hit.kind for hit in hits] == ["supabase"]
 
 
 def test_installed_packages_caches_and_tagged_folders_are_skipped(tmp_path: Path) -> None:
