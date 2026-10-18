@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Iterator, TextIO
 
 from envh.common import peek
-from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, saved_files_root, shown_path
+from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, saved_files_root, say_where_saved, shown_path
 
 # Provider formats that are distinctive enough to recognize anywhere, including transcripts and shell history. Each
 # regex starts with literal text, which lets the regex engine jump straight to candidates; one that started with a
@@ -94,10 +94,11 @@ VALUE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("database-url", tuple(rf"{scheme}://[^\s:/@\"']+:[^\s@\"']+@[^\s\"']+" for scheme in ("postgres", "postgresql", r"mongodb\+srv", "mongodb", "mysql", "redis", "amqp"))),
 )
 COMPILED_PATTERNS = tuple((kind, re.compile(pattern)) for kind, patterns in VALUE_PATTERNS for pattern in patterns)
-# Formats whose prefix is short or common enough to turn up inside longer strings: a match counts only when it stands
-# alone, with no letter, digit or underscore on either side.
+# Formats whose prefix is short or common enough to turn up inside longer strings, such as base64 images pasted into a
+# transcript: a match counts only when it stands alone, with no letter, digit or underscore on either side.
 STANDALONE_KINDS = {
-    "deepseek", "fireworks", "cerebras", "elevenlabs", "firecrawl", "twilio", "aws-access-key", "databricks", "airtable", "npm", "onepassword", "resend",
+    "deepseek", "fireworks", "cerebras", "elevenlabs", "firecrawl", "twilio", "aws-access-key", "aws-bedrock", "google-api-key", "grafana",
+    "databricks", "airtable", "npm", "onepassword", "resend",
 }
 WORD_CHARACTER = re.compile(r"[A-Za-z0-9_]")
 
@@ -557,11 +558,10 @@ def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: floa
     if hits:
         for line in confidence_lines(hits):
             say("  " + line)
-    notes(unreadable, say)
-    say("")
-    say(f"Results saved in {shown_path(report_dir)}")
-    say("  report.txt starts with a summary, then each value by confidence, then every hit by file. files.txt lists just the paths.")
-    say(f"  They hold no values. Delete them when you are done: rm -r {shown_path(report_dir)}")
+    if unreadable:
+        say(f"  · {plural(len(unreadable), 'file or folder')} could not be read (permissions).")
+    say("  · What the scan skips and cannot see is under Notes at the end of report.txt.")
+    say_where_saved(report_dir, False, say)
 
 
 def results_json(hits: list[Hit], scanned: int, unreadable: list[Path]) -> dict[str, object]:

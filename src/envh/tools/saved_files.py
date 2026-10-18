@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -49,3 +51,22 @@ def new_dated_folder(parent: Path, stamp: str) -> Path:
     folder = parent / stamp
     folder.mkdir(mode=0o700, parents=True)
     return folder
+
+
+def styled(code: str, text: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if sys.stdout.isatty() and "NO_COLOR" not in os.environ else text
+
+
+def say_where_saved(folder: Path, holds_keys: bool, say: Callable[[str], None]) -> None:
+    """The closing lines of an import or a scan, set apart so they are not missed: where its files are, and how to delete them."""
+    shown = shown_path(folder)
+    say("")
+    if holds_keys:
+        say(f"  {styled('33', '!')} {styled('1', 'Your old keys are still in the backup, in plaintext:')}")
+        say(f"      {shown}")
+        say("    Once the project works, delete it:")
+        say(f"      {styled('1', f'rm -r {shown}')}")
+    else:
+        say(f"  {styled('32', '✓')} {styled('1', f'Results saved in {shown}')}")
+        say("    Open report.txt; its summary is at the top. files.txt lists just the paths.")
+        say(f"    They hold no keys. Delete them when you are done: rm -r {shown}")

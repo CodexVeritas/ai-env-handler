@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from envh.common import PRESET_NAME, SECRET_NAME, fingerprint
 from envh.client.transport import ClientError, Connection, waiting_notice
-from envh.tools.saved_files import IMPORT_BACKUPS, ask_where, new_dated_folder, saved_files_root
+from envh.tools.saved_files import IMPORT_BACKUPS, ask_where, new_dated_folder, saved_files_root, say_where_saved, styled
 
 ASSIGNMENT = re.compile(r"^(?P<indent>\s*)(?P<comment>#\s*)?(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*)$")
 SECRET_WORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "AUTH", "CREDENTIAL", "API", "PRIVATE", "DSN")
@@ -485,7 +485,7 @@ def write_rewrites(plan: ImportPlan, say: Callable[[str], None]) -> None:
         temp_path.write_text(new_text, encoding="utf-8")
         os.chmod(temp_path, mode)
         os.replace(temp_path, target)
-        say(f"  rewrote {path}" + (f" (symlink to {target})" if path.is_symlink() else ""))
+        say(f"  {styled('32', '✓')} Rewrote {path}" + (f" (a symlink to {target})" if path.is_symlink() else ""))
 
 
 def apply_plan(plan: ImportPlan, sock: Path, backup_root: Path, say: Callable[[str], None]) -> None:
@@ -496,24 +496,24 @@ def apply_plan(plan: ImportPlan, sock: Path, backup_root: Path, say: Callable[[s
         with waiting_notice(reply, None):
             reply = conn.recv_ok()
     renames = reply.get("renames") or {}
-    say(f"  stored: {len(reply.get('added', []))} new; presets: {', '.join(reply.get('presets', [])) or '(none)'}")
+    say(f"  {styled('32', '✓')} Stored {len(reply.get('added', []))} new keys; presets: {', '.join(reply.get('presets', [])) or '(none)'}")
     for sent, final in sorted(renames.items()):
-        say(f"  {sent} is in the vault as {final}")
+        say(f"  · {sent} was already in the vault as {final}")
     apply_renames(plan, renames)
     backup_dir = None
     if plan.rewrites:
         backup_dir = backup_originals(list(plan.rewrites), backup_root, datetime.now().strftime("%Y%m%d-%H%M%S"))
-        say(f"  copied the original files to {backup_dir}")
     write_rewrites(plan, say)
     for path in plan.skipped_files:
-        say(f"  left untouched: {path} (its secrets are now ALSO in the vault; remove them by hand when ready)")
+        say(f"  {styled('33', '!')} Left {path} as it was; its keys are now also in the vault, so remove them from it by hand")
+    say("")
     if plan.presets:
         first = next(iter(plan.presets))
-        say(f"  next: envh session start {first} --minutes 60 --reason \"...\"   then   envh run --session <id> --reason \"...\" -- <command>")
-    say("  then: envh scan ~   finds leftover copies of these keys (shell history, transcripts, notebooks, other repos)")
+        say(f"  Next: envh session start {first} --minutes 60 --reason \"...\"")
+        say("        then envh run --session <id> --reason \"...\" -- <command>")
+    say("  Then: envh scan finds other copies of these keys, in shell history, transcripts and other repos.")
     if backup_dir:
-        say(f"  backup: {backup_dir} holds the old values in plaintext, readable by anything running as you, like the original files were")
-        say(f"          once the rewritten files work, delete it:  rm -r {backup_dir}")
+        say_where_saved(backup_dir, True, say)
 
 
 def run_wizard(args: argparse.Namespace, sock: Path) -> int:

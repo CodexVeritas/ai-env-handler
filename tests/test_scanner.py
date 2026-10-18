@@ -319,3 +319,8 @@ def test_short_prefix_formats_only_count_when_they_stand_alone(kind: str) -> Non
 
 def test_a_fixed_length_format_inside_a_longer_string_is_not_a_key() -> None:
     assert list(scan_text(Path("f"), f"digest {SAMPLES['twilio']}0123abcd\n")) == []
+
+
+def test_a_key_prefix_inside_a_base64_blob_is_not_a_key() -> None:
+    blob = "iVBORw0KGgo" + "QmFzZTY0" * 40 + "ABSK" + "QmVkcm9jayBrZXk" * 30 + "AIza" + "QmFzZTY0" * 40
+    assert list(scan_text(Path("transcript.jsonl"), json.dumps({"image": blob}))) == []

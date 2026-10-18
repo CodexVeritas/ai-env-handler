@@ -471,9 +471,7 @@ def step_import() -> Outcome:
     returncode = subprocess.run([str(ENVH_BIN), "import", *(os.path.expanduser(path) for path in shlex.split(answer))]).returncode
     if returncode != 0:
         return Outcome(False, f"stopped (exit code {returncode})")
-    say()
-    warn("Once the project works, delete its backup in ~/envh-backups-and-scans/import-backups. It holds the old keys.")
-    return Outcome(True, "imported")
+    return Outcome(True, "imported; delete the backup once the project works")
 
 
 def step_scan() -> Outcome:
@@ -490,8 +488,9 @@ def step_scan() -> Outcome:
         ok("No stray keys found")
         return Outcome(True, "nothing found")
     if returncode == 1:
-        warn("Open report.txt in the folder named above; its summary is at the top. Delete the copies it lists, or rotate those keys.")
-        return Outcome(True, "found copies")
+        say()
+        warn("Delete the copies report.txt lists, or rotate those keys.")
+        return Outcome(True, "found copies; see report.txt")
     return Outcome(False, f"failed (exit code {returncode})")
 
 
@@ -698,8 +697,11 @@ def print_summary(results: list[tuple[str, Outcome]]) -> None:
     for title, _ in STEPS[len(results):]:
         line(f"{dim('·')} {title:<20} {dim('not reached')}")
     say()
+    if any((SAVED_FILES / "import-backups").glob("*")):
+        warn("Your old keys are still in ~/envh-backups-and-scans/import-backups.\nDelete it once your projects work: rm -r ~/envh-backups-and-scans/import-backups")
+        say()
     if SAVED_FILES.exists():
-        line(dim("Import backups and scan results are in ~/envh-backups-and-scans; its README.txt says what each holds."))
+        line(dim("Backups and scan results are in ~/envh-backups-and-scans; its README.txt says what each holds."))
     line(dim("Rerun this any time to update envh or import more projects."))
     line(dim("To see, rename or describe your keys, type /keys in the console."))
     say()

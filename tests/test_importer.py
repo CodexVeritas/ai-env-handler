@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from envh.client.transport import ClientError
-from envh.tools.saved_files import IMPORT_BACKUPS, saved_files_root
+from envh.tools.saved_files import IMPORT_BACKUPS, saved_files_root, say_where_saved
 from envh.tools.importer import (
     apply_renames,
     backup_originals,
@@ -334,3 +334,15 @@ def test_parse_env_file_refuses_an_oversized_file(tmp_path: Path, monkeypatch: p
     big.write_text("API_KEY=sk-1234567890\n")
     with pytest.raises(ClientError, match="over envh import's"):
         parse_env_file(big)
+
+
+def test_the_import_ends_with_the_backup_to_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    said: list[str] = []
+    say_where_saved(tmp_path / "envh-backups-and-scans" / "import-backups" / "20261017-194143", True, said.append)
+    assert said[-4:] == [
+        "  ! Your old keys are still in the backup, in plaintext:",
+        "      ~/envh-backups-and-scans/import-backups/20261017-194143",
+        "    Once the project works, delete it:",
+        "      rm -r ~/envh-backups-and-scans/import-backups/20261017-194143",
+    ]
