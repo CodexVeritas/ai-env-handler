@@ -11,14 +11,15 @@ import pytest
 
 from envh.common import peek
 from envh.tools.saved_files import ask_where
-from envh.tools.scanner import COMPILED_PATTERNS, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_placeholder, main, scan_paths, scan_text, shown_value, value_id
+from tests.conftest import HEX, random_text
+from envh.tools.scanner import COMPILED_PATTERNS, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_fake, looks_placeholder, main, place_of, scan_paths, scan_text, shown_value, value_id
 
-OPENAI = "sk-proj-" + "A1b2C3d4" * 6
-OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
-ANTHROPIC = "sk-ant-api03-" + "Zz9yY8xX7wW6vV5u" * 3
-GEMINI = "AIza" + "Syd8f7g6h5j4k3l2m1n0pQrStUvWxYz0123"
-PPLX = "pplx-" + "q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8"
-FRED = "3f2a9c8b7d6e5f4a3b2c1d0e9f8a7b6c"
+OPENAI = "sk-proj-" + random_text("openai", 48)
+OPENROUTER = "sk-or-v1-" + random_text("openrouter", 64, HEX)
+ANTHROPIC = "sk-ant-api03-" + random_text("anthropic", 48)
+GEMINI = "AIza" + random_text("gemini", 35)
+PPLX = "pplx-" + random_text("perplexity", 48)
+FRED = random_text("fred", 32, HEX)
 TRANSCRIPT = json.dumps({"role": "assistant", "content": f"use export OPENAI_API_KEY={OPENAI} then run"})
 
 
@@ -251,7 +252,7 @@ def test_results_are_saved_to_a_private_folder_and_the_terminal_gets_a_summary(t
     assert report.index("== Summary ==") < report.index("== High confidence") < report.index("== Medium confidence") < report.index("== Low confidence") < report.index("== Every hit by file ==")
     assert f"{shown_value(OPENAI, len('sk-'))} ({len(OPENAI)} chars, id {value_id(OPENAI)})  openai: in 30 files, 30 places" in report
     assert f"{peek(FRED)} ({len(FRED)} chars, id {value_id(FRED)})  fred  FRED_API_KEY: in 30 files, 30 places" in report
-    assert "In short (details at the top)" in report.splitlines()[-4]
+    assert any("In short (details at the top)" in line for line in report.splitlines()[-6:])
     shown = capsys.readouterr().out
     assert f"Results saved in ~/envh-backups-and-scans/scans/{report_dir.name}" in shown and "notes.md" not in shown
     assert "90 key-shaped strings in 30 files" in shown and "known key format: 1 distinct value in 30 files" in shown
@@ -302,8 +303,9 @@ def test_names_set_the_confidence_and_service(name: str, confidence: str, servic
 def test_values_are_shown_like_the_console_shows_them_after_the_formats_fixed_prefix() -> None:
     [openrouter] = scan_text(Path("f"), f"{OPENROUTER}\n")
     assert openrouter.shown == "sk-or-v1-" + OPENROUTER[9:13] + "\u2026" + OPENROUTER[-4:] and openrouter.confidence == "high"
-    [short] = scan_text(Path("f"), f"MY_API_KEY={FRED[:16]}\n")
-    assert short.shown == FRED[0] + "\u2026" + FRED[15] and short.confidence == "medium"
+    sixteen = random_text("short key", 16)
+    [short] = scan_text(Path("f"), f"MY_API_KEY={sixteen}\n")
+    assert short.shown == sixteen[0] + "\u2026" + sixteen[15] and short.confidence == "medium"
 
 
 def test_ask_where_keeps_the_default_or_takes_a_typed_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -327,3 +329,37 @@ def test_a_fixed_length_format_inside_a_longer_string_is_not_a_key() -> None:
 def test_a_key_prefix_inside_a_base64_blob_is_not_a_key() -> None:
     blob = "iVBORw0KGgo" + "QmFzZTY0" * 40 + "ABSK" + "QmVkcm9jayBrZXk" * 30 + "AIza" + "QmFzZTY0" * 40
     assert list(scan_text(Path("transcript.jsonl"), json.dumps({"image": blob}))) == []
+
+
+@pytest.mark.parametrize("kind", ["openai-legacy", "deepseek", "stripe", "aws-access-key", "github"])
+def test_placeholder_samples_are_fake_and_random_keys_are_not(kind: str) -> None:
+    [placeholder] = scan_text(Path("README.md"), f"{SAMPLES[kind]}\n")
+    assert placeholder.confidence == "fake"
+    assert [hit.confidence for hit in scan_text(Path("f"), f"{OPENROUTER} {OPENAI}\n")] == ["high", "high"]
+    assert looks_fake("AKIAIOSFODNN7EXAMPLE", 4) and looks_fake("your-openai-key-goes-here-1234") and not looks_fake(FRED)
+
+
+def test_code_that_reads_a_key_is_not_reported() -> None:
+    text = "\n".join([
+        "api_key = self.settings.openai_api_key",
+        "OPENROUTER_API_KEY: OPENROUTER_API_KEY_PROD",
+        "const secretKey = process.env.STRIPE_SECRET_KEY",
+        "authToken: refreshAccessTokenNow",
+        f"FRED_API_KEY={FRED}",
+    ])
+    assert [hit.name for hit in scan_text(Path("app.py"), text)] == ["FRED_API_KEY"]
+
+
+@pytest.mark.parametrize(("path", "place"), [
+    ("/h/.config/Cursor/User/History/-1a2b/abcd", "editor history"),
+    ("/h/.claude/projects/x/session.jsonl", "agent transcripts"),
+    ("/h/code/app/logs/run.log", "logs"),
+    ("/h/code/app/tests/test_keys.py", "tests"),
+    ("/h/code/app/README.md", "docs and notes"),
+    ("/h/code/app/.env.local", ".env files"),
+    ("/h/code/app/main.py", "code and config"),
+    ("/h/.local/share/Trash/files/.env", "trash"),
+    ("/h/notes", "other"),
+])
+def test_each_hit_gets_a_place(path: str, place: str) -> None:
+    assert place_of(path) == place

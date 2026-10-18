@@ -211,15 +211,18 @@ Each hit gets a confidence:
 - **High:** the value has a provider's distinctive format, such as `sk-or-v1-...` or `AIza...`.
 - **Medium:** the value is assigned to a credential-style name, such as `EXA_API_KEY=...`, `client_secret: ...` or `DB_PASSWORD=...`. The service is taken from the name when it mentions one.
 - **Low:** the value is assigned to some other name holding KEY, TOKEN, SECRET or PASS, such as `cache_key` or `prompt_tokens`. Mostly not keys.
+- **Fake:** the value looks like a placeholder from docs or tests: a counting run such as `123456789`, a short unit repeated, or a word such as `example` or `your`. The format's fixed prefix is left out of the check.
+
+A value that is just a name, such as `api_key = self.settings.openai_api_key` or `OPENAI_API_KEY: OPENAI_API_KEY_PROD`, is code reading a key, so it is not reported. Each hit also gets a place: editor history, agent transcripts, logs, tests, docs and notes, `.env` files, code and config, envh backups, trash, docker, or other.
 
 A home-folder scan can find thousands of hits, so the terminal gets a short summary and the full results go to a new dated folder. At a terminal the scan first asks where; Enter accepts `~/envh-backups-and-scans/scans/` (`--out` chooses without asking):
-- `report.txt`: a summary at the top (counts by type and confidence, where the keys are), then each distinct value with every file it is in, then every hit by file, then a short recap at the bottom.
+- `report.txt`: a summary at the top (counts by type and confidence, a table by place, where the keys are), then each distinct value with every file it is in, then every hit by file, then a short recap at the bottom.
 - `files.txt`: just the paths of the files with hits, one per line.
 - `hits.json`: the same data `--json` prints.
 
 These hold no values, so unlike the import backups they are safe to keep. Later scans skip them.
 
-**Browse them** with `envh explore` (the newest scan, or `envh explore <folder>`); a scan at a terminal also offers to open it when it finishes. Arrow through each type of key, each key, and the files it is in, grouped by folder when there are many. Enter on a file shows the lines around each copy, read from the file at that moment, with every key in them shown as its first and last few characters; `s` shows the full key until it hides itself after 30 seconds. Tab switches between High, Medium, Low and All, and `/` filters by service, name or path. The view runs on the terminal's alternate screen, so nothing it shows stays in your scrollback, and it refuses to run without a terminal.
+**Browse them** with `envh explore` (the newest scan, or `envh explore <folder>`); a scan at a terminal also offers to open it when it finishes. Arrow through each type of key, each key, and the files it is in, grouped by folder when there are many. Enter on a file shows the lines around each copy, read from the file at that moment, with every key in them shown as its first and last few characters; `s` shows the full key until it hides itself after 30 seconds. Tab switches between High, Medium, Low, Fake and All, `g` groups by place instead of type (all the editor history copies together, say), and `/` filters by service, name, place or path. The view runs on the terminal's alternate screen, so nothing it shows stays in your scrollback, and it refuses to run without a terminal.
 
 To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of installed code and caches that hold none of your keys but can hold millions of files:
 - **Installed packages and environments:** `.venv`, `venv`, `node_modules`, `site-packages`, conda, uv's Pythons, pipx, `.cargo`, `go/pkg` and the like.

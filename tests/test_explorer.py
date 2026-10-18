@@ -15,11 +15,12 @@ import pytest
 from envh.client.transport import ClientError
 from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, newest_scan, split_keys
 from envh.tools.scanner import scan_paths, save_results, shown_value
+from tests.conftest import HEX, random_text
 
 ROOT = Path(__file__).resolve().parents[1]
-OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
-ANTHROPIC = "sk-ant-api03-" + "Zz9yY8xX7wW6vV5u" * 3
-FRED = "3f2a9c8b7d6e5f4a3b2c1d0e9f8a7b6c"
+OPENROUTER = "sk-or-v1-" + random_text("openrouter", 64, HEX)
+ANTHROPIC = "sk-ant-api03-" + random_text("anthropic", 48)
+FRED = random_text("fred", 32, HEX)
 
 
 class Clock:
@@ -83,7 +84,7 @@ def test_a_key_in_many_files_groups_them_by_folder(tmp_path: Path, monkeypatch: 
     press(explorer, "right")
     labels = [row.label for row in explorer.rows()]
     assert labels[2:] == ["~/project/editor/history", "~/project/bot/.env"]
-    choose(explorer, "group")
+    choose(explorer, "folder")
     assert any("→ shows these files" in row for row in screen(explorer))
     press(explorer, "right")
     assert sum("history/" in row.label for row in explorer.rows()) == 8
@@ -95,7 +96,7 @@ def test_tab_switches_tiers_and_the_filter_narrows(tmp_path: Path) -> None:
     assert [row.label for row in explorer.rows()] == ["openrouter"]
     press(explorer, "tab")
     assert [row.label for row in explorer.rows()] == ["fred"]
-    press(explorer, "tab", "tab", "/", *"notes", "enter")
+    press(explorer, "tab", "tab", "tab", "/", *"notes", "enter")
     assert [row.label for row in explorer.rows()] == ["openrouter"] and "filter: notes" in screen(explorer)[1]
 
 
@@ -123,7 +124,7 @@ def test_a_long_line_starts_near_the_key_and_other_keys_stay_hidden(tmp_path: Pa
     open_first_file(explorer)
     rows = screen(explorer, width=100)
     [key_row] = [row for row in rows if "│" in row and "…" in row]
-    assert "sk-ant-api03-Zz…vV5u" in key_row
+    assert f"sk-ant-{ANTHROPIC[7:15]}…{ANTHROPIC[-4:]}" in key_row
     assert ANTHROPIC not in key_row and OPENROUTER not in key_row and len(key_row) <= 100
 
 
@@ -221,3 +222,12 @@ def test_the_real_view_on_a_terminal_shows_the_key_only_on_request(tmp_path: Pat
         if process.poll() is None:
             process.kill()
         os.close(master)
+
+
+def test_g_groups_by_place(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"app/.env": f"{OPENROUTER}\n", "app/README.md": f"{ANTHROPIC}\n{OPENROUTER}\n"})
+    explorer = Explorer(load_scan(folder), folder)
+    press(explorer, "g")
+    assert [row.label for row in explorer.rows()] == [".env files", "docs and notes"] and "grouped by place" in screen(explorer)[1]
+    press(explorer, "down", "right")
+    assert sorted(row.label.split()[0] for row in explorer.rows() if row.node[0] == "value") == ["anthropic", "openrouter"]

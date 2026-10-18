@@ -148,7 +148,29 @@ SERVICE_WORDS = {
     "database": "database", "db": "database", "npm": "npm", "pypi": "pypi", "docker": "docker", "heroku": "heroku", "airtable": "airtable",
     "digitalocean": "digitalocean", "resend": "resend", "algolia": "algolia", "mapbox": "mapbox", "kalshi": "kalshi", "polymarket": "polymarket",
 }
-CONFIDENCE_ORDER = ("high", "medium", "low")
+CONFIDENCE_ORDER = ("high", "medium", "low", "fake")
+# A value that is just a name, such as self.settings.openai_api_key or OPENAI_API_KEY_2, is code reading a key, not a key.
+NAME_LIKE_VALUE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+|[a-z]+(?:[_-][a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[a-z]+(?:[A-Z][a-z]+)+"
+)
+# Placeholders in docs and tests: a counting run, a short unit repeated, or a word no real key holds. The format's
+# fixed prefix is left out of the check.
+FAKE_WORDS = ("example", "sample", "dummy", "fake", "placeholder", "your", "xxxx", "changeme", "redacted", "lorem", "notreal", "invalid", "foobar")
+COUNTING_RUNS = ("123456789", "abcdefghij", "ABCDEFGHIJ", "qwertyuiop")
+REPEATED_UNIT = re.compile(r"(.{2,16}?)\1{2,}")
+REPEAT_CHECK_LIMIT = 200
+PLACES = (
+    ("editor history", re.compile(r"/User/History/")),
+    ("trash", re.compile(r"/\.local/share/Trash/")),
+    ("envh backups", re.compile(r"/\.local/state/envh/|/envh-backups-and-scans/")),
+    ("docker", re.compile(r"/\.local/share/docker/|/var/lib/docker/")),
+    ("agent transcripts", re.compile(r"/\.claude/|/\.cursor/projects/|/\.codex/")),
+    ("logs", re.compile(r"\.log(?:\.[0-9]+)?$|/logs?/")),
+    ("tests", re.compile(r"/(?:tests?|testing|fixtures?|__tests__|spec)/|/test_[^/]*$|_test\.[A-Za-z]+$|\.test\.[A-Za-z]+$")),
+    ("docs and notes", re.compile(r"\.(?:md|rst|txt|ipynb)$|/docs?/", re.IGNORECASE)),
+    (".env files", re.compile(r"/\.env[^/]*$")),
+    ("code and config", re.compile(r"\.(?:py|ts|tsx|js|jsx|mjs|go|rs|rb|java|sh|toml|ya?ml|json|cfg|ini|conf)$")),
+)
 
 # Folders of installed code, caches and app data that hold no keys of yours but can hold millions of files. A name with
 # a slash matches only that path below the folder being scanned (usually your home folder).
@@ -241,6 +263,21 @@ def service_named(words: list[str]) -> str | None:
     return None
 
 
+def looks_fake(value: str, fixed: int = 0) -> bool:
+    rest = value[fixed:]
+    lowered = rest.lower()
+    if any(word in lowered for word in FAKE_WORDS) or any(run in rest for run in COUNTING_RUNS):
+        return True
+    if len(rest) > REPEAT_CHECK_LIMIT:
+        return False
+    repeated = sum(len(match.group(0)) for match in REPEATED_UNIT.finditer(rest))
+    return repeated * 10 >= len(rest) * 4
+
+
+def place_of(path: str) -> str:
+    return next((place for place, pattern in PLACES if pattern.search(path)), "other")
+
+
 def classify_name(name: str) -> tuple[str, str]:
     """(confidence, service) for a NAME=value hit; the service is "unknown" when the name mentions none."""
     words = name_words(name)
@@ -292,17 +329,19 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
         spans = matches_by_line.get(index, [])
         for start, end, kind, fixed in spans:
             value = line[start:end]
-            yield Hit(path, index + 1, start, "high", kind, "", shown_value(value, fixed), value_id(value), len(value), fixed)
+            confidence = "fake" if looks_fake(value, fixed) else "high"
+            yield Hit(path, index + 1, start, confidence, kind, "", shown_value(value, fixed), value_id(value), len(value), fixed)
         for match in ASSIGNMENT_REGEX.finditer(line):
             name = match.group("name")
             if SECRET_WORD.search(name, 1) is None:
                 continue
             value = match.group("value").rstrip(".,;")
-            if looks_placeholder(value):
+            if looks_placeholder(value) or NAME_LIKE_VALUE.fullmatch(value):
                 continue
             if any(start <= match.start("value") < end for start, end, _, _ in spans):
                 continue
             confidence, service = classify_name(name)
+            confidence = "fake" if looks_fake(value) else confidence
             yield Hit(path, index + 1, match.start("value"), confidence, service, name, peek(value), value_id(value), len(value))
 
 
@@ -489,6 +528,7 @@ def confidence_lines(hits: list[Hit]) -> list[str]:
         f"High confidence, a known key format: {spread(tiers['high'])}. Start here.",
         f"Medium confidence, a credential-style name such as OPENAI_API_KEY=...: {spread(tiers['medium'])}.",
         f"Low confidence, other names holding KEY, TOKEN, SECRET or PASS, such as cache_key: {spread(tiers['low'])}. Mostly not keys.",
+        f"Fake, values that look like placeholders (counting or repeating, or words like example): {spread(tiers['fake'])}.",
     ]
 
 
@@ -507,6 +547,12 @@ def summary_section(hits: list[Hit], say: Callable[[str], None]) -> None:
     for _, group in sorted(by_type.items(), key=lambda item: (item[0][0], -len(item[1]))):
         first = group[0]
         say(f"  {first.kind:<24} {first.confidence:<10} {len(group):>9,} {len({hit.fingerprint for hit in group}):>9,} {len({hit.path for hit in group}):>7,}")
+    say(f"\nWhere they are, by place (distinct values; files):")
+    say(f"  {'place':<20} {'high':>12} {'medium':>12} {'low':>12} {'fake':>12}")
+    for place, group in sorted(group_by(hits, lambda hit: place_of(str(hit.path))).items(), key=lambda item: -len({hit.path for hit in item[1]})):
+        by_tier = group_by(group, lambda hit: hit.confidence)
+        cells_text = [f"{len({hit.fingerprint for hit in by_tier[tier]}):,}; {len({hit.path for hit in by_tier[tier]}):,}" for tier in CONFIDENCE_ORDER]
+        say(f"  {place:<20} " + " ".join(f"{cell:>12}" for cell in cells_text))
     tiers = group_by(hits, lambda hit: hit.confidence)
     for confidence in ("high", "medium"):
         if tiers[confidence]:
@@ -547,7 +593,7 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     say("(fewer for shorter values, as in the envh console), its length and an id. The same id means the same value, and the")
     say('first 6 characters of an id match the id the envh console shows for a stored key. Search this file for "id <id>" to')
     say("find every line a value is on, or browse it all with envh explore.")
-    say("Sections: Summary, High confidence, Medium confidence, Low confidence, Every hit by file, Notes.")
+    say("Sections: Summary, High confidence, Medium confidence, Low confidence, Fake, Every hit by file, Notes.")
     say("\n== Summary ==")
     summary_section(hits, say)
     say("\n== High confidence: values in a known key format, with every file each is in ==")
@@ -557,6 +603,8 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     values_section(tiers["medium"], say, with_paths=True)
     say('\n== Low confidence: values assigned to other names, one line each (search for "id <id>" to find the files) ==')
     values_section(tiers["low"], say, with_paths=False)
+    say('\n== Fake: values that look like placeholders, one line each (search for "id <id>" to find the files) ==')
+    values_section(tiers["fake"], say, with_paths=False)
     say("\n== Every hit by file ==")
     for path, group in sorted(group_by(hits, lambda hit: str(hit.path)).items()):
         say(f"\n{shown_path(Path(path))}")
