@@ -503,10 +503,14 @@ class Explorer:
             label = f" {TIER_LABELS[tier]} {self.tier_counts[tier]:,} "
             tabs.append((label, "1;7" if tier == self.tier else "2"))
             tabs.append((" ", ""))
-        tabs.append((f"  grouped by {self.grouping} (g)", "2"))
+        return [fit(title, width), fit(tabs, width), fit(self.state_line(), width)]
+
+    def state_line(self) -> list[tuple[str, str]]:
+        """How the list is grouped and filtered, under the tabs."""
+        state: list[tuple[str, str]] = [(f" Grouped by {self.grouping} (g)", "2")]
         if self.editing_filter or self.needle:
-            tabs.append((f"  filter: {self.needle}" + ("▏" if self.editing_filter else ""), "36"))
-        return [fit(title, width), fit(tabs, width), ""]
+            state.append((f" · filter: {self.needle}" + ("▏" if self.editing_filter else ""), "36"))
+        return state
 
     def scan_label(self) -> str:
         try:
