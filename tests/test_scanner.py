@@ -11,7 +11,7 @@ import pytest
 
 from envh.common import peek
 from envh.tools.saved_files import ask_where
-from envh.tools.scanner import COMPILED_PATTERNS, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_placeholder, main, scan_paths, scan_text, value_id
+from envh.tools.scanner import COMPILED_PATTERNS, FORMAT_PASSES, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_placeholder, main, scan_paths, scan_text, value_id
 
 OPENAI = "sk-proj-" + "A1b2C3d4" * 6
 OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
@@ -199,6 +199,15 @@ def test_each_key_format_is_found(kind: str, sample: str) -> None:
 def test_every_format_starts_with_literal_text_so_the_scan_stays_fast() -> None:
     for kind, regex in COMPILED_PATTERNS:
         assert re.match(r"[A-Za-z0-9_-]{2}", regex.pattern), kind
+    for joined, orders in FORMAT_PASSES:
+        assert {COMPILED_PATTERNS[order][1].pattern[0] for order in orders} == {joined.pattern[0]}
+
+
+def test_formats_joined_into_one_pass_match_as_if_run_separately() -> None:
+    longer_jwt = SAMPLES["google-service-account"] + ".eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q"
+    assert [hit.kind for hit in scan_text(Path("f"), f"{ANTHROPIC} {OPENAI} {longer_jwt}\n")] == ["anthropic", "openai", "jwt"]
+    not_alone_then_age = "x" + "AIza" + SAMPLES["age-secret-key"]
+    assert [hit.kind for hit in scan_text(Path("f"), f"{not_alone_then_age}\n")] == ["age-secret-key"]
 
 
 def test_overlapping_formats_report_the_value_once() -> None:

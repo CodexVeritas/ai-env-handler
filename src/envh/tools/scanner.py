@@ -246,17 +246,43 @@ def standalone(text: str, start: int, end: int) -> bool:
     return not (start > 0 and WORD_CHARACTER.match(text[start - 1])) and not (end < len(text) and WORD_CHARACTER.match(text[end]))
 
 
+def passes_by_first_character() -> tuple[tuple[re.Pattern[str], tuple[int, ...]], ...]:
+    """Each pass's joined regex, with the indexes in COMPILED_PATTERNS of the regexes it joins."""
+    orders_by_first: dict[str, list[int]] = defaultdict(list)
+    for order, (_, regex) in enumerate(COMPILED_PATTERNS):
+        orders_by_first[regex.pattern[0]].append(order)
+    return tuple((re.compile("|".join(COMPILED_PATTERNS[order][1].pattern for order in orders)), tuple(orders)) for orders in orders_by_first.values())
+
+
+# One pass over the text per first character rather than one per regex: the regexes that start with the same character
+# are joined into one, which still starts with literal text. Joining all of them into one regex loses that and is slower
+# than running each separately.
+FORMAT_PASSES = passes_by_first_character()
+
+
 def value_matches(text: str) -> list[tuple[int, int, str]]:
-    """Every key-format match in the text as (start, end, kind), in order; one overlapping an earlier match is dropped."""
-    found: list[tuple[int, int, str]] = []
-    for kind, regex in COMPILED_PATTERNS:
-        for match in regex.finditer(text):
-            start, end = match.span()
-            if kind not in STANDALONE_KINDS or standalone(text, start, end):
-                found.append((start, end, kind))
-    found.sort(key=lambda item: (item[0], -item[1]))
+    """Every key-format match in the text as (start, end, kind), in order; one overlapping an earlier match is dropped.
+
+    The joined regex only finds where to look: there each of its formats is matched again on its own, unless that place
+    is inside the format's previous match, so the result is exactly that of running every format's regex separately."""
+    found: list[tuple[int, int, int, str]] = []
+    for joined, orders in FORMAT_PASSES:
+        resume = dict.fromkeys(orders, 0)
+        candidate = joined.search(text)
+        while candidate is not None:
+            start = candidate.start()
+            for order in orders:
+                kind, regex = COMPILED_PATTERNS[order]
+                match = regex.match(text, start) if start >= resume[order] else None
+                if match is None:
+                    continue
+                resume[order] = match.end()
+                if kind not in STANDALONE_KINDS or standalone(text, start, match.end()):
+                    found.append((start, match.end(), order, kind))
+            candidate = joined.search(text, start + 1)
+    found.sort(key=lambda item: (item[0], -item[1], item[2]))
     kept: list[tuple[int, int, str]] = []
-    for start, end, kind in found:
+    for start, end, _, kind in found:
         if not kept or start >= kept[-1][1]:
             kept.append((start, end, kind))
     return kept
