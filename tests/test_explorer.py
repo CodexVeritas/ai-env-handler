@@ -1,4 +1,5 @@
 import fcntl
+import json
 import os
 import re
 import select
@@ -13,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from envh.client.transport import ClientError
-from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, newest_scan, split_keys
+from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, load_vault_matches, newest_scan, split_keys
 from envh.tools.scanner import scan_paths, save_results, shown_value
 from tests.conftest import HEX, random_text
 
@@ -163,7 +164,7 @@ def test_the_newest_scan_is_opened_by_default_and_old_ones_are_refused(tmp_path:
 
 def test_explore_needs_a_terminal(tmp_path: Path) -> None:
     with pytest.raises(ClientError, match="run it in a terminal"):
-        explore(saved_scan(tmp_path, {".env": f"{OPENROUTER}\n"}))
+        explore(saved_scan(tmp_path, {".env": f"{OPENROUTER}\n"}), tmp_path / "ctl.sock")
 
 
 ROW_WRITE = re.compile(r"\x1b\[(\d+);1H\x1b\[2K")
@@ -197,6 +198,8 @@ def test_the_real_view_on_a_terminal_shows_the_key_only_on_request(tmp_path: Pat
         raise AssertionError(f"{text!r} never appeared")
 
     try:
+        wait_for("in your vault first?")
+        os.write(master, b"n\r")
         wait_for("Enter view")
         for keys, then in ((b"\r", "1 key in 1 file"), (b"\x1b[B\x1b[C", "1 file"), (b"\x1b[B\r", "s show the key")):
             os.write(master, keys)
@@ -231,3 +234,25 @@ def test_g_groups_by_place(tmp_path: Path) -> None:
     assert [row.label for row in explorer.rows()] == [".env files", "docs and notes"] and "grouped by place" in screen(explorer)[1]
     press(explorer, "down", "right")
     assert sorted(row.label.split()[0] for row in explorer.rows() if row.node[0] == "value") == ["anthropic", "openrouter"]
+
+
+def test_keys_in_the_vault_are_named_and_v_filters_them(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"a/.env": f"{OPENROUTER}\n", "b/notes.md": f"{ANTHROPIC}\n"})
+    hits = load_scan(folder)
+    stored = next(hit.fingerprint for hit in hits if hit.kind == "openrouter")
+    (folder / "vault.json").write_text(json.dumps({"matches": {stored: ["TEAM_OPENROUTER_KEY"]}}))
+    explorer = Explorer(hits, folder, vault=load_vault_matches(folder))
+    press(explorer, "v")
+    assert [row.label for row in explorer.rows()] == ["openrouter"] and "in your vault (v)" in screen(explorer)[1]
+    press(explorer, "right")
+    assert any("in your vault as TEAM_OPENROUTER_KEY" in row.label for row in explorer.rows())
+    press(explorer, "v")
+    assert [row.label for row in explorer.rows()] == ["anthropic"]
+    assert load_vault_matches(tmp_path) is None
+
+
+def test_v_without_a_vault_check_says_how_to_get_one(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {".env": f"{OPENROUTER}\n"})
+    explorer = Explorer(load_scan(folder), folder)
+    press(explorer, "v")
+    assert "Not checked against your vault" in screen(explorer)[-2] and "vault not checked" in screen(explorer)[1]

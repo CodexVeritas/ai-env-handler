@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from envh.common import peek
+from envh.common import peek, value_id
 from envh.core.broker import MAX_PRESET_BYTES, MAX_UNKNOWN_SESSION_IDS, RequestError, fingerprint
 from envh.core.config import ConfigError, SecretEntry, dump_presets, load_config
 from envh.core.state import Request
@@ -487,3 +487,32 @@ def test_removing_a_secret_takes_its_settings_and_refuses_one_a_preset_uses(harn
     assert "OPENAI_API_KEY" not in Vault.open(harness.data_dir / "vault.age", PASSPHRASE).names()
     assert "OPENAI_API_KEY" not in broker.config.settings.secrets
     assert "OPENAI_API_KEY" not in (harness.data_dir / "config.yaml").read_text()
+
+
+async def test_a_match_tells_which_found_ids_are_stored_only_once_approved(harness: Harness) -> None:
+    broker = harness.broker
+    shown: list[Request] = []
+    broker.request_listeners.append(shown.append)
+    ids = [value_id("sk-openai"), value_id("not-in-the-vault"), value_id("sk-openai")]
+    request = broker.request_match(ids, "scan", harness.provenance())
+    assert shown == [request] and request.pending and request.summary["count"] == 2 and not request.result
+    broker.approve(request)
+    assert request.result == {"matches": {value_id("sk-openai"): ["OPENAI_API_KEY"]}}
+
+
+async def test_a_denied_match_answers_nothing(harness: Harness) -> None:
+    request = harness.broker.request_match([value_id("sk-openai")], None, harness.provenance())
+    harness.broker.deny(request)
+    assert not request.result
+
+
+@pytest.mark.parametrize(("ids", "error"), [
+    ([], "no ids"),
+    ("abcd1234", "no ids"),
+    (["ABCD1234"], "8 lowercase hex"),
+    (["abc"], "8 lowercase hex"),
+    (["0" * 8] * 50_001, "at most 50,000"),
+])
+async def test_a_match_with_bad_ids_is_refused(harness: Harness, ids: object, error: str) -> None:
+    with pytest.raises(RequestError, match=error):
+        harness.broker.request_match(ids, None, harness.provenance())

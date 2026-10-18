@@ -5,13 +5,14 @@ from __future__ import annotations
 import copy
 import difflib
 import json
-from collections import Counter
+import re
+from collections import Counter, defaultdict
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from envh.common import fingerprint
+from envh.common import fingerprint, value_id
 from envh.core.audit import Audit
 from envh.core.config import (
     AUTO,
@@ -40,6 +41,8 @@ MAX_UNKNOWN_SESSION_IDS = 20
 
 
 MAX_PRESET_BYTES = 64 * 1024
+MAX_MATCH_IDS = 50_000
+MATCH_ID = re.compile(r"[0-9a-f]{8}")
 
 
 class RequestError(ValueError):
@@ -363,6 +366,29 @@ class Broker:
         self._announce(request)
         return request
 
+    def request_match(self, ids: Any, reason: str | None, provenance: Provenance) -> Request:
+        """Ask the console whether the requester may learn which of these value ids belong to stored keys. Approval is
+        required because the answer confirms a guessed value; a short password could be found that way."""
+        if not isinstance(ids, list) or not ids:
+            raise RequestError("no ids to match")
+        if len(ids) > MAX_MATCH_IDS:
+            raise RequestError(f"at most {MAX_MATCH_IDS:,} ids can be matched at once, not {len(ids):,}")
+        if not all(isinstance(item, str) and MATCH_ID.fullmatch(item) for item in ids):
+            raise RequestError("each id is 8 lowercase hex characters, as envh scan saves them")
+        wanted = sorted(set(ids))
+        request = self.state.new_request(kind="match", mapping={}, provenance=provenance, reason=reason, summary={"ids": wanted, "count": len(wanted)})
+        self._announce(request)
+        return request
+
+    def vault_matches(self, ids: list[str]) -> dict[str, list[str]]:
+        wanted = set(ids)
+        matches: dict[str, list[str]] = defaultdict(list)
+        for name in self.vault.names():
+            digest = value_id(self.vault.get(name))
+            if digest in wanted:
+                matches[digest].append(name)
+        return {digest: sorted(names) for digest, names in sorted(matches.items())}
+
     def import_resolution(self, secrets: dict[str, str], presets: dict[str, Any]) -> dict[str, Any]:
         """Where each imported secret goes, so that an import never overwrites a stored secret: a value the vault already
         holds is reused under its stored name, and a name the vault holds with a different value gets a number (NAME_2)."""
@@ -438,6 +464,10 @@ class Broker:
             self.vault.save()
             self.write_presets(merged)
             self.audit.event("import_applied", added=request.summary["added"], reused=request.summary["reused"], renamed=request.summary["renamed"], presets=request.summary["presets"])
+        elif request.kind == "match":
+            matches = self.vault_matches(request.summary["ids"])
+            request.result = {"matches": matches}
+            self.audit.event("match_answered", id=request.id, asked=request.summary["count"], matched=sorted(name for names in matches.values() for name in names))
         self.state.decide(request, approved=True, by=by)
         self.audit.event("decision", id=request.id, uid=request.provenance.uid, outcome="approved", by=by)
 

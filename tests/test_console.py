@@ -474,6 +474,14 @@ async def test_an_import_card_shows_names_and_fingerprints_never_values(harness:
     assert not any(value in screen for value in secrets.values())
 
 
+async def test_a_match_card_says_what_approving_reveals(harness: Harness) -> None:
+    console = new_console(harness)
+    harness.broker.request_match(["0123abcd", "89abcdef"], "envh explore", harness.provenance())
+    screen = console.screen(120, 40)
+    assert "Match request #" in screen and "asks which of 2 keys envh scan found are in your vault" in screen
+    assert "No values are sent either way" in screen and "approve only a scan you ran" in screen
+
+
 async def test_a_preset_proposal_card_says_what_would_change(harness: Harness) -> None:
     console = new_console(harness)
     harness.broker.request_preset("presets: {team: {env: {OPENAI_API_KEY: DATABASE_URL}}}", "repoint", harness.provenance())

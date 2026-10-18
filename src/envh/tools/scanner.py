@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import bisect
-import hashlib
 import itertools
 import json
 import math
@@ -18,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator, TextIO
 
-from envh.common import peek
+from envh.common import peek, value_id
 from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, saved_files_root, say_where_saved, shown_path
 
 # Provider formats that are distinctive enough to recognize anywhere, including transcripts and shell history. Each
@@ -243,11 +242,6 @@ def entropy(text: str) -> float:
 def looks_placeholder(value: str) -> bool:
     lowered = value.lower()
     return any(word in lowered for word in PLACEHOLDER_WORDS) or entropy(value) < 3.0
-
-
-def value_id(value: str) -> str:
-    """Eight hex characters of the value's SHA-256; the envh console shows the first six for a stored key."""
-    return hashlib.sha256(value.encode()).hexdigest()[:8]
 
 
 def name_words(name: str) -> list[str]:
