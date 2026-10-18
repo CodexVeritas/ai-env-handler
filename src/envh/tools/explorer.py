@@ -803,7 +803,13 @@ def vault_for(folder: Path, hits: list[Found], sock: Path) -> dict[str, list[str
     saved = load_vault_matches(folder)
     if saved is not None:
         return saved
-    answer = input("Mark which of these keys are in your vault first? You approve it on the envh console. [Y/n] ").strip().lower()
+    print("")
+    print("Your envh vault can identify which of the scanned keys are actually yours.")
+    print('The explorer then marks each of them "in your vault as NAME".')
+    print("Only a short fingerprint of each key is sent, never the key itself.")
+    print("You approve the check once, on the envh console.")
+    print("")
+    answer = input("Check these keys against your vault? [Y/n] ").strip().lower()
     if answer in ("n", "no"):
         return None
     try:
