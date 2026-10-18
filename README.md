@@ -67,7 +67,7 @@ git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
 python3 scripts/setup_wizard.py
 ```
 
-The wizard walks through six short steps and asks before each change. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
+The wizard walks through seven short steps and asks before each change. One of them keeps VS Code and Cursor from storing copies of `.env` files in their local history. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
 
 Later, run it again to upgrade (after `git pull`) or to import more projects.
 
@@ -197,7 +197,7 @@ To see a value later without the backup: `envh run --with VAR=SECRET --reason "r
 
 ## Find leftover copies
 
-Keys end up in more places than `.env` files: shell history, Claude Code transcripts under `~/.claude/projects`, notebooks, scratch scripts, other repos, git remotes with embedded tokens. After importing, find them:
+Keys end up in more places than `.env` files: shell history, Claude Code transcripts under `~/.claude/projects`, notebooks, scratch scripts, other repos, git remotes with embedded tokens, and the local history of VS Code and Cursor (`~/.config/Code/User/History`, `~/.config/Cursor/User/History`), which keeps a copy of a file each time you save it (the setup wizard turns that off for `.env` files, but copies saved before stay). After importing, find them:
 
 ```bash
 envh scan                      # your home directory
