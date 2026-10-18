@@ -235,8 +235,10 @@ def test_results_are_saved_to_a_private_folder_and_the_terminal_gets_a_summary(t
         (home / f"project{index}" / "notes.md").write_text(f"key {OPENAI}\nFRED_API_KEY={FRED}\ncache_key={FRED[::-1]}\n")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(home)
-    assert main(argparse.Namespace(paths=["."], json=False, max_size=25, out=None)) == 1
+    exit_code, saved_in = main(argparse.Namespace(paths=["."], json=False, max_size=25, out=None))
+    assert exit_code == 1
     [report_dir] = (home / "envh-backups-and-scans" / "scans").iterdir()
+    assert saved_in == report_dir
     assert "envh scan" in (home / "envh-backups-and-scans" / "README.txt").read_text()
     assert stat.S_IMODE(report_dir.stat().st_mode) == 0o700
     assert sorted(entry.name for entry in report_dir.iterdir()) == ["files.txt", "hits.json", "report.txt"]
@@ -270,7 +272,7 @@ def test_a_later_home_scan_skips_saved_results_but_still_reports_import_backups(
 def test_the_out_folder_gets_the_dated_results_folder(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "code").mkdir()
     (tmp_path / "code" / "notes.md").write_text(f"{OPENAI}\n")
-    assert main(argparse.Namespace(paths=[str(tmp_path / "code")], json=True, max_size=25, out=str(tmp_path / "results"))) == 1
+    assert main(argparse.Namespace(paths=[str(tmp_path / "code")], json=True, max_size=25, out=str(tmp_path / "results")))[0] == 1
     [report_dir] = (tmp_path / "results").iterdir()
     assert (report_dir / "files.txt").read_text() == f"{tmp_path / 'code' / 'notes.md'}\n"
     assert json.loads(capsys.readouterr().out)["hits"][0]["confidence"] == "high"

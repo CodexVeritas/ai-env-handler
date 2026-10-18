@@ -184,6 +184,7 @@ class Hit:
 
     path: Path
     line: int
+    column: int
     confidence: str
     kind: str
     name: str
@@ -193,8 +194,8 @@ class Hit:
 
     def to_json(self) -> dict[str, object]:
         return {
-            "path": str(self.path), "line": self.line, "confidence": self.confidence, "kind": self.kind, "name": self.name, "shown": self.shown,
-            "fingerprint": self.fingerprint, "length": self.length,
+            "path": str(self.path), "line": self.line, "column": self.column, "confidence": self.confidence, "kind": self.kind, "name": self.name,
+            "shown": self.shown, "fingerprint": self.fingerprint, "length": self.length,
         }
 
     def describe(self) -> str:
@@ -275,7 +276,7 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
         spans = matches_by_line.get(index, [])
         for start, end, kind in spans:
             value = line[start:end]
-            yield Hit(path, index + 1, "high", kind, "", peek(value), value_id(value), len(value))
+            yield Hit(path, index + 1, start, "high", kind, "", peek(value), value_id(value), len(value))
         for match in ASSIGNMENT_REGEX.finditer(line):
             name = match.group("name")
             if SECRET_WORD.search(name, 1) is None:
@@ -286,7 +287,7 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
             if any(start <= match.start("value") < end for start, end, _ in spans):
                 continue
             confidence, service = classify_name(name)
-            yield Hit(path, index + 1, confidence, service, name, peek(value), value_id(value), len(value))
+            yield Hit(path, index + 1, match.start("value"), confidence, service, name, peek(value), value_id(value), len(value))
 
 
 def read_if_text(path: Path) -> str | None:
@@ -528,7 +529,7 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     say("")
     say("No value is shown, only its first and last few characters (fewer for shorter values, as in the envh console), its length")
     say("and an id. The same id means the same value, and the first 6 characters of an id match the id the envh console shows")
-    say('for a stored key. Search this file for "id <id>" to find every line a value is on.')
+    say('for a stored key. Search this file for "id <id>" to find every line a value is on, or browse it all with envh explore.')
     say("Sections: Summary, High confidence, Medium confidence, Low confidence, Every hit by file, Notes.")
     say("\n== Summary ==")
     summary_section(hits, say)
@@ -561,6 +562,7 @@ def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: floa
     if unreadable:
         say(f"  · {len(unreadable):,} " + ("file or folder" if len(unreadable) == 1 else "files or folders") + " could not be read (permissions).")
     say("  · What the scan skips and cannot see is under Notes at the end of report.txt.")
+    say("  · Browse them, with the lines around each key: envh explore")
     say_where_saved(report_dir, False, say)
 
 
@@ -584,18 +586,19 @@ def save_results(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed:
     return report_dir
 
 
-def main(args: argparse.Namespace) -> int:
+def main(args: argparse.Namespace) -> tuple[int, Path | None]:
+    """The exit code (1 when something was found) and the folder the results were saved in, if they were."""
     roots = [Path(raw).expanduser().absolute() for raw in (args.paths or [str(Path.home())])]
     missing = [root for root in roots if not root.exists()]
     if missing:
         print(f"envh scan: no such path: {', '.join(str(path) for path in missing)}", file=sys.stderr)
-        return 2
+        return 2, None
     parent = Path(args.out).expanduser().absolute() if args.out else saved_files_root() / SCANS
     if args.out is None and not args.json and sys.stdin.isatty() and sys.stdout.isatty():
         parent = ask_where("the results", parent, input)
     if parent.exists() and not parent.is_dir():
         print(f"envh scan: {parent} is a file, not a folder", file=sys.stderr)
-        return 2
+        return 2, None
     progress = Progress(sys.stderr) if sys.stderr.isatty() else None
     started = time.monotonic()
     unreadable: list[Path] = []
@@ -613,11 +616,11 @@ def main(args: argparse.Namespace) -> int:
         print(f"envh scan: could not save the results in {parent}: {error}", file=sys.stderr)
         if not args.json:
             report(hits, scanned, unreadable, elapsed, roots, finished)
-            return 1 if hits else 0
+            return (1 if hits else 0), None
     else:
         if not args.json:
             summary(hits, scanned, unreadable, elapsed, report_dir)
-            return 1 if hits else 0
+            return (1 if hits else 0), report_dir
         print(f"Results saved in {shown_path(report_dir)}", file=sys.stderr)
     print(json.dumps(results_json(hits, scanned, unreadable), indent=2))
-    return 1 if hits else 0
+    return (1 if hits else 0), None

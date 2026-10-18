@@ -219,6 +219,8 @@ A home-folder scan can find thousands of hits, so the terminal gets a short summ
 
 These hold no values, so unlike the import backups they are safe to keep. Later scans skip them.
 
+**Browse them** with `envh explore` (the newest scan, or `envh explore <folder>`); a scan at a terminal also offers to open it when it finishes. Arrow through each type of key, each key, and the files it is in, grouped by folder when there are many. Enter on a file shows the lines around each copy, read from the file at that moment, with every key in them shown as its first and last few characters; `s` shows the full key until it hides itself after 30 seconds. Tab switches between High, Medium, Low and All, and `/` filters by service, name or path. The view runs on the terminal's alternate screen, so nothing it shows stays in your scrollback, and it refuses to run without a terminal.
+
 To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of installed code and caches that hold none of your keys but can hold millions of files:
 - **Installed packages and environments:** `.venv`, `venv`, `node_modules`, `site-packages`, conda, uv's Pythons, pipx, `.cargo`, `go/pkg` and the like.
 - **Caches:** `.cache`, app caches such as `Cache` and `GPUCache`, and any folder tagged with `CACHEDIR.TAG`. Hugging Face's token file in `.cache` is still read.
@@ -449,7 +451,7 @@ Layout, in review order. The directory tree states the trust boundaries and a te
 | `src/envh/core/` | trusted logic, no sockets or terminals | `config.py` policy files, `durations.py`, `vault.py` (age encryption), `state.py` (requests, sessions, runs), `broker.py` (decisions and their side effects), `audit.py` |
 | `src/envh/server/` | the trusted process, runs as user `envh` | `control.py` (Unix-socket protocol, peer uid), `console/` (the full-screen console: `app.py`, the request card, the keys, presets, settings and sessions screens, and `tui.py`, its standard-library terminal toolkit), `hardening.py`, `serve.py` (startup), `init_cmd.py` |
 | `src/envh/client/` | the untrusted side, runs as you or an agent, standard library only | `transport.py` (socket client), `commands.py` (`envh run`, `session`, `list`, …) |
-| `src/envh/tools/` | set-aside utilities, standard library only | `importer.py` (the `.env` wizard), `scanner.py` (`envh scan`), `saved_files.py` (the folder both save into); deleting the package removes two subcommands and nothing else |
+| `src/envh/tools/` | set-aside utilities, standard library only | `importer.py` (the `.env` wizard), `scanner.py` (`envh scan`), `explorer.py` (`envh explore`), `saved_files.py` (the folder they save into); deleting the package removes three subcommands and nothing else |
 | `src/envh/install/` | root-only system setup | `command.py` (`envh install` / `uninstall`, the console helper and launcher) |
 | `src/envh/platform.py`, `common.py`, `cli.py` | shared | OS facts (uid, socket path, prctl, preflight), the value fingerprint, command dispatch |
 

@@ -18,7 +18,8 @@ envh saves two kinds of files here. Each save gets its own folder, named by its 
                 plaintext, readable by anything running as you. Once the rewritten projects work, delete them:
                 rm -r ~/{FOLDER_NAME}/{IMPORT_BACKUPS}
 {SCANS}/           Results of `envh scan`: where key-shaped strings are, never the keys themselves. Start with the
-                summary at the top of report.txt. Nothing secret, so delete them whenever you like.
+                summary at the top of report.txt, or browse them with `envh explore`. Nothing secret, so delete them
+                whenever you like.
 
 envh does not need anything in this folder. Deleting it loses only these backups and reports.
 """
