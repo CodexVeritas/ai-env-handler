@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import hashlib
 import json
 import os
 import shlex
@@ -20,6 +21,15 @@ from envh.core.config import SecretEntry, load_config, render_config_template
 from envh.server.control import ControlServer
 from envh.core.state import Provenance, StateTable
 from envh.core.vault import Vault
+
+ALPHANUMERIC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+HEX = "0123456789abcdef"
+
+
+def random_text(seed: str, length: int, alphabet: str = ALPHANUMERIC) -> str:
+    """The same random-looking text for the same seed, so a test key looks real and never looks like a placeholder."""
+    return "".join(alphabet[byte % len(alphabet)] for byte in hashlib.shake_256(seed.encode()).digest(length))
+
 
 PASSPHRASE = "test-passphrase"
 PASSPHRASE_LINE = f"{PASSPHRASE}\n".encode()

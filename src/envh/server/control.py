@@ -314,6 +314,13 @@ class Connection:
             return
         await self._reply_decision(request)
 
+    async def op_match(self, message: dict[str, Any]) -> None:
+        request = self.broker.request_match(message.get("ids"), self._reason(message), self.provenance)
+        await self.send(self._pending(request, count=request.summary["count"]))
+        if not await self._decided_or_withdrawn(request):
+            return
+        await self._reply_decision(request)
+
     async def op_import(self, message: dict[str, Any]) -> None:
         secrets = message.get("secrets") or {}
         presets = message.get("presets") or {}

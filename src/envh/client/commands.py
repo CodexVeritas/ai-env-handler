@@ -250,12 +250,12 @@ def cmd_scan(args: argparse.Namespace, sock: Path) -> int:
     exit_code, report_dir = scan_main(args)
     if report_dir is not None and exit_code == 1 and not args.json and interactive():
         if input("\nBrowse them now: each key, its files and the lines around it? [Y/n] ").strip().lower() not in ("n", "no"):
-            explore(report_dir)
+            explore(report_dir, sock)
     return exit_code
 
 
 def cmd_explore(args: argparse.Namespace, sock: Path) -> int:
-    return explore_main(args.folder)
+    return explore_main(args.folder, sock)
 
 
 def build_parser() -> argparse.ArgumentParser:

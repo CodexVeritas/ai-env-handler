@@ -82,6 +82,11 @@ def content(request: Request, broker: Broker) -> tuple[str, str, list[tuple[str,
         summary = f"{who} proposes changes to {'preset' if len(names) == 1 else 'presets'} {', '.join(names)}"
         after = broker.merged_presets(request.summary.get("additions") or {})
         rows.append(("Changes", preset_changes(preset_drafts(broker.config.presets_raw), preset_drafts(after)) or [styled("none", DIM)]))
+    elif request.kind == "match":
+        title = f"Match request #{request.id}"
+        summary = f"{who} asks which of {plural(int(request.summary.get('count') or 0), 'key')} envh scan found are in your vault"
+        rows.append(("Answer", [styled("The names of the stored keys among them. No values are sent either way.")]))
+        rows.append(("", [styled("Each found key comes as 8 characters of its SHA-256. A short password could be guessed and checked this way, so approve only a scan you ran.", DIM)]))
     else:
         title = f"Import request #{request.id}"
         added = request.summary.get("added") or []

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import bisect
-import hashlib
 import itertools
 import json
 import math
@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator, TextIO
 
-from envh.common import peek
+from envh.common import peek, value_id
 from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, saved_files_root, say_where_saved, shown_path
 
 # Provider formats that are distinctive enough to recognize anywhere, including transcripts and shell history. Each
@@ -90,10 +90,21 @@ VALUE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("resend", (r"re_[A-Za-z0-9]{8}_[A-Za-z0-9]{24}",)),
     ("browserbase", (r"bb_live_[A-Za-z0-9_-]{20,}",)),
     ("jwt", (r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",)),
-    ("private-key", (r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----", r"PuTTY-User-Key-File-[0-9]")),
-    ("database-url", tuple(rf"{scheme}://[^\s:/@\"']+:[^\s@\"']+@[^\s\"']+" for scheme in ("postgres", "postgresql", r"mongodb\+srv", "mongodb", "mysql", "redis", "amqp"))),
+    ("private-key", (r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----(?=(?:\r?\n|(?:\\+r)?\\+n)[A-Za-z0-9+/=]{40})", r"PuTTY-User-Key-File-[0-9]")),
+    ("database-url", tuple(
+        scheme + r"://[^\s\"'\\`)\]<>:/@]+:[^\s\"'\\`)\]<>@]+@[^\s\"'\\`)\]<>]+" for scheme in ("postgres", "postgresql", r"mongodb\+srv", "mongodb", "mysql", "redis", "amqp")
+    )),
 )
-COMPILED_PATTERNS = tuple((kind, re.compile(pattern)) for kind, patterns in VALUE_PATTERNS for pattern in patterns)
+REGEX_SYNTAX = set("[](){}*+?|\\^$.")
+
+
+def literal_prefix(pattern: str) -> str:
+    """The literal text a pattern starts with, such as sk-or-v1-: it is the same in every key of the format, so showing it
+    gives nothing away."""
+    return "".join(itertools.takewhile(lambda char: char not in REGEX_SYNTAX, pattern))
+
+
+COMPILED_PATTERNS = tuple((kind, re.compile(pattern), len(literal_prefix(pattern))) for kind, patterns in VALUE_PATTERNS for pattern in patterns)
 # Formats whose prefix is short or common enough to turn up inside longer strings, such as base64 images pasted into a
 # transcript: a match counts only when it stands alone, with no letter, digit or underscore on either side.
 STANDALONE_KINDS = {
@@ -108,7 +119,7 @@ WORD_CHARACTER = re.compile(r"[A-Za-z0-9_]")
 # after an escaped newline or tab, as in transcripts' JSON strings, but never right after a bare backslash.
 ASSIGNMENT_REGEX = re.compile(r"(?:(?<=\\[nrt])|(?<![A-Za-z0-9_\\]))(?P<name>[A-Za-z_][A-Za-z0-9_]{0,130})[\"']?\s*[=:]\s*[\"']?(?P<value>[A-Za-z0-9_\-./+=]{16,})")
 SECRET_WORD = re.compile(r"KEY|TOKEN|SECRET|PASS|CREDENTIAL|CLIENT_ID", re.IGNORECASE)
-PLACEHOLDER_WORDS = ("example", "your", "placeholder", "changeme", "xxxx", "redacted", "dummy", "insert", "replace", "envh-proxy", "sk-proj-abc", "<", ">", "$", "%")
+PLACEHOLDER_WORDS = ("example", "your", "placeholder", "changeme", "xxxx", "redacted", "dummy", "insert", "replace", "envh-proxy", "envh-removed", "sk-proj-abc", "<", ">", "$", "%")
 NAME_ONLY_PROVIDERS = ("Serp", "FRED", "AskNews", "Hyperbrowser", "Metaculus", "Exa", "Deepgram", "Parallel", "Radiant", "ACLED", "Mistral", "Cohere", "Telegram", "Mailchimp", "Azure", "AWS secret access keys")
 
 # A named assignment is medium confidence when its name ends like a credential (API_KEY, ACCESS_TOKEN, CLIENT_SECRET,
@@ -122,6 +133,8 @@ KEY_QUALIFIERS = {
     "master", "signing", "encryption", "deploy", "app", "webhook", "personal",
 }
 ENCODING_SUFFIXES = {"b64", "base64", "json"}
+# A name starting with one of these is a function or a flag, such as getAccessToken or withCredentials, not a key.
+ACTION_WORDS = {"with", "has", "is", "use", "uses", "get", "set", "create", "update", "add", "remove", "delete", "fetch", "load", "read", "write", "validate", "check", "should", "can", "needs", "require", "requires", "invalid", "missing"}
 SERVICE_WORDS = {
     "anthropic": "anthropic", "claude": "anthropic", "openai": "openai", "openrouter": "openrouter", "perplexity": "perplexity", "pplx": "perplexity",
     "gemini": "gemini", "google": "google", "gcp": "google", "gmail": "google", "sheets": "google", "groq": "groq", "mistral": "mistral",
@@ -139,7 +152,49 @@ SERVICE_WORDS = {
     "database": "database", "db": "database", "npm": "npm", "pypi": "pypi", "docker": "docker", "heroku": "heroku", "airtable": "airtable",
     "digitalocean": "digitalocean", "resend": "resend", "algolia": "algolia", "mapbox": "mapbox", "kalshi": "kalshi", "polymarket": "polymarket",
 }
-CONFIDENCE_ORDER = ("high", "medium", "low")
+CONFIDENCE_ORDER = ("high", "medium", "low", "fake")
+# A value that is just a name, such as self.settings.openai_api_key or OPENAI_API_KEY_2, is code reading a key, not a key.
+UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+DEMO_WORDS = ("demo", "example", "sample", "dummy", "fake", "placeholder")
+NAME_LIKE_VALUE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+|[a-z]+(?:[_-][a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[a-z]+(?:[A-Z][a-z]+)+|(?:[A-Z][a-z]+){2,}"
+)
+# Placeholders in docs and tests: a counting run, a short unit repeated, or a word no real key holds. The format's
+# fixed prefix is left out of the check.
+FAKE_WORDS = ("example", "sample", "dummy", "fake", "placeholder", "your", "xxxx", "changeme", "redacted", "lorem", "notreal", "invalid", "foobar")
+COUNTING_RUNS = ("123456789", "abcdefghij", "ABCDEFGHIJ", "qwertyuiop")
+REPEATED_UNIT = re.compile(r"(.{2,16}?)\1{2,}")
+REPEAT_CHECK_LIMIT = 200
+# Matched in order against the path with the home folder written as ~, so an agent's own folders in your home are told
+# apart from a project's .claude folder. Where a file is stored comes first, then what kind of file it is. Credential
+# files are the ones an app signs in with, such as gh's hosts.yml: they are meant to hold a key.
+PLACES = (
+    ("editor history", re.compile(r"/User/History/")),
+    ("trash", re.compile(r"/\.local/share/Trash/")),
+    ("envh backups", re.compile(r"/\.local/state/envh/|/envh-backups-and-scans/")),
+    ("docker", re.compile(r"/\.local/share/docker/|/var/lib/docker/")),
+    ("credential files", re.compile(
+        r"^~/(?:\.claude/\.credentials\.json|\.codex/auth\.json|\.gemini/oauth_creds\.json|\.config/(?:cursor/auth\.json|gh/hosts\.yml|gcloud/)"
+        r"|\.claude/ide/|\.git-credentials|\.netrc|\.npmrc|\.pypirc|\.docker/config\.json|\.aws/|\.kube/config|\.cache/huggingface/|\.ssh/)"
+    )),
+    ("agent transcripts", re.compile(
+        r"^~/\.claude/(?:projects|file-history|sessions|todos|shell-snapshots)/|^~/\.claude/history\.jsonl$|^~/\.cursor/projects/"
+        r"|^~/\.codex/(?:sessions|archived_sessions)/|^~/\.codex/history\.jsonl$"
+    )),
+    ("agent app data", re.compile(r"^~/\.(?:claude|cursor|codex|kilocode|gemini)/")),
+    ("worktree copies", re.compile(r"/\.[A-Za-z]+/worktrees/")),
+    ("logs", re.compile(r"\.log(?:\.[0-9]+)?$|[/_-]logs?/")),
+    ("tests", re.compile(r"/(?:tests?|testing|fixtures?|__tests__|spec)/|/test_[^/]*$|_test\.[A-Za-z]+$|\.test\.[A-Za-z]+$")),
+    ("docs and notes", re.compile(r"\.(?:md|rst|txt|ipynb)$|/docs?/", re.IGNORECASE)),
+    (".env files", re.compile(r"/\.env[^/]*$")),
+    ("data and output", re.compile(r"\.(?:jsonl|csv|tsv|html?|xml)$", re.IGNORECASE)),
+    ("code and config", re.compile(r"\.(?:py|ts|tsx|js|jsx|mjs|go|rs|rb|java|sh|toml|ya?ml|json|cfg|ini|conf)$")),
+)
+# A database login that is a default or local one, such as postgres://postgres:postgres@localhost, is a dev setup in
+# docs and compose files, not a secret.
+DATABASE_LOGIN = re.compile(r"[^:/]+://([^:/@]*):([^@]*)@([^:/?]+)")
+DEFAULT_PASSWORDS = {"postgres", "password", "pass", "passwd", "pw", "pwd", "root", "admin", "secret", "example", "changeme", "test", "dev", "user", "mysql", "redis", "guest", "1234", "12345", "123456"}
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "db", "database", "postgres", "postgresql", "mysql", "redis", "mongo", "mongodb"}
 
 # Folders of installed code, caches and app data that hold no keys of yours but can hold millions of files. A name with
 # a slash matches only that path below the folder being scanned (usually your home folder).
@@ -148,7 +203,7 @@ SKIP_DIR_NAMES = {
     ".pyenv", ".conda", "miniconda3", "anaconda3", "miniforge3", "mambaforge", ".local/lib", ".local/share/uv", ".local/share/pipx",
     ".local/share/virtualenvs", ".local/share/virtualenv", ".local/share/heroku", ".npm", ".yarn", ".pnpm-store", ".bun", ".nvm", ".cargo",
     ".rustup", ".gradle", ".m2", ".julia", ".gem", "go/pkg", ".terraform", ".next", ".vscode/extensions", ".vscode-insiders/extensions",
-    ".cursor/extensions", ".vscode-server", ".cursor-server", ".claude/plugins", ".cache", "Cache", "Code Cache", "GPUCache", "DawnCache",
+    ".cursor/extensions", ".antigravity/extensions", ".vscode-server", ".cursor-server", ".claude/plugins", ".cache", "Cache", "Code Cache", "GPUCache", "DawnCache",
     "CacheStorage", ".local/share/flatpak", ".var/app", ".local/share/containers", ".local/share/Steam", ".steam", ".wine", "snap",
     ".mozilla", "google-chrome", "chromium", "BraveSoftware", "Microsoft Edge", ".thunderbird", "Trash/expunged", f"{FOLDER_NAME}/{SCANS}",
 }
@@ -191,6 +246,7 @@ class Hit:
     shown: str
     fingerprint: str
     length: int
+    fixed: int = 0
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -213,11 +269,6 @@ def looks_placeholder(value: str) -> bool:
     return any(word in lowered for word in PLACEHOLDER_WORDS) or entropy(value) < 3.0
 
 
-def value_id(value: str) -> str:
-    """Eight hex characters of the value's SHA-256; the envh console shows the first six for a stored key."""
-    return hashlib.sha256(value.encode()).hexdigest()[:8]
-
-
 def name_words(name: str) -> list[str]:
     return [word.lower() for word in NAME_SEPARATOR.split(CAMEL_BOUNDARY.sub(r"\1_\2", name)) if word]
 
@@ -231,6 +282,41 @@ def service_named(words: list[str]) -> str | None:
     return None
 
 
+def looks_fake(value: str, fixed: int = 0) -> bool:
+    rest = value[fixed:]
+    lowered = rest.lower()
+    if any(word in lowered for word in FAKE_WORDS) or any(run in rest for run in COUNTING_RUNS):
+        return True
+    if len(rest) > REPEAT_CHECK_LIMIT:
+        return False
+    repeated = sum(len(match.group(0)) for match in REPEATED_UNIT.finditer(rest))
+    return repeated * 10 >= len(rest) * 4
+
+
+def place_of(path: str, home: str | None = None) -> str:
+    home = home or str(Path.home())
+    shown = "~" + path[len(home):] if path.startswith(home + "/") else path
+    return next((place for place, pattern in PLACES if pattern.search(shown)), "other")
+
+
+def demo_token(value: str) -> bool:
+    """A JWT whose payload names a demo or example issuer, such as Supabase's public local-development keys."""
+    try:
+        payload = value.split(".")[1]
+        decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode("utf-8", "replace").lower()
+    except (IndexError, ValueError):
+        return False
+    return any(word in decoded for word in DEMO_WORDS)
+
+
+def default_login(value: str) -> bool:
+    match = DATABASE_LOGIN.match(value)
+    if match is None:
+        return False
+    user, password, host = match.groups()
+    return password.lower() in DEFAULT_PASSWORDS or password == user or host.lower() in LOCAL_HOSTS
+
+
 def classify_name(name: str) -> tuple[str, str]:
     """(confidence, service) for a NAME=value hit; the service is "unknown" when the name mentions none."""
     words = name_words(name)
@@ -240,6 +326,7 @@ def classify_name(name: str) -> tuple[str, str]:
     last = words[-1] if words else ""
     before = words[-2] if len(words) > 1 else ""
     credential = last in CREDENTIAL_WORDS or (last in QUALIFIED_WORDS and (before in KEY_QUALIFIERS or service is not None))
+    credential = credential and not (len(words) > 1 and words[0] in ACTION_WORDS)
     return ("medium" if credential else "low"), (service or "unknown")
 
 
@@ -247,46 +334,55 @@ def standalone(text: str, start: int, end: int) -> bool:
     return not (start > 0 and WORD_CHARACTER.match(text[start - 1])) and not (end < len(text) and WORD_CHARACTER.match(text[end]))
 
 
-def value_matches(text: str) -> list[tuple[int, int, str]]:
-    """Every key-format match in the text as (start, end, kind), in order; one overlapping an earlier match is dropped."""
-    found: list[tuple[int, int, str]] = []
-    for kind, regex in COMPILED_PATTERNS:
+def value_matches(text: str) -> list[tuple[int, int, str, int]]:
+    """Every key-format match in the text as (start, end, kind, length of the format's literal prefix), in order; one
+    overlapping an earlier match is dropped."""
+    found: list[tuple[int, int, str, int]] = []
+    for kind, regex, fixed in COMPILED_PATTERNS:
         for match in regex.finditer(text):
             start, end = match.span()
             if kind not in STANDALONE_KINDS or standalone(text, start, end):
-                found.append((start, end, kind))
+                found.append((start, end, kind, fixed))
     found.sort(key=lambda item: (item[0], -item[1]))
-    kept: list[tuple[int, int, str]] = []
-    for start, end, kind in found:
-        if not kept or start >= kept[-1][1]:
-            kept.append((start, end, kind))
+    kept: list[tuple[int, int, str, int]] = []
+    for match in found:
+        if not kept or match[0] >= kept[-1][1]:
+            kept.append(match)
     return kept
+
+
+def shown_value(value: str, fixed: int = 0) -> str:
+    """The format's literal prefix, then the first and last few characters of the rest, as the console shows a key."""
+    return value[:fixed] + peek(value[fixed:])
 
 
 def scan_text(path: Path, text: str) -> Iterator[Hit]:
     lines = text.split("\n")
-    matches_by_line: dict[int, list[tuple[int, int, str]]] = defaultdict(list)
+    matches_by_line: dict[int, list[tuple[int, int, str, int]]] = defaultdict(list)
     matches = value_matches(text)
     if matches:
         line_starts = list(itertools.accumulate((len(line) + 1 for line in lines[:-1]), initial=0))
-        for start, end, kind in matches:
+        for start, end, kind, fixed in matches:
             index = bisect.bisect_right(line_starts, start) - 1
-            matches_by_line[index].append((start - line_starts[index], end - line_starts[index], kind))
+            matches_by_line[index].append((start - line_starts[index], end - line_starts[index], kind, fixed))
     for index, line in enumerate(lines):
         spans = matches_by_line.get(index, [])
-        for start, end, kind in spans:
+        for start, end, kind, fixed in spans:
             value = line[start:end]
-            yield Hit(path, index + 1, start, "high", kind, "", peek(value), value_id(value), len(value))
+            harmless = (kind == "database-url" and default_login(value)) or (kind == "jwt" and demo_token(value))
+            confidence = "fake" if looks_fake(value, fixed) or harmless else "high"
+            yield Hit(path, index + 1, start, confidence, kind, "", shown_value(value, fixed), value_id(value), len(value), fixed)
         for match in ASSIGNMENT_REGEX.finditer(line):
             name = match.group("name")
             if SECRET_WORD.search(name, 1) is None:
                 continue
             value = match.group("value").rstrip(".,;")
-            if looks_placeholder(value):
+            if looks_placeholder(value) or (NAME_LIKE_VALUE.fullmatch(value) and not UUID.fullmatch(value)):
                 continue
-            if any(start <= match.start("value") < end for start, end, _ in spans):
+            if any(start <= match.start("value") < end for start, end, _, _ in spans):
                 continue
             confidence, service = classify_name(name)
+            confidence = "fake" if looks_fake(value) else confidence
             yield Hit(path, index + 1, match.start("value"), confidence, service, name, peek(value), value_id(value), len(value))
 
 
@@ -473,6 +569,7 @@ def confidence_lines(hits: list[Hit]) -> list[str]:
         f"High confidence, a known key format: {spread(tiers['high'])}. Start here.",
         f"Medium confidence, a credential-style name such as OPENAI_API_KEY=...: {spread(tiers['medium'])}.",
         f"Low confidence, other names holding KEY, TOKEN, SECRET or PASS, such as cache_key: {spread(tiers['low'])}. Mostly not keys.",
+        f"Fake, placeholders (counting or repeating, words like example) and default or local database logins: {spread(tiers['fake'])}.",
     ]
 
 
@@ -491,6 +588,12 @@ def summary_section(hits: list[Hit], say: Callable[[str], None]) -> None:
     for _, group in sorted(by_type.items(), key=lambda item: (item[0][0], -len(item[1]))):
         first = group[0]
         say(f"  {first.kind:<24} {first.confidence:<10} {len(group):>9,} {len({hit.fingerprint for hit in group}):>9,} {len({hit.path for hit in group}):>7,}")
+    say(f"\nWhere they are, by place (distinct values; files):")
+    say(f"  {'place':<20} {'high':>12} {'medium':>12} {'low':>12} {'fake':>12}")
+    for place, group in sorted(group_by(hits, lambda hit: place_of(str(hit.path))).items(), key=lambda item: -len({hit.path for hit in item[1]})):
+        by_tier = group_by(group, lambda hit: hit.confidence)
+        cells_text = [f"{len({hit.fingerprint for hit in by_tier[tier]}):,}; {len({hit.path for hit in by_tier[tier]}):,}" for tier in CONFIDENCE_ORDER]
+        say(f"  {place:<20} " + " ".join(f"{cell:>12}" for cell in cells_text))
     tiers = group_by(hits, lambda hit: hit.confidence)
     for confidence in ("high", "medium"):
         if tiers[confidence]:
@@ -527,10 +630,11 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     for line in confidence_lines(hits):
         say("  " + line)
     say("")
-    say("No value is shown, only its first and last few characters (fewer for shorter values, as in the envh console), its length")
-    say("and an id. The same id means the same value, and the first 6 characters of an id match the id the envh console shows")
-    say('for a stored key. Search this file for "id <id>" to find every line a value is on, or browse it all with envh explore.')
-    say("Sections: Summary, High confidence, Medium confidence, Low confidence, Every hit by file, Notes.")
+    say("No value is shown, only its format's fixed prefix (such as sk-or-v1-) and the first and last few characters of the rest")
+    say("(fewer for shorter values, as in the envh console), its length and an id. The same id means the same value, and the")
+    say('first 6 characters of an id match the id the envh console shows for a stored key. Search this file for "id <id>" to')
+    say("find every line a value is on, or browse it all with envh explore.")
+    say("Sections: Summary, High confidence, Medium confidence, Low confidence, Fake, Every hit by file, Notes.")
     say("\n== Summary ==")
     summary_section(hits, say)
     say("\n== High confidence: values in a known key format, with every file each is in ==")
@@ -540,6 +644,8 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     values_section(tiers["medium"], say, with_paths=True)
     say('\n== Low confidence: values assigned to other names, one line each (search for "id <id>" to find the files) ==')
     values_section(tiers["low"], say, with_paths=False)
+    say('\n== Fake: values that look like placeholders, one line each (search for "id <id>" to find the files) ==')
+    values_section(tiers["fake"], say, with_paths=False)
     say("\n== Every hit by file ==")
     for path, group in sorted(group_by(hits, lambda hit: str(hit.path)).items()):
         say(f"\n{shown_path(Path(path))}")

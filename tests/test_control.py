@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import envh.server.control as control_mod
+from envh.common import value_id
 from envh.server.control import ControlServer
 from tests.conftest import Client, Harness, approve_next, make_auto
 
@@ -172,6 +173,15 @@ async def test_import_and_propose_over_socket(control: Path, harness: Harness) -
         await approve_next(harness)
         assert (await client.recv())["ok"] is True
     assert "q" in harness.broker.config.presets
+
+
+async def test_match_over_socket_answers_after_approval(control: Path, harness: Harness) -> None:
+    async with Client(control) as client:
+        await client.send(op="match", ids=[value_id("sk-or-team"), value_id("elsewhere")], reason="envh explore")
+        first = await client.recv()
+        assert first["pending"] is True and first["count"] == 2 and "matches" not in first
+        await approve_next(harness)
+        assert (await client.recv())["matches"] == {value_id("sk-or-team"): ["TEAM_OPENROUTER_KEY"]}
 
 
 async def test_preset_with_override_mismatch_is_rejected(control: Path, harness: Harness) -> None:
