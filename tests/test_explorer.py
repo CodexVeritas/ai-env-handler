@@ -98,7 +98,7 @@ def test_tab_switches_tiers_and_the_filter_narrows(tmp_path: Path) -> None:
     press(explorer, "tab")
     assert [row.label for row in explorer.rows()] == ["fred"]
     press(explorer, "tab", "tab", "tab", "/", *"notes", "enter")
-    assert [row.label for row in explorer.rows()] == ["openrouter"] and "filter: notes" in screen(explorer)[1]
+    assert [row.label for row in explorer.rows()] == ["openrouter"] and "filter: notes" in screen(explorer)[2]
 
 
 def test_the_file_view_hides_the_key_until_asked_and_hides_it_again(tmp_path: Path) -> None:
@@ -231,7 +231,7 @@ def test_g_groups_by_place(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {"app/.env": f"{OPENROUTER}\n", "app/README.md": f"{ANTHROPIC}\n{OPENROUTER}\n"})
     explorer = Explorer(load_scan(folder), folder)
     press(explorer, "g")
-    assert [row.label for row in explorer.rows()] == [".env files", "docs and notes"] and "grouped by place" in screen(explorer)[1]
+    assert [row.label for row in explorer.rows()] == [".env files", "docs and notes"] and "Grouped by place" in screen(explorer)[2]
     press(explorer, "down", "right")
     assert sorted(row.label.split()[0] for row in explorer.rows() if row.node[0] == "value") == ["anthropic", "openrouter"]
 
@@ -243,7 +243,7 @@ def test_keys_in_the_vault_are_named_and_v_filters_them(tmp_path: Path) -> None:
     (folder / "vault.json").write_text(json.dumps({"matches": {stored: ["TEAM_OPENROUTER_KEY"]}}))
     explorer = Explorer(hits, folder, vault=load_vault_matches(folder))
     press(explorer, "v")
-    assert [row.label for row in explorer.rows()] == ["openrouter"] and "in your vault (v)" in screen(explorer)[1]
+    assert [row.label for row in explorer.rows()] == ["openrouter"] and "in your vault (v)" in screen(explorer)[2]
     press(explorer, "right")
     assert any("in your vault as TEAM_OPENROUTER_KEY" in row.label for row in explorer.rows())
     press(explorer, "v")
@@ -255,4 +255,4 @@ def test_v_without_a_vault_check_says_how_to_get_one(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {".env": f"{OPENROUTER}\n"})
     explorer = Explorer(load_scan(folder), folder)
     press(explorer, "v")
-    assert "Not checked against your vault" in screen(explorer)[-2] and "vault not checked" in screen(explorer)[1]
+    assert "Not checked against your vault" in screen(explorer)[-2] and "vault not checked" in screen(explorer)[2]
