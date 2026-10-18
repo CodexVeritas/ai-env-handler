@@ -504,6 +504,14 @@ class Explorer:
         if in_git:
             where = "is in a git repo" if in_git == 1 else "are in git repos"
             lines.append((f" ! {plural(in_git, 'file')} {where}: a committed key stays in history, so rotate it.", "33"))
+        if self.vault is None:
+            lines.append((" · Not checked against your vault: a key replaced here may be your only copy.", "2"))
+        else:
+            outside = sum(1 for fingerprint in keys if fingerprint not in self.vault)
+            if outside:
+                lines.append((f" ! {plural(outside, 'key')} {'isn' if outside == 1 else 'aren'}'t in your vault; once replaced it's gone. Import any you need.", "33"))
+        if self.tier in ("low", "all") and any(place_of(path) in ("code and config", ".env files") for path in targets):
+            lines.append((" ! Low-confidence values are mostly not keys; replacing them can break code.", "33"))
         for kind, why in LEFT_FOR_HAND.items():
             left = sum(1 for fingerprint in keys if index.first[fingerprint].kind == kind)
             if left:

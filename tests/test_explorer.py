@@ -275,3 +275,22 @@ def test_x_replaces_every_copy_under_a_row_after_y(tmp_path: Path) -> None:
     explorer.work()
     assert explorer.message.startswith("✓ Replaced") and label not in [row.label for row in explorer.rows()]
     assert (folder / "replaced.txt").exists() and OPENROUTER not in (folder / "replaced.txt").read_text()
+
+
+def test_the_replace_summary_warns_about_keys_outside_the_vault_and_low_values_in_code(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"a/.env": f"{OPENROUTER}\n{ANTHROPIC}\nGENERATION_KEY={FRED}\n"})
+    hits = load_scan(folder)
+    stored = next(hit.fingerprint for hit in hits if hit.kind == "openrouter")
+    explorer = Explorer(hits, folder, vault={stored: ["TEAM_OPENROUTER_KEY"]})
+    explorer.tier = "all"
+    explorer.expand(explorer.rows()[0].node)
+    choose(explorer, "file")
+    press(explorer, "x")
+    rows = "\n".join(screen(explorer))
+    assert "isn't in your vault; once replaced it's gone" in rows or "aren't in your vault" in rows
+    assert "Low-confidence values are mostly not keys" in rows
+    press(explorer, "n")
+    unchecked = Explorer(hits, folder)
+    choose(unchecked, "top")
+    press(unchecked, "x")
+    assert "Not checked against your vault" in "\n".join(screen(unchecked))
