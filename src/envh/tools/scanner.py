@@ -559,7 +559,7 @@ def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: floa
         for line in confidence_lines(hits):
             say("  " + line)
     if unreadable:
-        say(f"  · {plural(len(unreadable), 'file or folder')} could not be read (permissions).")
+        say(f"  · {len(unreadable):,} " + ("file or folder" if len(unreadable) == 1 else "files or folders") + " could not be read (permissions).")
     say("  · What the scan skips and cannot see is under Notes at the end of report.txt.")
     say_where_saved(report_dir, False, say)
 
