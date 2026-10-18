@@ -29,10 +29,11 @@ from envh.client.transport import ClientError, Connection, waiting_notice
 from envh.common import peek, printable
 from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, in_git_repo, replace_all
 from envh.tools.saved_files import SCANS, saved_files_root, shown_path
-from envh.tools.scanner import DEFAULT_MAX_BYTES, Hit, place_of, plural, read_if_text, scan_text, shown_folder
+from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, place_of, plural, read_if_text, scan_text, shown_folder
 
 TIERS = ("high", "medium", "low", "fake", "all")
-TIER_LABELS = {"high": "High", "medium": "Medium", "low": "Low", "fake": "Fake", "all": "All"}
+TIER_LABELS = {"high": "Likely", "medium": "Possible", "low": "Unlikely", "fake": "Placeholder", "all": "All"}
+TIER_PHRASES = {"high": "likely keys", "medium": "possible keys", "low": "unlikely keys", "fake": "placeholders", "all": "every list"}
 GROUPINGS = ("type", "place")
 VAULT_FILTERS = ("all keys", "in your vault", "not in your vault")
 VAULT_FILE = "vault.json"
@@ -273,7 +274,7 @@ def tree_rows(index: Index, expanded: set[tuple[str, ...]], show_tier: bool) -> 
     for (kind, confidence), values in sorted(index.tree.items(), key=lambda item: (-file_count(item[1]), item[0])):
         type_node = ("top", kind, confidence)
         detail = f"{plural(len(values), 'key')} in {plural(file_count(values), 'file')}"
-        rows.append(Row(type_node, None, 0, kind, (f"{confidence} · " if show_tier else "") + detail, True))
+        rows.append(Row(type_node, None, 0, kind, (f"{TIER_NAMES[confidence]} · " if show_tier else "") + detail, True))
         if type_node not in expanded:
             continue
         for fingerprint, paths in sorted(values.items(), key=lambda item: (-len(item[1]), item[0])):
@@ -491,7 +492,7 @@ class Explorer:
         scope = row.label if row.node[0] != "file" else shown_path(Path(row.node[4]))
         lines: list[tuple[str, str]] = [
             (" Replace every copy of these keys with a placeholder?", "1"),
-            (f"   {scope} ({TIER_LABELS[self.tier]}): {copies_label(copies)} of {plural(len(keys), 'key')} in {plural(len(targets), 'file')}", ""),
+            (f"   {scope}, {TIER_PHRASES[self.tier]}: {copies_label(copies)} of {plural(len(keys), 'key')} in {plural(len(targets), 'file')}", ""),
         ]
         if len(places) > 1:
             lines.append(("   " + " · ".join(f"{place} {count:,}" for place, count in places.most_common()), "2"))
@@ -511,7 +512,7 @@ class Explorer:
             if outside:
                 lines.append((f" ! {plural(outside, 'key')} {'isn' if outside == 1 else 'aren'}'t in your vault; once replaced it's gone. Import any you need.", "33"))
         if self.tier in ("low", "all") and any(place_of(path) in ("code and config", ".env files") for path in targets):
-            lines.append((" ! Low-confidence values are mostly not keys; replacing them can break code.", "33"))
+            lines.append((" ! Unlikely keys are mostly not keys at all; replacing them can break code.", "33"))
         sign_ins = places.get("credential files", 0)
         if sign_ins:
             lines.append((f" · {plural(sign_ins, 'credential file')} left alone: apps sign in with them. Rotate those keys.", "2"))
@@ -555,7 +556,7 @@ class Explorer:
         _, kind, confidence, fingerprint, path = row.node
         value = self.index().first[fingerprint]
         lines, problem = read_context(path, fingerprint)
-        type_label = value.kind if self.tier != "all" else f"{value.kind} ({confidence})"
+        type_label = value.kind if self.tier != "all" else f"{value.kind} ({TIER_NAMES[confidence]})"
         self.file_view = FileView(path, value, type_label, lines, problem)
         self.jump(1, self.file_view, from_top=True)
 
@@ -621,16 +622,20 @@ class Explorer:
 
     def header(self, width: int, crumbs: list[str]) -> list[str]:
         title = [(" envh explore", "1;36"), *[(f" › {crumb}", "1") for crumb in crumbs]]
-        tabs: list[tuple[str, str]] = [(" ", "")]
+        tabs: list[tuple[str, str]] = [(" Real key? ", "2")]
         for tier in TIERS:
             label = f" {TIER_LABELS[tier]} {self.tier_counts[tier]:,} "
             tabs.append((label, "1;7" if tier == self.tier else "2"))
             tabs.append((" ", ""))
-        tabs.append((f"  grouped by {self.grouping} (g)", "2"))
-        tabs.append(("  vault not checked" if self.vault is None else f"  {self.vault_filter} (v)", "2"))
+        return [fit(title, width), fit(tabs, width), fit(self.state_line(), width)]
+
+    def state_line(self) -> list[tuple[str, str]]:
+        """How the list is grouped and filtered, under the tabs."""
+        state: list[tuple[str, str]] = [(f" Grouped by {self.grouping} (g)", "2")]
+        state.append((" · vault not checked" if self.vault is None else f" · {self.vault_filter} (v)", "2"))
         if self.editing_filter or self.needle:
-            tabs.append((f"  filter: {self.needle}" + ("▏" if self.editing_filter else ""), "36"))
-        return [fit(title, width), fit(tabs, width), ""]
+            state.append((f" · filter: {self.needle}" + ("▏" if self.editing_filter else ""), "36"))
+        return state
 
     def scan_label(self) -> str:
         try:
@@ -649,7 +654,7 @@ class Explorer:
             self.top = self.selected - visible + 1
         self.top = min(self.top, max(len(rows) - visible, 0))
         if not rows:
-            lines.append("  No keys here. Tab switches between High, Medium, Low, Fake and All; Esc clears the filter.")
+            lines.append("  No keys here. Tab switches between the Likely, Possible, Unlikely and Placeholder lists; Esc clears the filter.")
         for index in range(self.top, min(self.top + visible, len(rows))):
             row = rows[index]
             mark = ("▾ " if row.node in self.expanded else "▸ ") if row.expandable else "  "
@@ -662,7 +667,7 @@ class Explorer:
         if self.editing_filter:
             hint = "Type to filter by service, name, place or path · Enter keep · Esc clear"
         else:
-            hint = "↑↓ →← move · Tab tier · g group · v vault · / filter · x replace · q quit"
+            hint = "↑↓ →← move · Tab next list · g group · v vault · / filter · x replace · q quit"
         lines.append(fit([(f" {self.message}", "33")], width) if self.message else "")
         lines.append(fit([(f" {hint}", "2")], width))
         return lines
