@@ -303,3 +303,26 @@ def test_explore_given_a_folder_of_scans_opens_the_newest(tmp_path: Path, monkey
     main(str(folder.parent), tmp_path / "ctl.sock")
     main(str(folder), tmp_path / "ctl.sock")
     assert opened == [folder, folder]
+
+
+def test_all_shows_each_place_once_and_x_there_replaces_every_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    history = {f"project/.config/Code/User/History/-{index}/snap": f"OPENROUTER_API_KEY={OPENROUTER}\nFRED_API_KEY={FRED}\n" for index in range(3)}
+    folder = saved_scan(tmp_path, history)
+    for file in (tmp_path / "project").rglob("*"):
+        os.utime(file, (time.time() - 3600, time.time() - 3600))
+    explorer = Explorer(load_scan(folder), folder)
+    press(explorer, "g")
+    choose(explorer, "top")
+    press(explorer, "x")
+    rows = "\n".join(screen(explorer, width=160))
+    assert "Only likely keys are replaced. 3 copies in other lists stay here:" in rows and "   3 possible." in rows and "Tab to All" in rows
+    press(explorer, "escape")
+    explorer.tier = "all"
+    assert [row.label for row in explorer.rows()] == ["editor history"]
+    choose(explorer, "top")
+    press(explorer, "x", "y")
+    explorer.work()
+    assert explorer.message.startswith("✓ Replaced 6 copies in 3 files")
+    assert all(OPENROUTER not in file.read_text() and FRED not in file.read_text() for file in (tmp_path / "project").rglob("snap"))
+    assert load_scan(folder) == [] and explorer.rows() == []
