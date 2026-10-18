@@ -67,7 +67,7 @@ def test_the_tree_opens_type_then_key_then_file(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {"bot/.env": f"OPENROUTER_API_KEY={OPENROUTER}\n", "notes.md": f"{ANTHROPIC}\n{OPENROUTER}\n"})
     explorer = Explorer(load_scan(folder), folder)
     rows = screen(explorer)
-    assert "High 2" in rows[1] and any(row.strip().startswith("› ▸ openrouter") and "→ shows its keys" in row for row in rows)
+    assert "Real key?  Likely 2" in rows[1] and any(row.strip().startswith("› ▸ openrouter") and "→ shows its keys" in row for row in rows)
     press(explorer, "enter")
     rows = "\n".join(screen(explorer))
     assert f"{shown(OPENROUTER)} ({len(OPENROUTER)} chars" in rows and "2 files" in rows

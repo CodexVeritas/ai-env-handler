@@ -28,10 +28,10 @@ from pathlib import Path
 from envh.client.transport import ClientError
 from envh.common import peek, printable
 from envh.tools.saved_files import SCANS, saved_files_root, shown_path
-from envh.tools.scanner import DEFAULT_MAX_BYTES, Hit, place_of, plural, read_if_text, scan_text, shown_folder
+from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, place_of, plural, read_if_text, scan_text, shown_folder
 
 TIERS = ("high", "medium", "low", "fake", "all")
-TIER_LABELS = {"high": "High", "medium": "Medium", "low": "Low", "fake": "Fake", "all": "All"}
+TIER_LABELS = {"high": "Likely", "medium": "Possible", "low": "Unlikely", "fake": "Placeholder", "all": "All"}
 GROUPINGS = ("type", "place")
 GROUP_ABOVE = 5
 LINES_SHOWN_PER_FILE = 3
@@ -253,7 +253,7 @@ def tree_rows(index: Index, expanded: set[tuple[str, ...]], show_tier: bool) -> 
     for (kind, confidence), values in sorted(index.tree.items(), key=lambda item: (-file_count(item[1]), item[0])):
         type_node = ("top", kind, confidence)
         detail = f"{plural(len(values), 'key')} in {plural(file_count(values), 'file')}"
-        rows.append(Row(type_node, None, 0, kind, (f"{confidence} · " if show_tier else "") + detail, True))
+        rows.append(Row(type_node, None, 0, kind, (f"{TIER_NAMES[confidence]} · " if show_tier else "") + detail, True))
         if type_node not in expanded:
             continue
         for fingerprint, paths in sorted(values.items(), key=lambda item: (-len(item[1]), item[0])):
@@ -442,7 +442,7 @@ class Explorer:
         _, kind, confidence, fingerprint, path = row.node
         value = self.index().first[fingerprint]
         lines, problem = read_context(path, fingerprint)
-        type_label = value.kind if self.tier != "all" else f"{value.kind} ({confidence})"
+        type_label = value.kind if self.tier != "all" else f"{value.kind} ({TIER_NAMES[confidence]})"
         self.file_view = FileView(path, value, type_label, lines, problem)
         self.jump(1, self.file_view, from_top=True)
 
@@ -498,7 +498,7 @@ class Explorer:
 
     def header(self, width: int, crumbs: list[str]) -> list[str]:
         title = [(" envh explore", "1;36"), *[(f" › {crumb}", "1") for crumb in crumbs]]
-        tabs: list[tuple[str, str]] = [(" ", "")]
+        tabs: list[tuple[str, str]] = [(" Real key? ", "2")]
         for tier in TIERS:
             label = f" {TIER_LABELS[tier]} {self.tier_counts[tier]:,} "
             tabs.append((label, "1;7" if tier == self.tier else "2"))
@@ -525,7 +525,7 @@ class Explorer:
             self.top = self.selected - visible + 1
         self.top = min(self.top, max(len(rows) - visible, 0))
         if not rows:
-            lines.append("  No keys here. Tab switches between High, Medium, Low, Fake and All; Esc clears the filter.")
+            lines.append("  No keys here. Tab switches between the Likely, Possible, Unlikely and Placeholder lists; Esc clears the filter.")
         for index in range(self.top, min(self.top + visible, len(rows))):
             row = rows[index]
             mark = ("▾ " if row.node in self.expanded else "▸ ") if row.expandable else "  "
@@ -538,7 +538,7 @@ class Explorer:
         if self.editing_filter:
             hint = "Type to filter by service, name, place or path · Enter keep · Esc clear"
         else:
-            hint = "↑↓ move · → open · ← close · Enter view · Tab tier · g group · / filter · q quit"
+            hint = "↑↓ move · → open · ← close · Enter view · Tab next list · g group · / filter · q quit"
         lines.append(fit([(f" {self.message}", "33")], width) if self.message else "")
         lines.append(fit([(f" {hint}", "2")], width))
         return lines
