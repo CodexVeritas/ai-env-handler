@@ -512,6 +512,9 @@ class Explorer:
                 lines.append((f" ! {plural(outside, 'key')} {'isn' if outside == 1 else 'aren'}'t in your vault; once replaced it's gone. Import any you need.", "33"))
         if self.tier in ("low", "all") and any(place_of(path) in ("code and config", ".env files") for path in targets):
             lines.append((" ! Low-confidence values are mostly not keys; replacing them can break code.", "33"))
+        sign_ins = places.get("credential files", 0)
+        if sign_ins:
+            lines.append((f" · {plural(sign_ins, 'credential file')} left alone: apps sign in with them. Rotate those keys.", "2"))
         for kind, why in LEFT_FOR_HAND.items():
             left = sum(1 for fingerprint in keys if index.first[fingerprint].kind == kind)
             if left:

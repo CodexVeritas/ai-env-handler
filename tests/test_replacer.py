@@ -60,3 +60,10 @@ def test_replace_all_logs_paths_and_ids_never_values(tmp_path: Path) -> None:
     log = (tmp_path / "replaced.txt").read_text()
     assert str(first) in log and value_id(OPENROUTER) in log and OPENROUTER not in log
     assert scan_paths([tmp_path / "a", tmp_path / "b"], 1 << 20)[0] == []
+
+
+def test_a_credential_file_an_app_signs_in_with_is_left_alone(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    hosts = old_file(tmp_path / ".config" / "gh" / "hosts.yml", f"github.com:\n    oauth_token: {OPENROUTER}\n".encode())
+    assert replace_in_file(hosts, {value_id(OPENROUTER)}, time.time()) == (0, "an app signs in with it, so replacing the key would sign you out")
+    assert OPENROUTER in hosts.read_text()

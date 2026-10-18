@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from envh.tools.scanner import scan_text
+from envh.tools.scanner import place_of, scan_text
 
 IN_USE_SECONDS = 600
 LEFT_FOR_HAND = {"private-key": "only its first line matches"}
@@ -40,6 +40,8 @@ def in_git_repo(path: Path) -> bool:
 def replace_in_file(path: Path, fingerprints: set[str], now: float) -> tuple[int, str]:
     """(copies replaced, why nothing was) for one file. A file changed in the last IN_USE_SECONDS is left alone, since a
     program, such as an agent writing its transcript, may still be writing it and would lose what it writes."""
+    if place_of(str(path)) == "credential files":
+        return 0, "an app signs in with it, so replacing the key would sign you out"
     try:
         before = path.lstat()
         if stat.S_ISLNK(before.st_mode):
