@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import bisect
 import itertools
 import json
@@ -89,8 +90,10 @@ VALUE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("resend", (r"re_[A-Za-z0-9]{8}_[A-Za-z0-9]{24}",)),
     ("browserbase", (r"bb_live_[A-Za-z0-9_-]{20,}",)),
     ("jwt", (r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",)),
-    ("private-key", (r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----", r"PuTTY-User-Key-File-[0-9]")),
-    ("database-url", tuple(rf"{scheme}://[^\s:/@\"']+:[^\s@\"']+@[^\s\"']+" for scheme in ("postgres", "postgresql", r"mongodb\+srv", "mongodb", "mysql", "redis", "amqp"))),
+    ("private-key", (r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----(?=(?:\r?\n|(?:\\+r)?\\+n)[A-Za-z0-9+/=]{40})", r"PuTTY-User-Key-File-[0-9]")),
+    ("database-url", tuple(
+        scheme + r"://[^\s\"'\\`)\]<>:/@]+:[^\s\"'\\`)\]<>@]+@[^\s\"'\\`)\]<>]+" for scheme in ("postgres", "postgresql", r"mongodb\+srv", "mongodb", "mysql", "redis", "amqp")
+    )),
 )
 REGEX_SYNTAX = set("[](){}*+?|\\^$.")
 
@@ -149,6 +152,8 @@ SERVICE_WORDS = {
 }
 CONFIDENCE_ORDER = ("high", "medium", "low", "fake")
 # A value that is just a name, such as self.settings.openai_api_key or OPENAI_API_KEY_2, is code reading a key, not a key.
+UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+DEMO_WORDS = ("demo", "example", "sample", "dummy", "fake", "placeholder")
 NAME_LIKE_VALUE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+|[a-z]+(?:[_-][a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[a-z]+(?:[A-Z][a-z]+)+"
 )
@@ -292,6 +297,16 @@ def place_of(path: str, home: str | None = None) -> str:
     return next((place for place, pattern in PLACES if pattern.search(shown)), "other")
 
 
+def demo_token(value: str) -> bool:
+    """A JWT whose payload names a demo or example issuer, such as Supabase's public local-development keys."""
+    try:
+        payload = value.split(".")[1]
+        decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode("utf-8", "replace").lower()
+    except (IndexError, ValueError):
+        return False
+    return any(word in decoded for word in DEMO_WORDS)
+
+
 def default_login(value: str) -> bool:
     match = DATABASE_LOGIN.match(value)
     if match is None:
@@ -351,14 +366,15 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
         spans = matches_by_line.get(index, [])
         for start, end, kind, fixed in spans:
             value = line[start:end]
-            confidence = "fake" if looks_fake(value, fixed) or (kind == "database-url" and default_login(value)) else "high"
+            harmless = (kind == "database-url" and default_login(value)) or (kind == "jwt" and demo_token(value))
+            confidence = "fake" if looks_fake(value, fixed) or harmless else "high"
             yield Hit(path, index + 1, start, confidence, kind, "", shown_value(value, fixed), value_id(value), len(value), fixed)
         for match in ASSIGNMENT_REGEX.finditer(line):
             name = match.group("name")
             if SECRET_WORD.search(name, 1) is None:
                 continue
             value = match.group("value").rstrip(".,;")
-            if looks_placeholder(value) or NAME_LIKE_VALUE.fullmatch(value):
+            if looks_placeholder(value) or (NAME_LIKE_VALUE.fullmatch(value) and not UUID.fullmatch(value)):
                 continue
             if any(start <= match.start("value") < end for start, end, _, _ in spans):
                 continue

@@ -1,4 +1,5 @@
 import argparse
+import base64
 import io
 import re
 import json
@@ -82,7 +83,7 @@ def test_skips_binaries_large_files_and_vendor_dirs_but_reads_git_config(tmp_pat
 
 
 def test_database_url_and_private_key() -> None:
-    text = "DATABASE_URL=postgres://admin:hunter2secret@db.internal:5432/app\n-----BEGIN OPENSSH PRIVATE KEY-----\n"
+    text = "DATABASE_URL=postgres://admin:hunter2secret@db.internal:5432/app\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB\n"
     kinds = [hit.kind for hit in scan_text(Path("f"), text)]
     assert kinds == ["database-url", "private-key"]
 
@@ -183,7 +184,7 @@ SAMPLES = {
     "resend": "re_" + "a1B2c3D4" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2",
     "browserbase": "bb_live_" + "a1B2c3D4e5" * 3,
     "jwt": "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q",
-    "private-key": "-----BEGIN RSA PRIVATE KEY-----",
+    "private-key": "-----BEGIN RSA PRIVATE KEY-----\\n" + "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0t",
     "database-url": "postgres://admin:hunter2secret@db.internal:5432/app",
 }
 
@@ -385,3 +386,23 @@ def test_each_hit_gets_a_place(path: str, place: str) -> None:
 def test_default_and_local_database_logins_are_fake(url: str, fake: bool) -> None:
     [hit] = scan_text(Path("README.md"), f"DATABASE_URL={url}\n")
     assert (hit.kind, hit.confidence == "fake") == ("database-url", fake)
+
+
+def test_a_private_key_header_without_key_material_is_not_a_key() -> None:
+    assert list(scan_text(Path("pem.py"), 'if line.startswith("-----BEGIN PRIVATE KEY-----"):\n')) == []
+    escaped = json.dumps({"private_key": "-----BEGIN PRIVATE KEY-----\n" + random_text("pem", 64) + "\n"})
+    assert [hit.kind for hit in scan_text(Path("service.json"), escaped)] == ["private-key"]
+
+
+def test_a_database_url_stops_at_escaped_newlines_and_markdown() -> None:
+    url = "postgres://app:" + random_text("db password", 16) + "@db.acme-prod.net:5432/app"
+    lines = [json.dumps({"text": f"use {url}\n\nthen run"}), f"[db]({url}) and `{url}`"]
+    assert {hit.length for hit in scan_text(Path("t.jsonl"), "\n".join(lines))} == {len(url)}
+
+
+def test_a_demo_jwt_is_fake_and_a_uuid_key_is_kept() -> None:
+    payload = base64.urlsafe_b64encode(json.dumps({"iss": "supabase-demo", "role": "anon"}).encode()).decode().rstrip("=")
+    [demo] = scan_text(Path("f"), f"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.{payload}.{random_text('sig', 43)}\n")
+    assert (demo.kind, demo.confidence) == ("jwt", "fake")
+    exa = "facedbad-7a3b-4c8d-9e5f-b2a1c3d4e5f6"
+    assert [(hit.name, hit.confidence) for hit in scan_text(Path(".env"), f"EXA_API_KEY={exa}\n")] == [("EXA_API_KEY", "medium")]
