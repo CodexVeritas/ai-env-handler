@@ -153,6 +153,8 @@ SERVICE_WORDS = {
     "digitalocean": "digitalocean", "resend": "resend", "algolia": "algolia", "mapbox": "mapbox", "kalshi": "kalshi", "polymarket": "polymarket",
 }
 CONFIDENCE_ORDER = ("high", "medium", "low", "fake")
+# How each tier answers "is this a real key?", as people read it.
+TIER_NAMES = {"high": "likely", "medium": "possible", "low": "unlikely", "fake": "placeholder"}
 # A value that is just a name, such as self.settings.openai_api_key or OPENAI_API_KEY_2, is code reading a key, not a key.
 UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 DEMO_WORDS = ("demo", "example", "sample", "dummy", "fake", "placeholder")
@@ -566,10 +568,10 @@ def headline(hits: list[Hit], scanned: int, elapsed: float) -> str:
 def confidence_lines(hits: list[Hit]) -> list[str]:
     tiers = group_by(hits, lambda hit: hit.confidence)
     return [
-        f"High confidence, a known key format: {spread(tiers['high'])}. Start here.",
-        f"Medium confidence, a credential-style name such as OPENAI_API_KEY=...: {spread(tiers['medium'])}.",
-        f"Low confidence, other names holding KEY, TOKEN, SECRET or PASS, such as cache_key: {spread(tiers['low'])}. Mostly not keys.",
-        f"Fake, placeholders (counting or repeating, words like example) and default or local database logins: {spread(tiers['fake'])}.",
+        f"Likely keys, in a provider's key format: {spread(tiers['high'])}. Start here.",
+        f"Possible keys, assigned to a key-like name such as OPENAI_API_KEY=...: {spread(tiers['medium'])}.",
+        f"Unlikely keys, other names holding KEY, TOKEN, SECRET or PASS, such as cache_key: {spread(tiers['low'])}.",
+        f"Placeholders, fake or default values such as 123456789 or postgres:postgres@localhost: {spread(tiers['fake'])}.",
     ]
 
 
@@ -583,13 +585,13 @@ def notes(unreadable: list[Path], say: Callable[[str], None]) -> None:
 
 
 def summary_section(hits: list[Hit], say: Callable[[str], None]) -> None:
-    say(f"  {'type':<24} {'confidence':<10} {'strings':>9} {'distinct':>9} {'files':>7}")
+    say(f"  {'type':<24} {'real key?':<11} {'strings':>9} {'distinct':>9} {'files':>7}")
     by_type = group_by(hits, lambda hit: f"{CONFIDENCE_ORDER.index(hit.confidence)} {hit.kind}")
     for _, group in sorted(by_type.items(), key=lambda item: (item[0][0], -len(item[1]))):
         first = group[0]
-        say(f"  {first.kind:<24} {first.confidence:<10} {len(group):>9,} {len({hit.fingerprint for hit in group}):>9,} {len({hit.path for hit in group}):>7,}")
+        say(f"  {first.kind:<24} {TIER_NAMES[first.confidence]:<11} {len(group):>9,} {len({hit.fingerprint for hit in group}):>9,} {len({hit.path for hit in group}):>7,}")
     say(f"\nWhere they are, by place (distinct values; files):")
-    say(f"  {'place':<20} {'high':>12} {'medium':>12} {'low':>12} {'fake':>12}")
+    say(f"  {'place':<20} " + " ".join(f"{TIER_NAMES[tier]:>12}" for tier in CONFIDENCE_ORDER))
     for place, group in sorted(group_by(hits, lambda hit: place_of(str(hit.path))).items(), key=lambda item: -len({hit.path for hit in item[1]})):
         by_tier = group_by(group, lambda hit: hit.confidence)
         cells_text = [f"{len({hit.fingerprint for hit in by_tier[tier]}):,}; {len({hit.path for hit in by_tier[tier]}):,}" for tier in CONFIDENCE_ORDER]
@@ -597,12 +599,12 @@ def summary_section(hits: list[Hit], say: Callable[[str], None]) -> None:
     tiers = group_by(hits, lambda hit: hit.confidence)
     for confidence in ("high", "medium"):
         if tiers[confidence]:
-            say(f"\nWhere the {confidence}-confidence values are (top {SUMMARY_TOP} folders):")
+            say(f"\nWhere the {TIER_NAMES[confidence]} keys are (top {SUMMARY_TOP} folders):")
             by_folder = group_by(tiers[confidence], lambda hit: shown_folder(hit.path.parent))
             for folder, group in sorted(by_folder.items(), key=lambda item: -len({hit.fingerprint for hit in item[1]}))[:SUMMARY_TOP]:
                 say(f"  {spread(group):<40} {folder}")
     if tiers["low"]:
-        say(f"\nMost common names among the low-confidence hits (top {SUMMARY_TOP}):")
+        say(f"\nMost common names among the unlikely keys (top {SUMMARY_TOP}):")
         by_name = group_by(tiers["low"], lambda hit: hit.name)
         for name, group in sorted(by_name.items(), key=lambda item: -len(item[1]))[:SUMMARY_TOP]:
             say(f"  {name[:40]:<40} {plural(len(group), 'string'):>16}, {spread(group)}")
@@ -634,24 +636,24 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     say("(fewer for shorter values, as in the envh console), its length and an id. The same id means the same value, and the")
     say('first 6 characters of an id match the id the envh console shows for a stored key. Search this file for "id <id>" to')
     say("find every line a value is on, or browse it all with envh explore.")
-    say("Sections: Summary, High confidence, Medium confidence, Low confidence, Fake, Every hit by file, Notes.")
+    say("Sections: Summary, Likely keys, Possible keys, Unlikely keys, Placeholders, Every hit by file, Notes.")
     say("\n== Summary ==")
     summary_section(hits, say)
-    say("\n== High confidence: values in a known key format, with every file each is in ==")
+    say("\n== Likely keys: values in a provider's key format, with every file each is in ==")
     say("Private-key ids come from the BEGIN ... PRIVATE KEY line, so keys of the same type share an id.")
     values_section(tiers["high"], say, with_paths=True)
-    say("\n== Medium confidence: values assigned to credential-style names, with every file each is in ==")
+    say("\n== Possible keys: values assigned to key-like names, with every file each is in ==")
     values_section(tiers["medium"], say, with_paths=True)
-    say('\n== Low confidence: values assigned to other names, one line each (search for "id <id>" to find the files) ==')
+    say('\n== Unlikely keys: values assigned to other names, one line each (search for "id <id>" to find the files) ==')
     values_section(tiers["low"], say, with_paths=False)
-    say('\n== Fake: values that look like placeholders, one line each (search for "id <id>" to find the files) ==')
+    say('\n== Placeholders: fake or default values, one line each (search for "id <id>" to find the files) ==')
     values_section(tiers["fake"], say, with_paths=False)
     say("\n== Every hit by file ==")
     for path, group in sorted(group_by(hits, lambda hit: str(hit.path)).items()):
         say(f"\n{shown_path(Path(path))}")
         for hit in sorted(group, key=lambda h: (h.line, CONFIDENCE_ORDER.index(h.confidence), h.kind)):
             label = hit.kind if not hit.name else f"{hit.kind} {hit.name}"
-            say(f"  line {hit.line:<6} {hit.confidence:<6} {label:<44} {hit.describe()}")
+            say(f"  line {hit.line:<6} {TIER_NAMES[hit.confidence]:<11} {label:<44} {hit.describe()}")
     say("\n== Notes ==")
     notes(unreadable, say)
     say("\nIn short (details at the top): " + headline(hits, scanned, elapsed))
