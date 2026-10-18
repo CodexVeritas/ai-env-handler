@@ -97,8 +97,8 @@ EXPLORER_PANEL = [
     "around each copy. Keys stay hidden unless you press s.",
     "",
     "  Tab    switch list: Likely, Possible, Unlikely keys, Placeholders",
-    "  ↑↓ →←  move and open          g   group by place",
-    "  v      only keys in your vault x   replace every copy under a row",
+    "  ↑↓ →←  move and open            g   group by place",
+    "  v      only keys in your vault  x   replace every copy under a row",
     "  q      close it and continue setup",
 ]
 
