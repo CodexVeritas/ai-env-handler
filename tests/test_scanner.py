@@ -11,7 +11,7 @@ import pytest
 
 from envh.common import peek
 from envh.tools.saved_files import ask_where
-from envh.tools.scanner import COMPILED_PATTERNS, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_placeholder, main, scan_paths, scan_text, value_id
+from envh.tools.scanner import COMPILED_PATTERNS, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_placeholder, main, scan_paths, scan_text, shown_value, value_id
 
 OPENAI = "sk-proj-" + "A1b2C3d4" * 6
 OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
@@ -34,7 +34,8 @@ def test_value_patterns_found_in_transcript_and_history(tmp_path: Path) -> None:
     assert scanned == 3 and unreadable == []
     rendered = " ".join(f"{hit.describe()}{hit.name}" for hit in hits)
     for secret in (OPENAI, OPENROUTER, ANTHROPIC, GEMINI, PPLX):
-        assert secret not in rendered and secret[:10] not in rendered
+        middle = len(secret) // 2
+        assert secret not in rendered and secret[middle - 4:middle + 4] not in rendered
 
 
 def test_named_assignments_cover_formatless_keys_and_skip_placeholders() -> None:
@@ -197,7 +198,7 @@ def test_each_key_format_is_found(kind: str, sample: str) -> None:
 
 
 def test_every_format_starts_with_literal_text_so_the_scan_stays_fast() -> None:
-    for kind, regex in COMPILED_PATTERNS:
+    for kind, regex, _ in COMPILED_PATTERNS:
         assert re.match(r"[A-Za-z0-9_-]{2}", regex.pattern), kind
 
 
@@ -248,7 +249,7 @@ def test_results_are_saved_to_a_private_folder_and_the_terminal_gets_a_summary(t
     assert len(json.loads((report_dir / "hits.json").read_text())["hits"]) == 90
     report = (report_dir / "report.txt").read_text()
     assert report.index("== Summary ==") < report.index("== High confidence") < report.index("== Medium confidence") < report.index("== Low confidence") < report.index("== Every hit by file ==")
-    assert f"{peek(OPENAI)} ({len(OPENAI)} chars, id {value_id(OPENAI)})  openai: in 30 files, 30 places" in report
+    assert f"{shown_value(OPENAI, len('sk-'))} ({len(OPENAI)} chars, id {value_id(OPENAI)})  openai: in 30 files, 30 places" in report
     assert f"{peek(FRED)} ({len(FRED)} chars, id {value_id(FRED)})  fred  FRED_API_KEY: in 30 files, 30 places" in report
     assert "In short (details at the top)" in report.splitlines()[-4]
     shown = capsys.readouterr().out
@@ -298,9 +299,9 @@ def test_names_set_the_confidence_and_service(name: str, confidence: str, servic
     assert classify_name(name) == (confidence, service)
 
 
-def test_values_are_shown_like_the_console_shows_them() -> None:
+def test_values_are_shown_like_the_console_shows_them_after_the_formats_fixed_prefix() -> None:
     [openrouter] = scan_text(Path("f"), f"{OPENROUTER}\n")
-    assert openrouter.shown == OPENROUTER[:4] + "\u2026" + OPENROUTER[-4:] and openrouter.confidence == "high"
+    assert openrouter.shown == "sk-or-v1-" + OPENROUTER[9:13] + "\u2026" + OPENROUTER[-4:] and openrouter.confidence == "high"
     [short] = scan_text(Path("f"), f"MY_API_KEY={FRED[:16]}\n")
     assert short.shown == FRED[0] + "\u2026" + FRED[15] and short.confidence == "medium"
 

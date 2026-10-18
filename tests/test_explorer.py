@@ -13,9 +13,8 @@ from pathlib import Path
 import pytest
 
 from envh.client.transport import ClientError
-from envh.common import peek
 from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, newest_scan, split_keys
-from envh.tools.scanner import scan_paths, save_results
+from envh.tools.scanner import scan_paths, save_results, shown_value
 
 ROOT = Path(__file__).resolve().parents[1]
 OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
@@ -49,15 +48,31 @@ def press(explorer: Explorer, *keys: str) -> None:
         explorer.handle(key, 30)
 
 
+def choose(explorer: Explorer, kind: str) -> None:
+    explorer.selected = next(index for index, row in enumerate(explorer.rows()) if row.node[0] == kind)
+
+
+def open_first_file(explorer: Explorer) -> None:
+    press(explorer, "right")
+    choose(explorer, "file")
+    press(explorer, "enter")
+
+
+def shown(key: str) -> str:
+    return shown_value(key, len("sk-or-v1-") if key.startswith("sk-or-v1-") else len("sk-ant-"))
+
+
 def test_the_tree_opens_type_then_key_then_file(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {"bot/.env": f"OPENROUTER_API_KEY={OPENROUTER}\n", "notes.md": f"{ANTHROPIC}\n{OPENROUTER}\n"})
     explorer = Explorer(load_scan(folder), folder)
     rows = screen(explorer)
-    assert "High 2" in rows[1] and any(row.strip().startswith("› ▸ openrouter") for row in rows)
-    press(explorer, "enter", "down", "right")
+    assert "High 2" in rows[1] and any(row.strip().startswith("› ▸ openrouter") and "→ shows its keys" in row for row in rows)
+    press(explorer, "enter")
     rows = "\n".join(screen(explorer))
-    assert f"{peek(OPENROUTER)} ({len(OPENROUTER)} chars" in rows and "2 files" in rows
+    assert f"{shown(OPENROUTER)} ({len(OPENROUTER)} chars" in rows and "2 files" in rows
     assert "project/bot/.env" in rows and "project/notes.md" in rows and OPENROUTER not in rows
+    choose(explorer, "file")
+    assert any("Enter shows the lines around the key" in row for row in screen(explorer, width=220))
 
 
 def test_a_key_in_many_files_groups_them_by_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,10 +80,12 @@ def test_a_key_in_many_files_groups_them_by_folder(tmp_path: Path, monkeypatch: 
     files = {f"editor/history/{index}/snapshot": f"{OPENROUTER}\n" for index in range(8)} | {"bot/.env": f"{OPENROUTER}\n"}
     folder = saved_scan(tmp_path, files)
     explorer = Explorer(load_scan(folder), folder)
-    press(explorer, "right", "down", "right")
+    press(explorer, "right")
     labels = [row.label for row in explorer.rows()]
     assert labels[2:] == ["~/project/editor/history", "~/project/bot/.env"]
-    press(explorer, "down", "right")
+    choose(explorer, "group")
+    assert any("→ shows these files" in row for row in screen(explorer))
+    press(explorer, "right")
     assert sum("history/" in row.label for row in explorer.rows()) == 8
 
 
@@ -86,9 +103,10 @@ def test_the_file_view_hides_the_key_until_asked_and_hides_it_again(tmp_path: Pa
     folder = saved_scan(tmp_path, {".env": "# bot\nLOG_LEVEL=info\nOPENROUTER_API_KEY=" + OPENROUTER + "\nREGION=eu\n"})
     clock = Clock()
     explorer = Explorer(load_scan(folder), folder, clock)
-    press(explorer, "right", "down", "right", "down", "enter")
+    open_first_file(explorer)
     rows = "\n".join(screen(explorer))
-    assert "LOG_LEVEL=info" in rows and f"OPENROUTER_API_KEY={peek(OPENROUTER)}" in rows and OPENROUTER not in rows
+    assert "LOG_LEVEL=info" in rows and f"OPENROUTER_API_KEY=sk-or-v1-{OPENROUTER[9:17]}…{OPENROUTER[-4:]}" in rows and OPENROUTER not in rows
+    assert "Press s to show the full key." in rows
     press(explorer, "s")
     rows = "\n".join(screen(explorer))
     assert OPENROUTER in rows and f"hides in {REVEAL_SECONDS}s" in rows
@@ -102,10 +120,10 @@ def test_a_long_line_starts_near_the_key_and_other_keys_stay_hidden(tmp_path: Pa
     line = '{"content": "' + "x " * 30_000 + f"use {ANTHROPIC} then {OPENROUTER} " + "y " * 30_000 + '"}'
     folder = saved_scan(tmp_path, {"transcript.jsonl": line + "\n"})
     explorer = Explorer(load_scan(folder), folder)
-    press(explorer, "right", "down", "right", "down", "enter")
+    open_first_file(explorer)
     rows = screen(explorer, width=100)
     [key_row] = [row for row in rows if "│" in row and "…" in row]
-    assert peek(ANTHROPIC) in key_row or peek(OPENROUTER) in key_row
+    assert "sk-ant-api03-Zz…vV5u" in key_row
     assert ANTHROPIC not in key_row and OPENROUTER not in key_row and len(key_row) <= 100
 
 
@@ -113,14 +131,14 @@ def test_a_file_that_changed_since_the_scan_says_so(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {".env": f"{OPENROUTER}\n"})
     (tmp_path / "project" / ".env").write_text("# moved to envh\n")
     explorer = Explorer(load_scan(folder), folder)
-    press(explorer, "right", "down", "right", "down", "enter")
+    open_first_file(explorer)
     assert any("isn't in the file any more" in row for row in screen(explorer))
 
 
 def test_control_characters_in_a_file_cannot_restyle_the_screen(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {".env": f"\x1b[2J\x1b]0;title\x07{OPENROUTER}\n"})
     explorer = Explorer(load_scan(folder), folder)
-    press(explorer, "right", "down", "right", "down", "enter")
+    open_first_file(explorer)
     raw = "\n".join(explorer.render(120, 30))
     assert "\x1b[2J" not in raw and "\x1b]0" not in raw and "\x07" not in raw
 

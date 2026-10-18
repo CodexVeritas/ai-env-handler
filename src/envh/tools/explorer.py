@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 from envh.client.transport import ClientError
-from envh.common import printable
+from envh.common import peek, printable
 from envh.tools.saved_files import SCANS, saved_files_root, shown_path
 from envh.tools.scanner import DEFAULT_MAX_BYTES, Hit, plural, read_if_text, scan_text, shown_folder
 
@@ -38,6 +38,7 @@ CONTEXT_LINES = 3
 LEAD_CHARACTERS = 60
 SLICE_CHARACTERS = 1000
 REVEAL_SECONDS = 30
+LONG_REST = 32
 REVEALED_ROWS = 4
 REDRAW_SECONDS = 0.5
 TAB_WIDTH = 4
@@ -135,6 +136,20 @@ def fit(segments: list[tuple[str, str]], width: int) -> str:
         chunk = "".join(char for char, _ in group)
         pieces.append(styled(style, chunk) if style else chunk)
     return "".join(pieces)
+
+
+def glimpse(value: str, fixed: int) -> str:
+    """How the file view shows a key: like the report, but 8 characters at the start of a long key, enough to tell a
+    placeholder such as 0123456789ab from a real key. Only you see it, on the alternate screen."""
+    rest = value[fixed:]
+    return value[:fixed] + (f"{rest[:8]}…{rest[-4:]}" if len(rest) >= LONG_REST else peek(rest))
+
+
+ROW_HINTS = {"type": "→ shows its keys", "value": "→ shows the files it is in", "group": "→ shows these files", "file": "Enter shows the lines around the key"}
+
+
+def row_hint(row: Row, expanded: set[tuple[str, ...]]) -> str:
+    return "← hides them" if row.node in expanded else ROW_HINTS[row.node[0]]
 
 
 def safe(text: str) -> str:
@@ -292,16 +307,17 @@ def read_context(path: str, fingerprint: str) -> tuple[list[ContextLine], str]:
     for number in wanted:
         if shown and shown[-1].number is not None and number > shown[-1].number + 1:
             shown.append(ContextLine(None))
-        spans = tuple(sorted((hit.column, hit.column + hit.length, hit.shown, hit.fingerprint == fingerprint) for hit in by_line.get(number, [])))
-        shown.append(ContextLine(number, lines[number - 1], spans))
+        line = lines[number - 1]
+        spans = tuple(sorted((hit.column, hit.column + hit.length, glimpse(line[hit.column:hit.column + hit.length], hit.fixed), hit.fingerprint == fingerprint) for hit in by_line.get(number, [])))
+        shown.append(ContextLine(number, line, spans))
     return shown, ""
 
 
-def context_segments(line: ContextLine, revealed: bool) -> list[tuple[str, str]]:
-    """The line as styled segments, every key replaced by its peek, or the selected one by its value while revealed. A
-    long line starts LEAD_CHARACTERS before the selected key, so the key is on screen."""
+def context_segments(line: ContextLine, revealed: bool, room: int) -> list[tuple[str, str]]:
+    """The line as styled segments, every key replaced by its glimpse, or the selected one by its value while revealed. A
+    long line starts a little before the selected key, at most a third of the room, so the key is on screen."""
     focus = next((start for start, _, _, selected in line.spans if selected), None)
-    begin = 0 if focus is None else max(0, focus - LEAD_CHARACTERS)
+    begin = 0 if focus is None else max(0, focus - min(LEAD_CHARACTERS, room // 3))
     for start, end, _, _ in line.spans:
         if start < begin < end:
             begin = start
@@ -390,14 +406,25 @@ class Explorer:
             return
         elif key == "right" and row.expandable and row.node in self.expanded:
             self.selected = min(self.selected + 1, len(rows) - 1)
+        elif key in ("right", "enter") and row.expandable and row.node in self.expanded:
+            self.expanded.discard(row.node)
         elif key in ("right", "enter") and row.expandable:
-            self.expanded ^= {row.node}
+            self.expand(row.node)
         elif key == "enter" or (key == "right" and not row.expandable):
             self.open_file(row)
         elif key == "left" and row.node in self.expanded:
             self.expanded.discard(row.node)
         elif key == "left" and row.parent is not None:
             self.selected = next(index for index, candidate in enumerate(rows) if candidate.node == row.parent)
+
+    def expand(self, node: tuple[str, ...]) -> None:
+        """Expand the node, and its only child while it has just one, so a key in one file shows that file at once."""
+        while True:
+            self.expanded.add(node)
+            children = [row for row in self.rows() if row.parent == node]
+            if len(children) != 1 or not children[0].expandable:
+                return
+            node = children[0].node
 
     def open_file(self, row: Row) -> None:
         _, kind, confidence, fingerprint, path = row.node
@@ -491,6 +518,8 @@ class Explorer:
             mark = ("▾ " if row.node in self.expanded else "▸ ") if row.expandable else "  "
             chosen = index == self.selected
             segments = [(" › " if chosen else "   ", "36"), ("    " * row.depth + mark, "2"), (row.label, "1" if chosen else ""), (f"   {row.detail}", "2")]
+            if chosen:
+                segments.append((f"   {row_hint(row, self.expanded)}", "36"))
             lines.append(fit(segments, width))
         lines = (lines + [""] * height)[: height - 2]
         if self.editing_filter:
@@ -520,7 +549,7 @@ class Explorer:
                 lines.append(fit([(" " * (gutter + 4) + "┄", "2")], width))
                 continue
             mark = (" › ", "33") if line.holds_key else ("   ", "")
-            lines.append(fit([mark, (f"{line.number:>{gutter}} │ ", "2"), *context_segments(line, revealed)], width))
+            lines.append(fit([mark, (f"{line.number:>{gutter}} │ ", "2"), *context_segments(line, revealed, width - gutter - 6)], width))
         lines = (lines + [""] * height)[: height - 2 - len(shown_value)]
         lines.extend(fit([(f"    {chunk}", "1;33")], width) for chunk in shown_value)
         if revealed and view.revealed_until is not None:
@@ -528,8 +557,8 @@ class Explorer:
             lines.append(fit([(f" ! The key is showing, above and in its line. It hides in {seconds}s, or press s.", "33")], width))
         else:
             copies = sum(line.holds_key for line in view.lines)
-            holding = "1 line here holds this key" if copies == 1 else f"{copies} lines here hold this key"
-            lines.append(fit([(f" {holding}; other keys show dimmed.", "2")], width) if copies else "")
+            holding = "1 line here holds it" if copies == 1 else f"{copies} lines here hold it; n and p jump between them"
+            lines.append(fit([(" Press s to show the full key.", "1;33"), (f" {holding}. Other keys show dimmed.", "2")], width) if copies else "")
         lines.append(fit([(" ↑↓ scroll · n next copy · p previous · s show the key · Esc back", "2")], width))
         return lines
 

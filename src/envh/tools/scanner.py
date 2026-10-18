@@ -93,7 +93,16 @@ VALUE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("private-key", (r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----", r"PuTTY-User-Key-File-[0-9]")),
     ("database-url", tuple(rf"{scheme}://[^\s:/@\"']+:[^\s@\"']+@[^\s\"']+" for scheme in ("postgres", "postgresql", r"mongodb\+srv", "mongodb", "mysql", "redis", "amqp"))),
 )
-COMPILED_PATTERNS = tuple((kind, re.compile(pattern)) for kind, patterns in VALUE_PATTERNS for pattern in patterns)
+REGEX_SYNTAX = set("[](){}*+?|\\^$.")
+
+
+def literal_prefix(pattern: str) -> str:
+    """The literal text a pattern starts with, such as sk-or-v1-: it is the same in every key of the format, so showing it
+    gives nothing away."""
+    return "".join(itertools.takewhile(lambda char: char not in REGEX_SYNTAX, pattern))
+
+
+COMPILED_PATTERNS = tuple((kind, re.compile(pattern), len(literal_prefix(pattern))) for kind, patterns in VALUE_PATTERNS for pattern in patterns)
 # Formats whose prefix is short or common enough to turn up inside longer strings, such as base64 images pasted into a
 # transcript: a match counts only when it stands alone, with no letter, digit or underscore on either side.
 STANDALONE_KINDS = {
@@ -191,6 +200,7 @@ class Hit:
     shown: str
     fingerprint: str
     length: int
+    fixed: int = 0
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -247,36 +257,42 @@ def standalone(text: str, start: int, end: int) -> bool:
     return not (start > 0 and WORD_CHARACTER.match(text[start - 1])) and not (end < len(text) and WORD_CHARACTER.match(text[end]))
 
 
-def value_matches(text: str) -> list[tuple[int, int, str]]:
-    """Every key-format match in the text as (start, end, kind), in order; one overlapping an earlier match is dropped."""
-    found: list[tuple[int, int, str]] = []
-    for kind, regex in COMPILED_PATTERNS:
+def value_matches(text: str) -> list[tuple[int, int, str, int]]:
+    """Every key-format match in the text as (start, end, kind, length of the format's literal prefix), in order; one
+    overlapping an earlier match is dropped."""
+    found: list[tuple[int, int, str, int]] = []
+    for kind, regex, fixed in COMPILED_PATTERNS:
         for match in regex.finditer(text):
             start, end = match.span()
             if kind not in STANDALONE_KINDS or standalone(text, start, end):
-                found.append((start, end, kind))
+                found.append((start, end, kind, fixed))
     found.sort(key=lambda item: (item[0], -item[1]))
-    kept: list[tuple[int, int, str]] = []
-    for start, end, kind in found:
-        if not kept or start >= kept[-1][1]:
-            kept.append((start, end, kind))
+    kept: list[tuple[int, int, str, int]] = []
+    for match in found:
+        if not kept or match[0] >= kept[-1][1]:
+            kept.append(match)
     return kept
+
+
+def shown_value(value: str, fixed: int = 0) -> str:
+    """The format's literal prefix, then the first and last few characters of the rest, as the console shows a key."""
+    return value[:fixed] + peek(value[fixed:])
 
 
 def scan_text(path: Path, text: str) -> Iterator[Hit]:
     lines = text.split("\n")
-    matches_by_line: dict[int, list[tuple[int, int, str]]] = defaultdict(list)
+    matches_by_line: dict[int, list[tuple[int, int, str, int]]] = defaultdict(list)
     matches = value_matches(text)
     if matches:
         line_starts = list(itertools.accumulate((len(line) + 1 for line in lines[:-1]), initial=0))
-        for start, end, kind in matches:
+        for start, end, kind, fixed in matches:
             index = bisect.bisect_right(line_starts, start) - 1
-            matches_by_line[index].append((start - line_starts[index], end - line_starts[index], kind))
+            matches_by_line[index].append((start - line_starts[index], end - line_starts[index], kind, fixed))
     for index, line in enumerate(lines):
         spans = matches_by_line.get(index, [])
-        for start, end, kind in spans:
+        for start, end, kind, fixed in spans:
             value = line[start:end]
-            yield Hit(path, index + 1, start, "high", kind, "", peek(value), value_id(value), len(value))
+            yield Hit(path, index + 1, start, "high", kind, "", shown_value(value, fixed), value_id(value), len(value), fixed)
         for match in ASSIGNMENT_REGEX.finditer(line):
             name = match.group("name")
             if SECRET_WORD.search(name, 1) is None:
@@ -284,7 +300,7 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
             value = match.group("value").rstrip(".,;")
             if looks_placeholder(value):
                 continue
-            if any(start <= match.start("value") < end for start, end, _ in spans):
+            if any(start <= match.start("value") < end for start, end, _, _ in spans):
                 continue
             confidence, service = classify_name(name)
             yield Hit(path, index + 1, match.start("value"), confidence, service, name, peek(value), value_id(value), len(value))
@@ -527,9 +543,10 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     for line in confidence_lines(hits):
         say("  " + line)
     say("")
-    say("No value is shown, only its first and last few characters (fewer for shorter values, as in the envh console), its length")
-    say("and an id. The same id means the same value, and the first 6 characters of an id match the id the envh console shows")
-    say('for a stored key. Search this file for "id <id>" to find every line a value is on, or browse it all with envh explore.')
+    say("No value is shown, only its format's fixed prefix (such as sk-or-v1-) and the first and last few characters of the rest")
+    say("(fewer for shorter values, as in the envh console), its length and an id. The same id means the same value, and the")
+    say('first 6 characters of an id match the id the envh console shows for a stored key. Search this file for "id <id>" to')
+    say("find every line a value is on, or browse it all with envh explore.")
     say("Sections: Summary, High confidence, Medium confidence, Low confidence, Every hit by file, Notes.")
     say("\n== Summary ==")
     summary_section(hits, say)
