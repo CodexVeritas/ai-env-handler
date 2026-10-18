@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from envh.common import value_id
-from envh.tools.replacer import placeholder, replace_all, replace_in_file
+from envh.tools.replacer import placeholder, replace_all, replace_in_file, replaced_pairs
 from envh.tools.scanner import scan_paths, scan_text
 from tests.conftest import HEX, random_text
 
@@ -67,3 +67,17 @@ def test_a_credential_file_an_app_signs_in_with_is_left_alone(tmp_path: Path, mo
     hosts = old_file(tmp_path / ".config" / "gh" / "hosts.yml", f"github.com:\n    oauth_token: {OPENROUTER}\n".encode())
     assert replace_in_file(hosts, {value_id(OPENROUTER)}, time.time()) == (0, "an app signs in with it, so replacing the key would sign you out")
     assert OPENROUTER in hosts.read_text()
+
+
+def test_a_rewritten_file_keeps_its_timestamp_so_a_second_replace_isnt_skipped(tmp_path: Path) -> None:
+    other = "sk-or-v1-" + random_text("second", 64, HEX)
+    file = old_file(tmp_path / "History" / "snap", f"A={OPENROUTER}\nB={other}\n".encode())
+    assert replace_in_file(file, {value_id(OPENROUTER)}, time.time()) == (1, "")
+    assert abs(file.stat().st_mtime - AN_HOUR_AGO) < 1
+    assert replace_in_file(file, {value_id(other)}, time.time()) == (1, "")
+
+
+def test_the_log_lists_what_was_replaced(tmp_path: Path) -> None:
+    file = old_file(tmp_path / "a" / ".env", f"KEY={OPENROUTER}\n".encode())
+    replace_all({str(file): {value_id(OPENROUTER)}}, tmp_path)
+    assert replaced_pairs(tmp_path) == {(str(file), value_id(OPENROUTER))} and replaced_pairs(tmp_path / "none") == set()

@@ -7,6 +7,7 @@ for byte apart from the replaced keys. There is no backup on purpose: a backup w
 from __future__ import annotations
 
 import os
+import re
 import stat
 import time
 from collections import defaultdict
@@ -19,6 +20,7 @@ from envh.tools.scanner import place_of, scan_text
 IN_USE_SECONDS = 600
 LEFT_FOR_HAND = {"private-key": "only its first line matches"}
 LOG_FILE = "replaced.txt"
+LOG_LINE = re.compile(r"^\S+ \S+\s+\d+ replaced  ids ((?:[0-9a-f]{8} ?)+)  (.+)$")
 
 
 def placeholder(kind: str, fingerprint: str) -> str:
@@ -39,7 +41,8 @@ def in_git_repo(path: Path) -> bool:
 
 def replace_in_file(path: Path, fingerprints: set[str], now: float) -> tuple[int, str]:
     """(copies replaced, why nothing was) for one file. A file changed in the last IN_USE_SECONDS is left alone, since a
-    program, such as an agent writing its transcript, may still be writing it and would lose what it writes."""
+    program, such as an agent writing its transcript, may still be writing it and would lose what it writes. A rewritten
+    file keeps its timestamp, so envh's own rewrite never looks like that."""
     if place_of(str(path)) == "credential files":
         return 0, "an app signs in with it, so replacing the key would sign you out"
     try:
@@ -74,10 +77,26 @@ def replace_in_file(path: Path, fingerprints: set[str], now: float) -> tuple[int
             temp_path.unlink()
             return 0, "it changed while being replaced"
         os.replace(temp_path, path)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     except OSError as error:
         temp_path.unlink(missing_ok=True)
         return 0, f"can't write it: {error.strerror or error}"
     return sum(len(changes) for changes in edits.values()), ""
+
+
+def replaced_pairs(log_folder: Path) -> set[tuple[str, str]]:
+    """Every (path, id) that replaced.txt says was replaced, so the explorer doesn't show those keys again."""
+    try:
+        lines = (log_folder / LOG_FILE).read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return set()
+    pairs: set[tuple[str, str]] = set()
+    for line in lines:
+        match = LOG_LINE.match(line)
+        if match is None:
+            raise ValueError(f"{log_folder / LOG_FILE} has a line envh didn't write: {line[:60]}")
+        pairs.update((match.group(2), fingerprint) for fingerprint in match.group(1).split())
+    return pairs
 
 
 def replace_all(targets: dict[str, set[str]], log_folder: Path) -> Outcome:
