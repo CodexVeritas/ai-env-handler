@@ -47,7 +47,7 @@ def test_a_file_changed_recently_a_link_and_a_moved_key_are_left_alone(tmp_path:
 
 
 def test_a_private_key_is_left_for_the_person(tmp_path: Path) -> None:
-    file = old_file(tmp_path / "id_rsa", b"-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n")
+    file = old_file(tmp_path / "id_rsa", f"-----BEGIN RSA PRIVATE KEY-----\n{random_text('pem', 64)}\n".encode())
     [hit] = scan_paths([file], 1 << 20)[0]
     assert replace_in_file(file, {hit.fingerprint}, time.time()) == (0, "the key isn't in it any more")
 
