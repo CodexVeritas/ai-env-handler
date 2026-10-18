@@ -18,7 +18,7 @@ def imports_cleanly(module: str, poisoned: tuple[str, ...]) -> str:
     return result.stdout.strip() or result.stderr.strip().splitlines()[-1]
 
 
-@pytest.mark.parametrize("module", ["envh.client.commands", "envh.client.transport", "envh.tools.importer", "envh.tools.scanner", "envh.tools.explorer"])
+@pytest.mark.parametrize("module", ["envh.client.commands", "envh.client.transport", "envh.tools.importer", "envh.tools.scanner", "envh.tools.explorer", "envh.tools.replacer"])
 def test_untrusted_side_is_stdlib_only_and_never_imports_the_trusted_side(module: str) -> None:
     assert imports_cleanly(module, ("yaml", "pyrage", "envh.core", "envh.server", "envh.install")) == "ok"
 

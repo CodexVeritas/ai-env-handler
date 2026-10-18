@@ -200,7 +200,7 @@ def test_the_real_view_on_a_terminal_shows_the_key_only_on_request(tmp_path: Pat
     try:
         wait_for("in your vault first?")
         os.write(master, b"n\r")
-        wait_for("Enter view")
+        wait_for("x replace")
         for keys, then in ((b"\r", "1 key in 1 file"), (b"\x1b[B\x1b[C", "1 file"), (b"\x1b[B\r", "s show the key")):
             os.write(master, keys)
             wait_for(then)
@@ -212,7 +212,7 @@ def test_the_real_view_on_a_terminal_shows_the_key_only_on_request(tmp_path: Pat
         wait_for("The key is showing")
         assert any(OPENROUTER in row for row in last_screen(output.decode(errors="replace"), 24))
         os.write(master, b"\x1b")
-        wait_for("Enter view")
+        wait_for("x replace")
         os.write(master, b"q")
         assert process.wait(timeout=10) == 0
         while select.select([master], [], [], 0.2)[0]:
@@ -256,3 +256,22 @@ def test_v_without_a_vault_check_says_how_to_get_one(tmp_path: Path) -> None:
     explorer = Explorer(load_scan(folder), folder)
     press(explorer, "v")
     assert "Not checked against your vault" in screen(explorer)[-2] and "vault not checked" in screen(explorer)[1]
+
+
+def test_x_replaces_every_copy_under_a_row_after_y(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"a/.env": f"LOG_LEVEL=info\nOPENROUTER_API_KEY={OPENROUTER}\n", "b/notes.md": f"use {OPENROUTER} or {ANTHROPIC}\n"})
+    for file in (tmp_path / "project").rglob("*"):
+        os.utime(file, (time.time() - 3600, time.time() - 3600))
+    explorer = Explorer(load_scan(folder), folder)
+    choose(explorer, "top")
+    press(explorer, "x", "n")
+    assert explorer.message == "Nothing replaced." and OPENROUTER in (tmp_path / "project" / "a" / ".env").read_text()
+    press(explorer, "x")
+    rows = "\n".join(screen(explorer))
+    assert "anthropic (High): 1 copy of 1 key in 1 file" in rows or "openrouter (High): 2 copies of 1 key in 2 files" in rows
+    assert "Type y to replace them" in rows
+    label = explorer.rows()[explorer.selected].label
+    press(explorer, "y")
+    explorer.work()
+    assert explorer.message.startswith("✓ Replaced") and label not in [row.label for row in explorer.rows()]
+    assert (folder / "replaced.txt").exists() and OPENROUTER not in (folder / "replaced.txt").read_text()
