@@ -67,7 +67,7 @@ git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
 python3 scripts/setup_wizard.py
 ```
 
-The wizard walks through seven short steps and asks before each change. One of them keeps VS Code and Cursor from storing copies of `.env` files in their local history. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
+The wizard walks through seven short steps and asks before each change. One of them keeps VS Code and Cursor from storing copies of `.env` files in their local history; another scans your home folder for stray copies of keys and then opens the explorer (`envh explore`) right there, so you can go through what it found and replace copies before setup continues. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
 
 Later, run it again to upgrade (after `git pull`) or to import more projects.
 

@@ -828,4 +828,5 @@ def explore(folder: Path, sock: Path) -> int:
 
 
 def main(folder: str | None, sock: Path) -> int:
-    return explore(Path(folder).expanduser().absolute() if folder else newest_scan(saved_files_root() / SCANS), sock)
+    chosen = Path(folder).expanduser().absolute() if folder else saved_files_root() / SCANS
+    return explore(chosen if (chosen / "hits.json").exists() else newest_scan(chosen), sock)
