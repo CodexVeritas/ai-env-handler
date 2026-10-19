@@ -101,7 +101,7 @@ def help_dialog(app: ConsoleApp) -> Info:
         [Span("Type the passphrase only where your console phrase is shown: "), Span(app.phrase, CYAN)],
         styled("A change to keys, presets or settings asks for it too; for an hour after that, changes ask only to be confirmed. /lock ends the hour early. Approving a request and changing the passphrase always ask."),
         [],
-        styled('Details: README, "The console"', DIM),
+        styled("Details: docs/console.md", DIM),
     ]
     return Info(app, "Shortcuts", lines)
 

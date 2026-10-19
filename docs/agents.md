@@ -1,6 +1,15 @@
 # Using envh with AI agents
 
+Agents use envh the way you do: they run `envh run` or `envh session start` with a reason, and you approve on the console. Each agent gets two pieces:
+
+- **A skill** that teaches it to ask: run one command directly, start a session only for several, always give a reason, and stop when refused.
+- **A hook** that warns you in the app before a command reaches the console, so you know to look. Nothing depends on it: the console is the boundary.
+
+The setup wizard adds both for Claude Code and Cursor. For other agents, see [Other agents](#other-agents).
+
 ## Using it with Claude Code
+
+This covers Claude Code in the terminal, in an IDE and in the Claude desktop app's Code tab: all of them read `~/.claude`.
 
 The wizard's "Connect Claude Code" step does this for you, and says so when a rerun finds the copies out of date. By hand, copy the pieces under `claude/`:
 
@@ -25,3 +34,10 @@ What differs from Claude Code:
 - **The hook never answers "allow".** In Cursor an allow can skip Cursor's own approval of a command. For commands it has no opinion on, such as `envh list`, it prints nothing; Cursor logs that as a hook failure, which does not block the command.
 - **No rules file.** Cursor keeps user rules in its settings, so there is no counterpart to the `CLAUDE.md` lines. The skill carries the same instructions.
 - **Cursor also reads Claude Code's setup.** With its "Third-Party Imports" setting on (the default), Cursor loads `~/.claude/skills` and the hooks in `~/.claude/settings.json` too. It does not act on an ask from a Claude Code hook, which is why Cursor gets its own hook entry. The two skill copies are identical.
+
+## Other agents
+
+Codex, Windsurf, Copilot and other agents work too, without the hook:
+
+- **Give the agent the instructions.** Paste the lines from `claude/CLAUDE.snippet.md` into its rules file (for Codex, `AGENTS.md`), or copy `claude/skills/envh/SKILL.md` to wherever it reads skills.
+- **Expect no heads-up in the app.** You'll learn about a request from the console's notification and chime instead. Every request that needs approval still waits for your passphrase on the console.

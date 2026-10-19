@@ -1,6 +1,6 @@
 # Development
 
-## Development
+## Set up and test
 
 ```bash
 uv sync --all-groups
@@ -8,16 +8,22 @@ uv run pytest -q                       # no root, no network, no environment var
 uv run envh --help
 ```
 
-The walkthrough at the top is a real recording of a development broker with fake keys. After the console changes, record it again and render it (needs ffmpeg, Google Chrome, and network access to load xterm.js from jsDelivr). `--small` writes a copy under GitHub's 10 MB limit for videos:
+## Record the demo video
+
+The walkthrough video at the top of the README is a real recording of a development broker with fake keys. After the console changes, record it again and render it (needs ffmpeg, Google Chrome, and network access to load xterm.js from jsDelivr). `--small` writes a copy under GitHub's 10 MB limit for videos:
 
 ```bash
 uv run python scripts/demo/record.py build/demo/recording.json
 uv run --with playwright python scripts/demo/render.py build/demo/recording.json --mp4 build/demo/envh-demo.mp4 --small docs/demo.mp4
 ```
 
-Then drag `docs/demo.mp4` into a comment box on GitHub, without posting it, and put the link GitHub gives it at the top of this file in place of the old one.
+Then drag `docs/demo.mp4` into a comment box on GitHub, without posting it, and put the link GitHub gives it at the top of `README.md` in place of the old one.
+
+## Run a development broker
 
 Run a development broker as yourself, without installing: `uv run envh init --data-dir /tmp/envh-dev`, then in a terminal `uv run envh serve --data-dir /tmp/envh-dev --socket /tmp/envh-dev/ctl.sock`, and point clients at it with `--socket /tmp/envh-dev/ctl.sock` or `ENVH_SOCKET=/tmp/envh-dev/ctl.sock`. This gives none of the user-separation guarantees; it is for working on envh itself.
+
+## Code layout
 
 Layout, in review order. The directory tree states the trust boundaries and a test (`tests/test_boundaries.py`) keeps the imports inside them:
 

@@ -1,6 +1,14 @@
 # Daily use
 
-## Daily use
+A script or agent gets keys in one of three ways:
+
+- **One command, one approval:** `envh run --preset ...` asks the console for that run.
+- **Several commands, one approval:** `envh session start ...` opens a session; each `envh run --session <id>` inside it starts at once.
+- **No approval:** keys you marked `auto` on the console go to any run, and each use is still logged.
+
+The console must be running for all three. See [console.md](console.md).
+
+## Commands
 
 ```bash
 envh list                                                        # secrets (names, policy, descriptions), presets, live sessions (not their ids)
@@ -15,21 +23,38 @@ envh run --session <id> --reason "backfill" -- uv run python scripts/backfill.py
 envh session end <id>
 ```
 
+### Runs and sessions
+
 - `envh run` without a session asks the console for that one run and waits for your answer, then runs the command. It is the way to approve every request, and the only way to use secrets marked `per-run`, which sessions never cover.
 - A key marked `auto` needs no approval. A run, or a session, whose keys are all `auto` starts at once, and the console only logs it. Set it on the console in the key's approval rule; `envh list` shows `auto` next to it. Take `auto` off a key and a session that opened without you stops covering it from its next run.
 - A session is approved once; every `envh run --session` inside it is approved instantly and logged. The session lasts the minutes you asked for, capped by each secret's `max_session` and by 24 hours.
 - `envh session start ... --quiet` prints only the id.
+
+### Choosing variables
+
 - Name several presets to combine them: `envh session start news-bot forecasting-bot ...`, or `envh run --preset news-bot,forecasting-bot`. You get all their variables; per-run beats session and the shortest `max_session` wins. If two presets map the same variable to different secrets, the request is refused: leave one preset out, or pick with `--with VAR=SECRET` (listing the other variables you need too).
 - `--with` narrows a run to some of the session's variables, or maps variables ad hoc: `--with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY`.
+
+### Reasons, limits and status
+
 - `--reason` is optional but the console shows its absence loudly. Write what you would want to read before approving.
 - A running command is never killed when its session expires; expiry only stops new approvals. When the command itself exits, any process it left running is terminated so the values do not outlive the run (`--keep-background` to opt out).
 - One user can have 32 `envh` commands running or waiting at once; another is refused until one finishes. A `--reason` can be up to 1,000 characters, and the audit log keeps the first 4,000 characters of a command line.
 - `envh status` shows pending requests, active runs and live sessions as JSON. Neither it nor `envh list` shows session ids: `envh session start` prints yours, and the console's `/sessions` shows them all.
 - If `envh session start` stops waiting before you approve (an agent's tool call timed out), the request still waits for 10 minutes. `envh session wait <code>` picks it up again, with the code `envh session start` printed. A request id from `envh status` is not enough, so another program running as you can't collect the session.
 
-Exit codes: 3 broker not running, 4 denied, 5 request error (unknown preset, variable not in session), otherwise the command's own exit code.
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 3 | the broker isn't running: start the console |
+| 4 | denied on the console |
+| 5 | request error, such as an unknown preset or a variable not in the session |
+| anything else | the command's own exit code |
 
 ## Policy and presets
+
+Which keys need approval, and which variables a preset gives a command, live in two files only the console can change.
 
 Both policy files are owned by the `envh` user with mode 0600. Nothing running as you, agents included, can read or write them. The only ways they change:
 
@@ -43,7 +68,7 @@ Both policy files are owned by the `envh` user with mode 0600. Nothing running a
 
 An agent can only *propose*: `envh preset validate draft.yaml` checks a draft without changing anything, `envh preset propose draft.yaml --reason "..."` puts the diff on your console. A proposal that maps a variable to a secret the agent should not have is just a diff you deny. Root can of course edit the files directly; the console's `/reload` picks that up, and a save from the console refuses to overwrite a `config.yaml` changed on disk since.
 
-`config.yaml`:
+### config.yaml
 
 ```yaml
 # envh settings. Change them on the console with /settings; saving there rewrites this file.
@@ -59,6 +84,8 @@ secrets:                  # per key: approval, max_session, description; the res
 ```
 
 `approval: auto` means no approval: any run gets the key at once, and every use is still logged. Only a single key's rule can say it, not `defaults:` or a preset, so a new key always needs approval until you mark it.
+
+### presets.yaml
 
 `/var/lib/envh/presets.yaml` is written only by the broker (import wizard, proposals, console):
 
@@ -77,4 +104,4 @@ presets:
 
 The same variable can point at different secrets in different presets; that replaces commenting lines in and out. Unknown fields, bad durations, caps over 24h and secrets missing from the vault are rejected, never warned about.
 
-Everything on the console is described in [The console](console.md#the-console).
+Everything on the console is described in [console.md](console.md).

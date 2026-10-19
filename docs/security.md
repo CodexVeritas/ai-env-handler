@@ -1,5 +1,15 @@
 # Security model
 
+What envh protects, how, and where it stops. The README has [the short version](../README.md#what-it-covers-and-what-it-doesnt); this is the full one.
+
+- [Status](#status-and-an-honest-disclaimer)
+- [How a request flows, and where the boundaries are](#how-a-request-flows-and-where-the-boundaries-are)
+- [What it protects, and what it does not](#what-it-protects-and-what-it-does-not)
+- [Habits that keep this safe](#habits-that-keep-this-safe)
+- [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)
+- [What envh does not do](#what-envh-does-not-do)
+- [Roadmap](#roadmap)
+
 ## Status, and an honest disclaimer
 
 This project was largely AI-written ("vibe-coded"), then tested locally and red-teamed with AI; the caveats that surfaced are documented below in [What envh does not do](#what-envh-does-not-do). It is **defense in depth, not a guarantee** — someone determined, with enough same-user access, can still get past it.
@@ -7,48 +17,6 @@ This project was largely AI-written ("vibe-coded"), then tested locally and red-
 It is still a real improvement over the usual alternative, a plaintext `.env` sitting in your project folder. Against that baseline, envh keeps keys out of files anything running as you can read at will; it **significantly** lowers the chance of prompt-injection exfiltration (a key is released only to a run or session you approved, unless you marked it `auto`, and every use is logged); it lowers the chance of a supply-chain dependency silently taking **every** key even more; and if something does slip through, it shrinks the blast radius to the few keys in one approved run or session rather than everything on disk.
 
 Think of it as a locked door on what was an open entryway: stronger protection exists (a hardware token, phone approval, running agents in a VM), but a locked door beats leaving your secrets out in the open.
-
-**1. You, or an agent, ask for a session** in an ordinary terminal:
-
-```bash
-envh session start weekly-report --minutes 90 --reason "forecast digest: research step"
-```
-
-**2. The envh console shows the request.** It runs full screen in its own window, as its own user:
-
-```
-╭─ Session request #3 ───────────────────────────────────── waiting 0:12 ─╮
-│ ben asks for a 1h session with weekly-report                             │
-│                                                                          │
-│ Reason    "forecast digest: research step"                               │
-│ Keys      OPENAI_API_KEY     ← OPENAI_API_KEY                            │
-│           OPENROUTER_API_KEY ← PERSONAL_OPENROUTER_KEY  Personal account │
-│ Duration  1h  (asked for 90m; key and preset limits cap it)              │
-│ Command   envh session start weekly-report --minutes 90 --reason '…'     │
-│ Process   pid 51234 · /usr/bin/python3 /usr/local/bin/envh session …     │
-│                                                                          │
-│ › Approve  [amber basil cedar] Vault passphrase: (hidden)                │
-│   Deny                                                                   │
-╰──────────────────────────────────────────────────────────────────────────╯
-```
-
-**3. You type your vault passphrase on the console** (hidden) and press Enter; ↓ then Enter denies. Back in the terminal, the request returns:
-
-```
-session brave-otter approved, expires 15:02:11
-```
-
-**4. Scripts and agents run inside the session** without asking again until it expires. Each run is logged:
-
-```bash
-envh run --session brave-otter --reason "fetch" -- uv run python scripts/research.py
-```
-
-**Only one command, or want to approve every request?** Skip the session. `envh run` without one asks the console for that single run:
-
-```bash
-envh run --preset weekly-report --reason "fetch" -- uv run python scripts/research.py
-```
 
 ## How a request flows, and where the boundaries are
 
