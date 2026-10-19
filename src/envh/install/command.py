@@ -139,7 +139,7 @@ def install(args: argparse.Namespace) -> int:
     invoking_user = invoking_user_name()
     if args.dry_run and os.geteuid() != 0 and DATA_DIR.exists() and not os.access(DATA_DIR, os.X_OK):
         raise InstallError(f"envh is already installed and only {SERVICE_USER} can open {DATA_DIR}; run the dry run with sudo")
-    for warning in preflight_warnings():
+    for warning in preflight_warnings(invoking_user):
         say("  ! " + warning)
     problems = preflight_problems(invoking_user)
     if problems and not args.ignore_preflight:

@@ -13,7 +13,7 @@ PASSWORDLESS_PROBLEM = "alice can run these with sudo without a password, so age
 @pytest.fixture
 def failing_checks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(command, "preflight_problems", lambda user: [PASSWORDLESS_PROBLEM])
-    monkeypatch.setattr(command, "preflight_warnings", lambda: [])
+    monkeypatch.setattr(command, "preflight_warnings", lambda user: [])
     monkeypatch.setattr(command, "DATA_DIR", tmp_path / "data")
 
 

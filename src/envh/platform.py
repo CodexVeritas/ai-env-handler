@@ -6,11 +6,13 @@ import ctypes
 import grp
 import os
 import pwd
+import re
 import shlex
 import socket
 import stat
 import struct
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +20,25 @@ SERVICE_USER = "envh"
 RUNTIME_DIR = Path("/run/envh")
 SOCKET_NAME = "ctl.sock"
 SOCKET_ENV_VAR = "ENVH_SOCKET"
-ROOT_GRANTING_GROUPS = ("docker", "lxd", "disk")
+ROOT_GRANTING_GROUPS = ("docker", "lxd", "incus-admin", "libvirt", "libvirtd", "microk8s", "disk")
+KEY_READING_GROUPS = ("input",)
+ROOT_DAEMON_SOCKETS = tuple(
+    Path(path)
+    for path in (
+        "/var/run/docker.sock",
+        "/run/docker.sock",
+        "/run/containerd/containerd.sock",
+        "/run/podman/podman.sock",
+        "/var/snap/lxd/common/lxd/unix.socket",
+        "/var/lib/lxd/unix.socket",
+        "/var/lib/incus/unix.socket",
+    )
+)
+ROOT_RUN_FOLDERS = tuple(Path(path) for path in ("/usr/local", "/usr/local/bin", "/usr/local/sbin", "/opt", "/opt/envh"))
+UINPUT = Path("/dev/uinput")
+DOAS_CONFIG = Path("/etc/doas.conf")
+DOAS_OPTIONS = ("nopass", "nolog", "persist", "keepenv")
+SHARED_SUDO_TICKETS = ("!tty_tickets", "timestamp_type=global")
 PR_SET_DUMPABLE = 4
 
 
@@ -114,9 +134,37 @@ def yama_ptrace_scope() -> int | None:
     return int(path.read_text().strip())
 
 
+def group_names_of(username: str) -> list[str]:
+    """Every group of the account, its primary group included. Member lists from `grp.getgrall()` leave out the primary
+    group and can leave out groups from LDAP or sssd, so the system is asked for the account's groups instead."""
+    names: list[str] = []
+    for gid in os.getgrouplist(username, pwd.getpwnam(username).pw_gid):
+        try:
+            names.append(grp.getgrgid(gid).gr_name)
+        except KeyError:
+            continue
+    return names
+
+
 def root_granting_groups_of(username: str) -> list[str]:
-    memberships = [group.gr_name for group in grp.getgrall() if username in group.gr_mem]
-    return [name for name in memberships if name in ROOT_GRANTING_GROUPS]
+    return [name for name in group_names_of(username) if name in ROOT_GRANTING_GROUPS]
+
+
+def writable_by(username: str, paths: Iterable[Path]) -> list[Path]:
+    """The paths that exist and that the account can write. The kernel decides, as that account, so groups, ACLs and
+    modes all count; root asks it through a child process that has switched to the account."""
+    account = pwd.getpwnam(username)
+    existing = [path for path in dict.fromkeys(path.resolve() for path in paths) if os.path.exists(path)]
+    if os.geteuid() == account.pw_uid:
+        return [path for path in existing if os.access(path, os.W_OK)]
+    if os.geteuid() != 0:
+        raise PlatformError(f"only root or {username} can check what {username} can write")
+    groups = os.getgrouplist(username, account.pw_gid)
+    return [
+        path
+        for path in existing
+        if subprocess.run(["test", "-w", str(path)], user=account.pw_uid, group=account.pw_gid, extra_groups=groups, capture_output=True).returncode == 0
+    ]
 
 
 def sudo_listing(username: str) -> str:
@@ -130,8 +178,104 @@ def passwordless_sudo_entries(listing: str) -> list[str]:
     return [line.strip() for line in listing.splitlines() if "NOPASSWD" in line or "!authenticate" in line]
 
 
+def sudo_defaults(listing: str) -> list[str]:
+    """The Defaults entries a `sudo -l` listing applies to the user, without spaces; sudo may wrap them over indented lines."""
+    entries: list[str] = []
+    in_defaults = False
+    for line in listing.splitlines():
+        if line.startswith("Matching Defaults entries"):
+            in_defaults = True
+        elif not line.strip() or not line[0].isspace():
+            in_defaults = False
+        elif in_defaults:
+            entries.extend(entry.replace(" ", "") for entry in line.split(",") if entry.strip())
+    return entries
+
+
+def sudo_default_problems(username: str, defaults: list[str]) -> list[str]:
+    problems: list[str] = []
+    shared = [entry for entry in defaults if entry in SHARED_SUDO_TICKETS]
+    if shared:
+        problems.append(
+            f"sudo's {', '.join(shared)} lets every terminal of {username} reuse a sudo password typed in one, so agents can run sudo after you start the console: remove it with visudo"
+        )
+    if not any(entry.startswith("secure_path=") for entry in defaults):
+        problems.append(
+            "sudo has no secure_path, so `sudo envh-console` runs the first envh-console in your PATH, which programs you run can change: "
+            "add a secure_path with visudo, or start the console with `sudo /usr/local/sbin/envh-console`"
+        )
+    return problems
+
+
+def doas_nopass_rules(config_text: str, username: str, groups: list[str]) -> list[str]:
+    """The `permit nopass` rules of a doas.conf that match the account by name or by one of its groups."""
+    identities = {username, *(f":{group}" for group in groups)}
+    rules: list[str] = []
+    for line in config_text.splitlines():
+        rule = line.split("#", 1)[0].strip()
+        words = re.sub(r"setenv\s*\{[^}]*\}", " ", rule).split()
+        if words[:1] != ["permit"]:
+            continue
+        options = []
+        for word in words[1:]:
+            if word not in DOAS_OPTIONS:
+                break
+            options.append(word)
+        identity = words[1 + len(options)] if len(words) > 1 + len(options) else ""
+        if "nopass" in options and identity in identities:
+            rules.append(rule)
+    return rules
+
+
 def session_type() -> str:
     return os.environ.get("XDG_SESSION_TYPE", "unknown")
+
+
+def sudo_problems(username: str) -> list[str]:
+    try:
+        listing = sudo_listing(username)
+    except PlatformError as error:
+        return [f"could not check the sudo rules of {username}: {error}"]
+    problems: list[str] = []
+    entries = passwordless_sudo_entries(listing)
+    if entries:
+        listed = "".join(f"\n  {entry}" for entry in entries)
+        problems.append(
+            f"{username} can run these with sudo without a password, so agents can too:{listed}\n"
+            "Fine only if each is a fixed root-owned command that reads no file you can write."
+        )
+    return problems + sudo_default_problems(username, sudo_defaults(listing))
+
+
+def doas_problems(username: str) -> list[str]:
+    try:
+        config_text = DOAS_CONFIG.read_text()
+    except FileNotFoundError:
+        return []
+    except OSError as error:
+        return [f"could not check {DOAS_CONFIG} for rules that skip the password: {error}"]
+    rules = doas_nopass_rules(config_text, username, group_names_of(username))
+    if not rules:
+        return []
+    listed = "".join(f"\n  {rule}" for rule in rules)
+    return [f"{username} can run doas without a password, so agents can too; remove nopass from these lines in {DOAS_CONFIG}:{listed}"]
+
+
+def write_access_problems(username: str) -> list[str]:
+    try:
+        sockets = writable_by(username, ROOT_DAEMON_SOCKETS)
+        folders = writable_by(username, ROOT_RUN_FOLDERS)
+    except PlatformError as error:
+        return [f"could not check which root-owned sockets and folders {username} can write: {error}"]
+    problems = [
+        f"{username} can use {path}, the socket of a daemon that runs containers as root, so agents can become root: remove the group or ACL that grants it"
+        for path in sockets
+    ]
+    problems.extend(
+        f"{username} can write {path}, where root runs envh from, so agents could replace that code: `sudo chown root:root {path} && sudo chmod go-w {path}`"
+        for path in folders
+    )
+    return problems
 
 
 def preflight_problems(invoking_user: str | None) -> list[str]:
@@ -150,22 +294,28 @@ def preflight_problems(invoking_user: str | None) -> list[str]:
         groups = root_granting_groups_of(invoking_user)
         if groups:
             problems.append(f"user {invoking_user} is in root-granting group(s) {', '.join(groups)}: remove with `sudo gpasswd -d {invoking_user} <group>` and log in again")
-        try:
-            entries = passwordless_sudo_entries(sudo_listing(invoking_user))
-        except PlatformError as error:
-            problems.append(f"could not check the sudo rules of {invoking_user}: {error}")
-        else:
-            if entries:
-                listed = "".join(f"\n  {entry}" for entry in entries)
-                problems.append(
-                    f"{invoking_user} can run these with sudo without a password, so agents can too:{listed}\n"
-                    "Fine only if each is a fixed root-owned command that reads no file you can write."
-                )
+        problems.extend(sudo_problems(invoking_user))
+        problems.extend(doas_problems(invoking_user))
+        problems.extend(write_access_problems(invoking_user))
     return problems
 
 
-def preflight_warnings() -> list[str]:
+def preflight_warnings(invoking_user: str | None) -> list[str]:
     warnings: list[str] = []
     if session_type() == "x11":
         warnings.append("X11 session: programs you run can read and type into the console window (README: 'Who else can see and type into the console')")
+    if not invoking_user:
+        return warnings
+    key_reading = [name for name in group_names_of(invoking_user) if name in KEY_READING_GROUPS]
+    if key_reading:
+        warnings.append(
+            f"{invoking_user} is in group(s) {', '.join(key_reading)}: programs you run can read every key you type, the vault passphrase included (README: 'Who else can see and type into the console')"
+        )
+    try:
+        uinput_writable = writable_by(invoking_user, [UINPUT])
+    except PlatformError as error:
+        warnings.append(f"could not check whether {invoking_user} can write {UINPUT}: {error}")
+    else:
+        if uinput_writable:
+            warnings.append(f"{invoking_user} can write {UINPUT}: programs you run can type into the console (README: 'Who else can see and type into the console')")
     return warnings

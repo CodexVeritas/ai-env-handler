@@ -1,13 +1,25 @@
 import os
+import pwd
 import shlex
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from envh import platform
-from envh.platform import PeerCredentials, PlatformError, parent_and_terminal, passwordless_sudo_entries, preflight_problems, terminal_path
+from envh.platform import (
+    PeerCredentials,
+    PlatformError,
+    doas_nopass_rules,
+    parent_and_terminal,
+    passwordless_sudo_entries,
+    preflight_problems,
+    preflight_warnings,
+    sudo_defaults,
+    terminal_path,
+)
 from envh.server import hardening
 from envh.server.hardening import HardeningError
 from tests.conftest import needs_script, run_in_relayed_terminal
@@ -33,12 +45,98 @@ def safe_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(platform, "legacy_tiocsti_enabled", lambda: False)
     monkeypatch.setattr(platform, "yama_ptrace_scope", lambda: 1)
     monkeypatch.setattr(platform, "root_granting_groups_of", lambda username: [])
+    monkeypatch.setattr(platform, "doas_problems", lambda username: [])
+    monkeypatch.setattr(platform, "write_access_problems", lambda username: [])
 
 
 def test_passwordless_sudo_entries() -> None:
     assert passwordless_sudo_entries(PASSWORD_ONLY_LISTING) == []
     assert passwordless_sudo_entries(NOPASSWD_LISTING) == ["(root) NOPASSWD: /usr/local/bin/backup"]
     assert len(passwordless_sudo_entries(NO_AUTHENTICATE_LISTING)) == 1
+
+
+def test_a_primary_group_counts_as_a_root_granting_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    names = {1000: "alice", 998: "docker", 27: "sudo"}
+    monkeypatch.setattr(platform.pwd, "getpwnam", lambda username: SimpleNamespace(pw_gid=998))
+    monkeypatch.setattr(platform.os, "getgrouplist", lambda username, primary_gid: [primary_gid, 27, 4242])
+    monkeypatch.setattr(platform.grp, "getgrgid", lambda gid: SimpleNamespace(gr_name=names[gid]))
+    assert platform.group_names_of("alice") == ["docker", "sudo"]
+    assert platform.root_granting_groups_of("alice") == ["docker"]
+
+
+def test_sudo_defaults_are_read_across_wrapped_lines_and_stop_at_the_rules() -> None:
+    listing = PASSWORD_ONLY_LISTING.replace("use_pty", "use_pty,\n    timestamp_type = global")
+    assert sudo_defaults(listing) == ["env_reset", "mail_badpass", "secure_path=/usr/local/sbin\\:/usr/local/bin\\:/usr/sbin\\:/usr/bin", "use_pty", "timestamp_type=global"]
+    assert sudo_defaults("User alice may run the following commands on host:\n    (ALL : ALL) ALL\n") == []
+
+
+def test_sudo_tickets_shared_across_terminals_and_a_missing_secure_path_are_problems(safe_kernel: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(platform, "sudo_listing", lambda username: PASSWORD_ONLY_LISTING.replace("use_pty", "use_pty, !tty_tickets"))
+    [problem] = preflight_problems("alice")
+    assert "sudo's !tty_tickets lets every terminal of alice reuse a sudo password" in problem
+    monkeypatch.setattr(platform, "sudo_listing", lambda username: PASSWORD_ONLY_LISTING.replace("secure_path", "env_keep"))
+    [problem] = preflight_problems("alice")
+    assert "sudo has no secure_path" in problem and "sudo /usr/local/sbin/envh-console" in problem
+
+
+def test_doas_rules_that_skip_the_password_are_found_by_user_or_group() -> None:
+    config_text = "\n".join(
+        [
+            "# permit nopass alice",
+            "permit persist alice as root",
+            "permit nopass keepenv :wheel",
+            "permit nopass setenv { PATH=/usr/bin } alice cmd /usr/bin/true",
+            "permit nopass bob",
+            "deny alice",
+        ]
+    )
+    assert doas_nopass_rules(config_text, "alice", ["alice", "users"]) == ["permit nopass setenv { PATH=/usr/bin } alice cmd /usr/bin/true"]
+    assert doas_nopass_rules(config_text, "alice", ["wheel"]) == ["permit nopass keepenv :wheel", "permit nopass setenv { PATH=/usr/bin } alice cmd /usr/bin/true"]
+
+
+def test_doas_nopass_rules_are_problems(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config = tmp_path / "doas.conf"
+    monkeypatch.setattr(platform, "DOAS_CONFIG", config)
+    monkeypatch.setattr(platform, "group_names_of", lambda username: ["alice"])
+    assert platform.doas_problems("alice") == []
+    config.write_text("permit nopass alice\n")
+    [problem] = platform.doas_problems("alice")
+    assert "alice can run doas without a password" in problem and "\n  permit nopass alice" in problem
+
+
+def test_daemon_sockets_and_folders_root_runs_from_are_problems_when_the_user_can_write_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(platform, "writable_by", lambda username, paths: [path for path in paths if path in (Path("/var/run/docker.sock"), Path("/usr/local/sbin"))])
+    sockets, folders = platform.write_access_problems("alice")
+    assert "alice can use /var/run/docker.sock" in sockets and "can become root" in sockets
+    assert "alice can write /usr/local/sbin, where root runs envh from" in folders and "sudo chmod go-w /usr/local/sbin" in folders
+
+    def refused(username: str, paths: object) -> list[Path]:
+        raise PlatformError("only root or alice can check what alice can write")
+
+    monkeypatch.setattr(platform, "writable_by", refused)
+    [problem] = platform.write_access_problems("alice")
+    assert problem.startswith("could not check which root-owned sockets and folders alice can write")
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write every file")
+def test_writable_by_asks_the_kernel_as_the_account(tmp_path: Path) -> None:
+    me = pwd.getpwuid(os.geteuid()).pw_name
+    read_only = tmp_path / "read-only"
+    read_only.write_text("")
+    read_only.chmod(0o444)
+    assert platform.writable_by(me, [tmp_path, read_only, tmp_path / "missing"]) == [tmp_path.resolve()]
+    with pytest.raises(PlatformError, match="only root or root can check"):
+        platform.writable_by("root", [tmp_path])
+
+
+def test_keyboard_reading_groups_and_a_writable_uinput_are_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(platform, "session_type", lambda: "wayland")
+    monkeypatch.setattr(platform, "group_names_of", lambda username: ["alice", "input"])
+    monkeypatch.setattr(platform, "writable_by", lambda username, paths: list(paths))
+    groups, uinput = preflight_warnings("alice")
+    assert "alice is in group(s) input: programs you run can read every key you type" in groups
+    assert "alice can write /dev/uinput" in uinput
+    assert preflight_warnings(None) == []
 
 
 def test_preflight_lists_passwordless_sudo_rules(safe_kernel: None, monkeypatch: pytest.MonkeyPatch) -> None:
