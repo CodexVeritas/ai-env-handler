@@ -239,7 +239,7 @@ def test_installed_code_and_caches_are_skipped_but_the_login_files_beside_them_a
     read = (
         "project/notes.md", ".cache/huggingface/token", ".cargo/credentials.toml", ".local/share/uv/credentials/credentials.toml", "app/.venv/bin/activate",
         "Desktop/env/.env.bot", "repo/.git/hooks/pre-push", "project/web/.next/server/page.js", ".var/app/com.slack.Slack/config/settings.json",
-        "miniconda3/etc/conda/activate.d/keys.sh",
+        "miniconda3/etc/conda/activate.d/keys.sh", "app/.venv/share/jupyter/kernels/bot/kernel.json",
     )
     for file in read:
         (tmp_path / file).parent.mkdir(parents=True, exist_ok=True)
@@ -287,6 +287,7 @@ def test_a_large_log_is_read_in_parts_and_everything_else_left_out_is_listed(tmp
     outside = tmp_path / "elsewhere"
     outside.mkdir()
     (home / "app" / "linked").symlink_to(outside)
+    (home / "app" / "loop").symlink_to(home / "app" / "loop")
     monkeypatch.setenv("HOME", str(home))
     exit_code, saved_in = main(argparse.Namespace(paths=[str(home)], json=False, max_size=1, out=str(tmp_path / "scans")))
     hits = json.loads((saved_in / "hits.json").read_text())

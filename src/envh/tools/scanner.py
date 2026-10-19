@@ -218,7 +218,7 @@ BROWSER_PROFILES = {".mozilla", "google-chrome", "chromium", "BraveSoftware", "M
 # login and config files the scan does read (.cargo/credentials.toml, .m2/settings.xml, .local/share/uv/credentials),
 # plus games and app runtimes too big to read that hold none of your keys.
 SKIP_PATHS = (
-    ".cache/pip", ".cache/uv", ".cache/pypoetry", ".cache/pre-commit", ".cache/virtualenv", ".cache/ms-playwright", ".cache/ms-playwright-go",
+    ".cache/pip", ".cache/uv", ".cache/pypoetry/cache", ".cache/pypoetry/artifacts", ".cache/pre-commit", ".cache/virtualenv", ".cache/ms-playwright", ".cache/ms-playwright-go",
     ".cache/puppeteer", ".cache/mozilla", ".cache/google-chrome", ".cache/chromium", ".cache/yarn", ".cache/pnpm", ".cache/go-build",
     ".cache/bazel", ".cache/node-gyp", ".cache/huggingface/hub", ".cache/torch", ".cache/thumbnails",
     ".npm/_cacache", ".npm/_npx", ".yarn/cache", ".yarn/unplugged", ".yarn/berry", ".bun/install/cache", ".nvm/versions", ".nvm/.cache",
@@ -230,10 +230,10 @@ SKIP_PATHS = (
     ".var/app/*/cache", ".local/share/flatpak", ".steam", ".local/share/Steam", ".wine/drive_c/windows", f"{FOLDER_NAME}/{SCANS}",
 )
 SKIP_PATHS_BY_LAST = {last: [pattern for pattern in SKIP_PATHS if pattern.rsplit("/", 1)[-1] == last] for last in {pattern.rsplit("/", 1)[-1] for pattern in SKIP_PATHS}}
-# A Python or conda environment's installed parts. The rest of it is read: its bin and etc folders hold the activate
-# scripts, where people export keys.
+# A Python or conda environment's installed packages and headers. The rest of it is read: activate scripts in bin and
+# etc, and Jupyter kernel specs in share, are places people put keys.
 ENVIRONMENT_MARKERS = ("pyvenv.cfg", "conda-meta")
-ENVIRONMENT_PARTS = {"lib", "lib64", "Lib", "share", "include", "Include", "pkgs"}
+ENVIRONMENT_PARTS = {"lib", "lib64", "Lib", "include", "Include", "pkgs"}
 # A git folder's objects and large files, which are compressed or binary. Its config, hooks and logs are read.
 GIT_PARTS = {"objects", "lfs"}
 SKIPPED_SUMMARY = (
@@ -607,7 +607,10 @@ def find_files(roots: list[Path], max_bytes: int, unreadable: list[Path], found:
             for directory in directories:
                 full = current_path / directory
                 if full.is_symlink():
-                    target = full.resolve()
+                    try:
+                        target = full.resolve()
+                    except (OSError, RuntimeError):
+                        target = Path(os.readlink(full))
                     if not_read is not None and not any(target.is_relative_to(scanned) for scanned in roots_resolved):
                         not_read.links.append((full, target))
                     continue
@@ -860,7 +863,7 @@ def values_section(hits: list[Hit], say: Callable[[str], None], with_paths: bool
 
 def not_read_section(not_read: NotRead, say: Callable[[str], None]) -> None:
     """Everything the scan skipped, so nothing is left out without saying so."""
-    say(f"Keys in these were not looked for. Read a large file with --max-size, or scan a folder by naming it: envh scan <folder>.")
+    say("Keys in these were not looked for. Read a large file with --max-size, or scan a folder by naming it: envh scan <folder>.")
     say(f"\nFiles over the {not_read.limit // (1024 * 1024)} MB size limit ({len(not_read.too_large):,}); transcripts and logs are read in parts at any size:")
     for file, size in sorted(not_read.too_large, key=lambda item: -item[1]):
         say(f"  {size / 1e6:>10,.0f} MB  {shown_path(file)}")
