@@ -23,6 +23,7 @@ REASON = "envh scan: search your files for copies of your vault's keys"
 def wants_search() -> bool:
     print("")
     print("Your envh vault can also find every exact copy of your own keys, even ones the scan can't recognize.")
+    print("Those copies are the safest to replace, so the explorer starts with them.")
     print("The scan gets only the first and last few characters and the length of each key, never the key.")
     print(f"You approve it once, on the envh console. Keys under {SEARCH_MIN_LENGTH} characters are left out.")
     print("")

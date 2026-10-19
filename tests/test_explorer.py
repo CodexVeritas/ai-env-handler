@@ -236,13 +236,18 @@ def test_g_groups_by_place(tmp_path: Path) -> None:
     assert sorted(row.label.split()[0] for row in explorer.rows() if row.node[0] == "value") == ["anthropic", "openrouter"]
 
 
-def test_keys_in_the_vault_are_named_and_v_filters_them(tmp_path: Path) -> None:
+def test_keys_in_the_vault_open_first_under_yours_and_v_filters_the_other_lists(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {"a/.env": f"{OPENROUTER}\n", "b/notes.md": f"{ANTHROPIC}\n"})
     hits = load_scan(folder)
     stored = next(hit.fingerprint for hit in hits if hit.kind == "openrouter")
     (folder / "vault.json").write_text(json.dumps({"matches": {stored: ["TEAM_OPENROUTER_KEY"]}}))
     explorer = Explorer(hits, folder, vault=load_vault_matches(folder))
-    press(explorer, "v")
+    rows = screen(explorer)
+    assert explorer.tier == "yours" and rows[1].index("Yours 1") < rows[1].index("Likely 2")
+    assert "Start here: exact copies of your vault's keys, the safest to replace." in rows[2]
+    assert [row.label for row in explorer.rows()] == ["All your keys", "openrouter"]
+    assert "Yours" not in screen(Explorer(hits, folder))[1]
+    press(explorer, "tab", "v")
     assert [row.label for row in explorer.rows()] == ["openrouter"] and "in your vault (v)" in screen(explorer)[2]
     press(explorer, "right")
     assert any("in your vault as TEAM_OPENROUTER_KEY" in row.label for row in explorer.rows())
@@ -275,6 +280,28 @@ def test_x_replaces_every_copy_under_a_row_after_y(tmp_path: Path) -> None:
     explorer.work()
     assert explorer.message.startswith("✓ Replaced") and label not in [row.label for row in explorer.rows()]
     assert (folder / "replaced.txt").exists() and OPENROUTER not in (folder / "replaced.txt").read_text()
+
+
+def test_x_on_all_your_keys_replaces_every_copy_of_them_and_nothing_else(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"a/.env": f"OPENROUTER_API_KEY={OPENROUTER}\nFRED_API_KEY={FRED}\n", "b/notes.md": f"{OPENROUTER} {ANTHROPIC}\n"})
+    for file in (tmp_path / "project").rglob("*"):
+        os.utime(file, (time.time() - 3600, time.time() - 3600))
+    hits = load_scan(folder)
+    vault = {hit.fingerprint: [f"MY_{hit.kind.upper()}_KEY"] for hit in hits if hit.kind in ("openrouter", "fred")}
+    explorer = Explorer(hits, folder, vault=vault)
+    first = explorer.rows()[0]
+    assert (first.label, first.detail) == ("All your keys", "2 keys in 2 files") and "x replaces every copy of them" in screen(explorer)[3]
+    press(explorer, "enter")
+    assert explorer.message.startswith("x replaces every copy of your keys") and explorer.file_view is None
+    press(explorer, "x")
+    rows = "\n".join(screen(explorer))
+    assert "All your keys: 3 copies of 2 keys in 2 files" in rows and "in your vault" not in rows.split("Each copy becomes")[1]
+    press(explorer, "y")
+    explorer.work()
+    project = tmp_path / "project"
+    assert OPENROUTER not in (project / "a" / ".env").read_text() and FRED not in (project / "a" / ".env").read_text()
+    assert OPENROUTER not in (project / "b" / "notes.md").read_text() and ANTHROPIC in (project / "b" / "notes.md").read_text()
+    assert explorer.tier_counts["yours"] == 0 and explorer.rows() == []
 
 
 def test_the_replace_summary_warns_about_keys_outside_the_vault_and_low_values_in_code(tmp_path: Path) -> None:

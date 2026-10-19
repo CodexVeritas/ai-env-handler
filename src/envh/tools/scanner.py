@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable, Iterator, TextIO
 
 from envh.common import MAX_MATCH_IDS, peek, value_id
-from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, save_vault_matches, saved_files_root, say_where_saved, shown_path
+from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, save_vault_matches, saved_files_root, say_where_saved, shown_path, styled
 
 # Provider formats that are distinctive enough to recognize anywhere, including transcripts and shell history. Each
 # regex starts with literal text, which lets the regex engine jump straight to candidates; one that started with a
@@ -773,14 +773,14 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
         say("  " + line)
 
 
-def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, report_dir: Path, say: Callable[[str], None] = print, searched: str | None = None) -> None:
+def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, report_dir: Path, say: Callable[[str], None] = print, searched: tuple[str, ...] = ()) -> None:
     """The terminal's short version of the report: a fixed number of lines however many keys were found."""
     say(headline(hits, scanned, elapsed))
     if hits:
         for line in confidence_lines(hits):
             say("  " + line)
-    if searched:
-        say("  · " + searched)
+    for line in searched:
+        say("  " + line)
     if unreadable:
         say(f"  · {len(unreadable):,} " + ("file or folder" if len(unreadable) == 1 else "files or folders") + " could not be read (permissions).")
     say("  · What the scan skips and cannot see is under Notes at the end of report.txt.")
@@ -808,18 +808,24 @@ def save_results(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed:
     return report_dir
 
 
-def confirmed_copies(hits: list[Hit], vault: VaultSearch) -> tuple[list[Hit], dict[str, list[str]] | None, str]:
-    """The hits once the broker has said which are stored keys, its answer, and a line saying what the search found."""
+def confirmed_copies(hits: list[Hit], vault: VaultSearch) -> tuple[list[Hit], dict[str, list[str]] | None, tuple[str, ...]]:
+    """The hits once the broker has said which are stored keys, its answer, and lines saying what the search found and,
+    when it found any, to start with those copies: they are certainly keys, so the safest to replace."""
     ids, left_out = ids_to_confirm(hits)
     if left_out:
         print(f"envh scan: {left_out:,} found values are not checked against your vault; at most {MAX_MATCH_IDS:,} are checked at once.", file=sys.stderr)
     matches = vault.confirm(ids) if ids else {}
     if matches is None:
-        return [hit for hit in hits if hit.kind != UNCONFIRMED_COPY], None, "Not checked against your vault (see above)."
+        return [hit for hit in hits if hit.kind != UNCONFIRMED_COPY], None, ("· Not checked against your vault (see above).",)
     only_by_search = sum(hit.kind == UNCONFIRMED_COPY and hit.fingerprint in matches for hit in hits)
     hits = with_vault_copies(hits, matches)
     yours = len({name for names in matches.values() for name in names})
-    return hits, matches, f"Searched for {plural(vault.keys.count, 'vault key')}: {plural(yours, 'stored key')} found, {copies_label(only_by_search)} only by that search."
+    lines = (f"· Searched for {plural(vault.keys.count, 'vault key')}: {plural(yours, 'stored key')} found, {copies_label(only_by_search)} only by that search.",)
+    copies = [hit for hit in hits if hit.fingerprint in matches]
+    if copies:
+        where = f"{copies_label(len(copies))} of {plural(yours, 'key')} in {plural(len({hit.path for hit in copies}), 'file')}"
+        lines += (styled("1;33", f'! Start with your own keys: {where}. envh explore opens on them; x on "All your keys" replaces them all.'),)
+    return hits, matches, lines
 
 
 def main(args: argparse.Namespace, vault_search: Callable[[], AbstractContextManager[VaultSearch | None]] | None = None) -> tuple[int, Path | None]:
@@ -837,7 +843,7 @@ def main(args: argparse.Namespace, vault_search: Callable[[], AbstractContextMan
         print(f"envh scan: {parent} is a file, not a folder", file=sys.stderr)
         return 2, None
     matches: dict[str, list[str]] | None = None
-    searched: str | None = None
+    searched: tuple[str, ...] = ()
     with vault_search() if vault_search is not None else nullcontext() as vault:
         progress = Progress(sys.stderr) if sys.stderr.isatty() else None
         started = time.monotonic()

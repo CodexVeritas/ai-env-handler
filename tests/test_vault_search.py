@@ -40,6 +40,7 @@ async def test_one_approval_finds_copies_of_stored_keys_and_marks_them_in_the_sa
     shown = capsys.readouterr().out
     assert "Searching for copies of 1 vault key too." in shown
     assert "Searched for 1 vault key: 1 stored key found, 1 copy only by that search." in shown
+    assert 'Start with your own keys: 2 copies of 1 key in 1 file. envh explore opens on them; x on "All your keys" replaces them all.' in shown
     assert [request.kind for request in harness.broker.state.requests.values()] == ["search"]
 
 
