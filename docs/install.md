@@ -45,12 +45,17 @@ Before it builds anything, the install checks for ways a program running as you 
 
 | The check says | What to do |
 |---|---|
-| `user … is in root-granting group(s) docker` | Leave the group: answer yes at the wizard's first step, or run `sudo gpasswd -d $USER docker`, then log out and back in. Docker commands then need `sudo`, so agents can't run them. Docker Desktop and rootless Docker don't need the group. |
+| `user … is in root-granting group(s) docker` (or `lxd`, `incus-admin`, `libvirt`, `microk8s`, `disk`) | Leave the group: answer yes at the wizard's first step, or run `sudo gpasswd -d $USER <group>`, then log out and back in. Docker commands then need `sudo`, so agents can't run them. Docker Desktop and rootless Docker don't need the group. |
+| `… can use /var/run/docker.sock, the socket of a daemon that runs containers as root` | An ACL or a mode lets you use a root container daemon without the group. Remove it, or use Docker Desktop or rootless Docker instead. |
 | `kernel has no dev.tty.legacy_tiocsti control` | Your kernel is older than 6.2. Update it (see [Before you start](#before-you-start)). |
 | `dev.tty.legacy_tiocsti is enabled` | Run `sudo sysctl -w dev.tty.legacy_tiocsti=0`, and keep it after reboots with `echo 'dev.tty.legacy_tiocsti = 0' \| sudo tee /etc/sysctl.d/60-envh.conf`. |
 | `Yama LSM is not available` or `kernel.yama.ptrace_scope is 0` | Set `kernel.yama.ptrace_scope = 1` in a file in `/etc/sysctl.d/`, then `sudo sysctl --system`. |
 | `… can run these with sudo without a password` | Remove those `NOPASSWD` rules from `/etc/sudoers.d/`, unless each is a fixed root-owned command that reads no file you can write. |
-| `X11 session` (a warning, not a stop) | Programs you run can read and type into the console window. See [security.md](security.md#who-else-can-see-and-type-into-the-console). |
+| `… can run doas without a password` | Remove `nopass` from the lines it lists in `/etc/doas.conf`. |
+| `sudo's !tty_tickets` or `timestamp_type=global` | sudo shares a password typed in one terminal with all of them. Remove that setting with `sudo visudo`. |
+| `sudo has no secure_path` | Add a `secure_path` with `sudo visudo`, or always start the console with `sudo /usr/local/sbin/envh-console`. |
+| `… can write /usr/local/bin, where root runs envh from` (or another folder) | Run the `chown` and `chmod` command it shows. |
+| Warnings, not stops: `X11 session`, the `input` group, or a `/dev/uinput` you can write | Programs you run can read what you type or type into the console window. See [security.md](security.md#who-else-can-see-and-type-into-the-console). |
 
 ## What the install changes
 
