@@ -48,7 +48,7 @@ def confirm(connection: Connection, ids: list[str]) -> dict[str, list[str]] | No
     try:
         connection.send(op="match", ids=ids)
         matches = connection.recv_ok().get("matches")
-    except (ClientError, OSError) as error:
+    except (ClientError, OSError, ValueError) as error:
         print(f"envh scan: couldn't check the found keys against your vault: {error}", file=sys.stderr)
         return None
     if not isinstance(matches, dict):
@@ -77,7 +77,7 @@ def vault_search(sock: Path) -> Iterator[VaultSearch | None]:
             with waiting_notice(reply, None):
                 reply = connection.recv_ok()
             keys = key_ends(reply)
-        except ClientError as error:
+        except (ClientError, ValueError) as error:
             print(f"Not searching for your vault's keys: {error}", file=sys.stderr)
             yield None
             return

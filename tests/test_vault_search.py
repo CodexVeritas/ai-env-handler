@@ -8,7 +8,7 @@ import pytest
 from envh.common import value_id
 from envh.tools.saved_files import VAULT_FILE
 from envh.tools.scanner import main
-from envh.tools.vault_search import vault_search
+from envh.tools.vault_search import confirm, vault_search
 from tests.conftest import HEX, Harness, approve_next, random_text
 
 FRED = random_text("stored fred", 32, HEX)
@@ -70,3 +70,16 @@ async def test_saying_no_or_no_broker_scans_without_the_vault(
     args.out = str(tmp_path / "second")
     assert saved_hits(main(args, lambda: vault_search(tmp_path / "no.sock"))[1]) == [(2, "fred", "medium")]
     assert "Not searching for your vault's keys: broker not running" in capsys.readouterr().err
+
+
+class BrokenReply:
+    def send(self, **message: object) -> None:
+        pass
+
+    def recv_ok(self) -> dict[str, object]:
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+
+def test_a_malformed_answer_after_the_scan_is_reported_not_raised(capsys: pytest.CaptureFixture[str]) -> None:
+    assert confirm(BrokenReply(), ["abcd1234"]) is None
+    assert "couldn't check the found keys against your vault: Expecting value" in capsys.readouterr().err

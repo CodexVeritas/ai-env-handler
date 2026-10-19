@@ -87,6 +87,8 @@ def describe(event: AuditEvent) -> tuple[str, str] | None:
         "rejected_uid": ("warn", lambda: f"Refused uid {fields.get('uid')}: not an allowed user (see /settings)"),
         "unknown_session": ("warn", lambda: f"Unknown session {fields.get('session')} from {login_name(fields['uid'])}" + (" · refusing their sessions until the console restarts" if fields.get("count") == MAX_UNKNOWN_SESSION_IDS else "")),
         "unknown_resume_code": ("warn", lambda: f"Wrong resume code for a session request from {login_name(fields['uid'])} · pid {fields.get('pid')}"),
+        "search_answered": ("warn", lambda: f"Shared the first and last few characters and the length of {fields.get('keys')} key(s) with search {ident(fields)}"),
+        "match_answered": ("info", lambda: f"Told {ident(fields)} which of {fields.get('asked')} found value(s) are stored keys: {names(fields.get('matched') or []) or 'none'}"),
         "error": ("error", lambda: f"Internal error in the {fields.get('where', 'broker')}; details in audit.jsonl"),
     }
     if event.name in simple:

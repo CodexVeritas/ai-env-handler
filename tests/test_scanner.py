@@ -15,7 +15,8 @@ from envh.tools.saved_files import ask_where
 from tests.conftest import HEX, random_text
 import envh.tools.scanner as scanner_module
 from envh.tools.scanner import (
-    COMPILED_PATTERNS, FORMAT_PASSES, STANDALONE_KINDS, UNCONFIRMED_COPY, VALUE_PATTERNS, KeyEnds, Progress, classify_name, ids_to_confirm, looks_fake, looks_placeholder, main,
+    COMPILED_PATTERNS, FORMAT_PASSES, STANDALONE_KINDS, UNCONFIRMED_COPY, VALUE_PATTERNS, KeyEnds, Progress, VaultSearch, classify_name, confirmed_copies, ids_to_confirm,
+    looks_fake, looks_placeholder, main,
     place_of, scan_paths, scan_text, shown_value, value_id, with_vault_copies,
 )
 
@@ -408,6 +409,14 @@ def test_a_hit_overlapping_a_confirmed_copy_is_dropped_since_the_copy_is_exact()
     hits = list(scan_text(Path("app.py"), f"API_KEY={key}/v2/extra\n", stored(key)))
     assert [(hit.kind, hit.length) for hit in hits] == [("unknown", len(key) + 9), (UNCONFIRMED_COPY, len(key))]
     assert [(hit.kind, hit.length) for hit in with_vault_copies(hits, {value_id(key): ["MY_TOKEN"]})] == [("unknown", len(key))]
+
+
+def test_when_the_broker_cant_be_asked_copies_found_only_by_the_search_are_dropped() -> None:
+    key = random_text("unasked", 24)
+    hits = list(scan_text(Path("f"), f"key: {key}\nFRED_API_KEY={FRED}\n", stored(key)))
+    assert [hit.kind for hit in hits] == [UNCONFIRMED_COPY, "fred"]
+    kept, matches, lines = confirmed_copies(hits, VaultSearch(stored(key), lambda ids: None))
+    assert [hit.kind for hit in kept] == ["fred"] and matches is None and "Not checked against your vault (see above)." in str(lines)
 
 
 def test_copies_found_only_by_the_search_are_checked_first_when_there_are_too_many(monkeypatch: pytest.MonkeyPatch) -> None:
