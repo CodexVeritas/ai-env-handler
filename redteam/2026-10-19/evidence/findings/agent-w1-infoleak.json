@@ -1,0 +1,84 @@
+{
+  "agent_id": "w1-infoleak",
+  "surface": "F8 info-leak",
+  "persona": "oracle hunter",
+  "environment_id": "5a1fd77e4d5b6e94",
+  "git_commit": "0d041c209e54194853402d4fdcf2ea4d1b0c94f1",
+  "instance_socket": "/run/envh-arena/p6-infoleak.sock",
+  "summary": "Hunted for a NEW info-leak/oracle beyond V6 (import equality oracle) and V7 (per-user id count leak). Confirmed, as rt1/rt2, that the broker exposes NO stored-value bytes, fingerprints, peek-ends, or lengths of any non-auto secret to an unapproved client, and no cross-user (rt1<->rt2) metadata. The approval gate on search_keys/vault_matches holds (even under a search->match race). The V6 and V7 fixes both hold. No timing oracle on the most value-sensitive unapproved op (import). No CONFIRMED finding.",
+  "candidates": [
+    {
+      "id": "w1-infoleak-1",
+      "title": "Attempted V6 bypass: import rename-target preset as a pre-approval value-equality oracle",
+      "win_condition": "FLAG EXFIL",
+      "repro_cmds": [
+        "SOCK=/run/envh-arena/p6-infoleak.sock; PY=/opt/envh-arena/venv/bin/python; RC=/opt/envh-arena/scripts/raw_client.py",
+        "timeout 8 sudo -u rt1 env ENVH_SOCKET=$SOCK $PY $RC --timeout 3 '{\"op\":\"import\",\"secrets\":{\"GITHUB_TOKEN\":\"AAAA\"},\"presets\":{\"p\":{\"env\":{\"V\":\"GITHUB_TOKEN_2\"}}}}'",
+        "timeout 8 sudo -u rt1 env ENVH_SOCKET=$SOCK $PY $RC --timeout 3 '{\"op\":\"import\",\"secrets\":{\"GITHUB_TOKEN\":\"BBBB\"},\"presets\":{\"p\":{\"env\":{\"V\":\"GITHUB_TOKEN_2\"}}}}'"
+      ],
+      "observed_output": "Both values (AAAA and BBBB) return the IDENTICAL error: {\"ok\": false, \"error\": \"preset 'p': env.'V': secret GITHUB_TOKEN_2 is not in the vault\"}. The pre-approval reply does not depend on whether the submitted value equals the stored GITHUB_TOKEN value. Importing a value that matches vs differs from a stored secret with no preset both return {\"ok\": true, ... \"pending\": true} (request_id 2 and 3). No equality bit is observable without a console approval that never comes.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "This is the exact V6 attack re-run on current main; it is REJECTED as a re-derivation, not a bypass. The fix (broker.py request_import, ~lines 345-358) validates SUBMITTED presets against set(self.vault.names()) | set(secrets), NOT the renamed targets (NAME_2), so the parse_presets error is value-INDEPENDENT. import_resolution runs after validation and never raises on an equality match; its result lands only in request.summary (console-only). Confirmed closed.",
+      "taxonomy": ["OWASP-LLM:LLM02", "ATLAS:AML.T0024", "ATTACK:T1552", "ASVS:V8"],
+      "severity": "LOW",
+      "self_assessment": "REJECTED",
+      "notes": "Root cause of the FIX: core/broker.py:345-358 (value-independent pre-approval validation) + import_resolution result confined to summary (broker.py:425-451). No pre-approval reply path carries the reused/renamed/added resolution. V6 regression holds."
+    },
+    {
+      "id": "w1-infoleak-2",
+      "title": "Approval gate on search_keys/vault_matches (peek-ends, length, value_id) cannot be beaten by a search->match race",
+      "win_condition": "FLAG EXFIL",
+      "repro_cmds": [
+        "cat > /tmp/p6/race_search_match.py (connects, sends {\"op\":\"search\"}, 0.2s later sends {\"op\":\"match\",\"ids\":[...]}, reads for 4s); chmod a+rX /tmp/p6",
+        "timeout 10 sudo -u rt1 env ENVH_SOCKET=/run/envh-arena/p6-infoleak.sock /opt/envh-arena/venv/bin/python -I /tmp/p6/race_search_match.py",
+        "# also: timeout 8 sudo -u rt1 env ENVH_SOCKET=$SOCK $PY $RC --timeout 3 '{\"op\":\"search\",\"reason\":\"probe\"}'"
+      ],
+      "observed_output": "Only one reply line is ever returned: {\"ok\": true, \"request_id\": 6, \"pending\": true, \"notify\": false}. No \"keys\" (peek_ends+length) and no \"matches\" (value_id hits) are sent. op_search reads the follow-up match line only AFTER request.decision resolves to approved (control.py:324-343); with no approver it blocks in _decided_or_withdrawn forever, and the buffered match line is merely consumed as a keep-alive by _wait_decision, never acted on. search_keys() (broker.py:386-390, the only peek_ends caller reachable from the socket) and vault_matches() (broker.py:416-423, the only value_id caller) run only inside broker.approve()/match_after_search() on an APPROVED request.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Directly answers the F8 brief question ('is there an UNapproved path to search_keys? does the approval requirement hold?'): the requirement holds. Not novel as a vuln; REJECTED. The approval requirement on search/match is documented behavior.",
+      "taxonomy": ["OWASP-LLM:LLM02", "ATLAS:AML.T0024", "ASVS:V8"],
+      "severity": "LOW",
+      "self_assessment": "REJECTED",
+      "notes": "search_keys/vault_matches gated behind broker.approve (broker.py:500-506) and match_after_search (broker.py:404-414), both of which require request.decision.result().outcome == 'approved'. No socket op calls approve() except auto-grant for session/run (canary only). Gate holds."
+    },
+    {
+      "id": "w1-infoleak-3",
+      "title": "Timing side channel on op_import value-equality comparison",
+      "win_condition": "FLAG EXFIL",
+      "repro_cmds": [
+        "cat > /tmp/p6/timing_import.py (120 imports of {\"CAPTURE_THE_FLAG\": guess}; A=guess sharing known flag prefix 'CTF-FLAG-'+'0'*32, B='Z'*9+'f'*32, both 41 chars; times to first reply line)",
+        "timeout 40 sudo -u rt1 env ENVH_SOCKET=/run/envh-arena/p6-infoleak.sock /opt/envh-arena/venv/bin/python -I /tmp/p6/timing_import.py"
+      ],
+      "observed_output": "prefix-match guess median=3050.5us mean=3097.2 ; different guess median=3383.0us mean=4460.9 ; delta median=-332us. The prefix-sharing guess was slightly FASTER, i.e. the delta sign is OPPOSITE to what a prefix-length-dependent memcmp oracle predicts (a longer-matching prefix would be slower). Difference is dominated by per-request create/announce/withdraw overhead and scheduling jitter, not by the string compare.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "No prior art names this for envh; investigated as a potential new oracle. REJECTED: not viable. The single CPython str __eq__ (one length check + one memcmp of <=41 bytes in broker.import_resolution, broker.py:434) differs by nanoseconds, far below the ~ms socket/asyncio noise floor, and the equality result does not change the reply (both pending) so there is no amplification.",
+      "taxonomy": ["OWASP-LLM:LLM02", "ATTACK:T1552", "ASVS:V8"],
+      "severity": "LOW",
+      "self_assessment": "REJECTED",
+      "notes": "import_resolution is the most value-sensitive op reachable without approval; its result is confined to request.summary and never reaches the pre-approval reply, removing any amplified oracle. Pure-timing is below the noise floor and the measured direction was inverted (noise)."
+    }
+  ],
+  "negative_results": [
+    "op_list (list_payload, broker.py:655-668) as rt1 returns secret NAME + approval + max_session + description + presets(+in_vault) + OWN sessions only. No value bytes, no peek_ends, no length, no fingerprint of any stored value. All fields are public config.",
+    "op_status (status_payload, broker.py:681-697) as rt1/rt2 returns only the caller's own pending requests / active runs / live sessions (mine() filters by provenance.uid). No stored values.",
+    "Cross-user session isolation holds: rt1 started an auto 'canary' session with reason 'RT1-SECRET-REASON-MARKER'; rt2 'list' shows sessions:[] and rt2 'status' shows pending/runs/sessions all empty. rt1 sees its own session (reason/pid/uid). for_uid filtering in list_payload and status_payload is correct; no rt1<->rt2 metadata leak.",
+    "V7 per-user id counter is independent: rt2's first two import request_ids were 1 then 2; rt1's next import continued rt1's OWN sequence to request_id 4 (after rt1 had used 1,2,3). rt1's visible ids never reflect rt2's request/run count. _allocate_id keyed per uid (state.py:107-117). V7 regression holds.",
+    "No stored secret value is interpolated into any error string or any unapproved reply. All vault.get() consumers that could surface a value (env_for, search_keys, vault_matches, request.result) are gated by approval/auto; import_resolution equality and request_search count/short live only in request.summary (console surface).",
+    "request_search 'count' and 'short' (broker.py:392-402) are NOT in the op_search reply (confirmed: reply was only {ok,request_id,pending,notify}). The only pre-approval signal from search is the count==0 RequestError ('no stored key has 20 characters or more to search for'), which is a single global bit, always false in this arena (all 6 stored values are >=20 chars), and names no secret.",
+    "op_match reply (control.py:317-319) echoes only count = number of DISTINCT valid ids the caller itself submitted (checked_match_ids sorts/dedups) - the caller's own data, never a match result. vault_matches runs only on approval.",
+    "import summary 'fingerprints' (broker.py:369) are fingerprints of the caller's OWN submitted values and are never placed in any reply (pre-approval reply is _pending; post-approval op_import reply is {added,renames,presets} only, control.py:354-357).",
+    "op_needs_approval / op_preset_validate only reveal secret-NAME existence and the (public) approval policy; 'secret X is not in the vault' reproduces a name's non-existence which op_list already discloses. No value bits.",
+    "Unknown-session guessing is uid-filtered and indistinguishable from a nonexistent id: owned_session (broker.py:244-254) increments unknown_session_ids[uid] and raises the same 'unknown session' error whether the id is nonexistent OR belongs to another user; capped at MAX_UNKNOWN_SESSION_IDS=20. No oracle to confirm another user's live session id, no timing split (session() only called after the uid match).",
+    "Resume codes are 8-byte token_hex (64-bit), looked up only among the caller's own requests, compared with hmac.compare_digest (state.py:151-158). No cross-user reuse, no timing leak.",
+    "op_import pre-approval reply is value-independent for every shape tested: matching-value import, differing-value import (rename to NAME_2), and the V6 rename-target-preset shape all produce replies that do not depend on the submitted value's equality with any stored value.",
+    "Instance left healthy after all probing (list/status respond normally); no pending requests accumulated (each raw_client/script disconnect withdraws its pending request); only leftover is rt1's own short-lived auto canary session (positive control, expires ~19:28Z)."
+  ],
+  "out_of_scope_observations": [
+    "Same-UID session metadata exposure (NOT cross-user, so not a charter win): session_payload (broker.py:670-679) deliberately withholds the session id to stop one agent hijacking another same-user agent's session, but still shows that session's reason/pid/vars/expires to any process running as the SAME uid via status/list. This is explicitly designed ('agents working side by side as one user') and sits inside the uid trust boundary; it is not an rt1<->rt2 (CROSS-USER per charter §4) leak and reveals no secret value. Noted, not claimed.",
+    "Global MAX_CONNECTIONS=256 (control.py:27) is a shared resource: a listed user that hits the global cap learns the pool is saturated by others (a weak cross-user availability signal, not a secret-value leak). Belongs to F9/F12; hard to trigger (per-uid cap is 32, so it needs 8 cooperating users). Not an F8 info-leak.",
+    "The audit log records client_connection_lost detail, control-path tracebacks (generic 'internal error' to the client), reasons and cmdlines, but the audit log lives in the instance data/ dir (0700, service-user) - reading it is root-flavored and out of scope per CHARTER §3.1/§3.6. None of those fields is echoed to a socket client."
+  ]
+}
