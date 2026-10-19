@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 from envh.client.transport import ClientError, Connection, waiting_notice
-from envh.common import peek, printable
+from envh.common import peek, printable, value_id
 from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, Spot, in_git_repo, replace_all, replaced_pairs
 from envh.tools.saved_files import SCANS, VAULT_FILE, save_vault_matches, saved_files_root, shown_path
 from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, copies_label, place_of, plural, read_if_text, scan_text, shown_folder
@@ -321,8 +321,12 @@ def file_row(kind: str, confidence: str, fingerprint: str, path: str, lines: lis
     return Row(("file", kind, confidence, fingerprint, path), parent, depth, shown_path(Path(path)), lines_label(lines), False)
 
 
-def read_context(path: str, fingerprint: str) -> tuple[list[ContextLine], str]:
-    """The stretches of the file around each copy of the key, read now; or a problem saying why there is nothing to show."""
+def read_context(path: str, fingerprint: str, recorded: list[Found] | None = None) -> tuple[list[ContextLine], str]:
+    """The stretches of the file around each copy of the key, read now; or a problem saying why there is nothing to show.
+
+    The file is scanned again, and each of the scan's recorded hits in it counts too where the same value is still at
+    its place: a copy found only by searching for a stored key is invisible to a rescan, and must be shown and hidden
+    like the rest."""
     file = Path(path)
     try:
         if file.stat().st_size > DEFAULT_MAX_BYTES:
@@ -338,6 +342,11 @@ def read_context(path: str, fingerprint: str) -> tuple[list[ContextLine], str]:
     by_line: dict[int, list[Hit]] = defaultdict(list)
     for hit in scan_text(file, text):
         by_line[hit.line].append(hit)
+    for found in recorded or []:
+        seen = lines[found.line - 1][found.column:found.column + found.length] if 0 < found.line <= len(lines) else ""
+        taken = any(start < found.column + found.length and found.column < start + length for start, length in ((hit.column, hit.length) for hit in by_line[found.line]))
+        if not taken and len(seen) == found.length and value_id(seen) == found.fingerprint:
+            by_line[found.line].append(Hit(file, found.line, found.column, found.confidence, found.kind, found.name, found.shown, found.fingerprint, found.length))
     copies = sorted(number for number, hits in by_line.items() if any(hit.fingerprint == fingerprint for hit in hits))
     if not copies:
         return [], "This key isn't in the file any more; it changed after the scan."
@@ -605,7 +614,7 @@ class Explorer:
     def open_file(self, row: Row) -> None:
         _, kind, confidence, fingerprint, path = row.node
         value = self.index().first[fingerprint]
-        lines, problem = read_context(path, fingerprint)
+        lines, problem = read_context(path, fingerprint, [hit for hit in self.hits if hit.path == path])
         type_label = value.kind if self.tier not in ("all", "yours") else f"{value.kind} ({TIER_NAMES[value.confidence]})"
         self.file_view = FileView(path, value, type_label, lines, problem)
         self.jump(1, self.file_view, from_top=True)
