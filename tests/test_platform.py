@@ -46,7 +46,7 @@ def safe_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(platform, "yama_ptrace_scope", lambda: 1)
     monkeypatch.setattr(platform, "root_granting_groups_of", lambda username: [])
     monkeypatch.setattr(platform, "doas_problems", lambda username: [])
-    monkeypatch.setattr(platform, "write_access_problems", lambda username: [])
+    monkeypatch.setattr(platform, "write_access_problems", lambda username, reported_groups: [])
 
 
 def test_passwordless_sudo_entries() -> None:
@@ -104,17 +104,31 @@ def test_doas_nopass_rules_are_problems(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert "alice can run doas without a password" in problem and "\n  permit nopass alice" in problem
 
 
-def test_daemon_sockets_and_folders_root_runs_from_are_problems_when_the_user_can_write_them(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(platform, "writable_by", lambda username, paths: [path for path in paths if path in (Path("/var/run/docker.sock"), Path("/usr/local/sbin"))])
-    sockets, folders = platform.write_access_problems("alice")
-    assert "alice can use /var/run/docker.sock" in sockets and "can become root" in sockets
+def test_a_socket_reached_through_a_reported_group_is_not_reported_again(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    daemon_socket = tmp_path / "docker.sock"
+    daemon_socket.write_text("")
+    monkeypatch.setattr(platform, "ROOT_DAEMON_SOCKETS", (daemon_socket,))
+    monkeypatch.setattr(platform, "ROOT_RUN_FOLDERS", ())
+    monkeypatch.setattr(platform, "writable_by", lambda username, paths: list(paths))
+    socket_group = platform.group_name(daemon_socket.stat().st_gid)
+    assert platform.write_access_problems("alice", [str(socket_group)]) == []
+    assert len(platform.write_access_problems("alice", ["docker"] if socket_group != "docker" else ["lxd"])) == 1
+
+
+def test_daemon_sockets_and_folders_root_runs_from_are_problems_when_the_user_can_write_them(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    daemon_socket = tmp_path / "docker.sock"
+    daemon_socket.write_text("")
+    monkeypatch.setattr(platform, "ROOT_DAEMON_SOCKETS", (daemon_socket,))
+    monkeypatch.setattr(platform, "writable_by", lambda username, paths: [path for path in paths if path in (daemon_socket, Path("/usr/local/sbin"))])
+    sockets, folders = platform.write_access_problems("alice", [])
+    assert f"alice can use {daemon_socket}" in sockets and "can become root" in sockets
     assert "alice can write /usr/local/sbin, where root runs envh from" in folders and "sudo chmod go-w /usr/local/sbin" in folders
 
     def refused(username: str, paths: object) -> list[Path]:
         raise PlatformError("only root or alice can check what alice can write")
 
     monkeypatch.setattr(platform, "writable_by", refused)
-    [problem] = platform.write_access_problems("alice")
+    [problem] = platform.write_access_problems("alice", [])
     assert problem.startswith("could not check which root-owned sockets and folders alice can write")
 
 

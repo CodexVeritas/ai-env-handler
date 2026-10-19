@@ -261,7 +261,15 @@ def doas_problems(username: str) -> list[str]:
     return [f"{username} can run doas without a password, so agents can too; remove nopass from these lines in {DOAS_CONFIG}:{listed}"]
 
 
-def write_access_problems(username: str) -> list[str]:
+def group_name(gid: int) -> str | None:
+    try:
+        return grp.getgrgid(gid).gr_name
+    except KeyError:
+        return None
+
+
+def write_access_problems(username: str, reported_groups: list[str]) -> list[str]:
+    """Sockets reached through a group already reported as root-granting are left out, so one cause gets one fix."""
     try:
         sockets = writable_by(username, ROOT_DAEMON_SOCKETS)
         folders = writable_by(username, ROOT_RUN_FOLDERS)
@@ -270,6 +278,7 @@ def write_access_problems(username: str) -> list[str]:
     problems = [
         f"{username} can use {path}, the socket of a daemon that runs containers as root, so agents can become root: remove the group or ACL that grants it"
         for path in sockets
+        if group_name(path.stat().st_gid) not in reported_groups
     ]
     problems.extend(
         f"{username} can write {path}, where root runs envh from, so agents could replace that code: `sudo chown root:root {path} && sudo chmod go-w {path}`"
@@ -296,7 +305,7 @@ def preflight_problems(invoking_user: str | None) -> list[str]:
             problems.append(f"user {invoking_user} is in root-granting group(s) {', '.join(groups)}: remove with `sudo gpasswd -d {invoking_user} <group>` and log in again")
         problems.extend(sudo_problems(invoking_user))
         problems.extend(doas_problems(invoking_user))
-        problems.extend(write_access_problems(invoking_user))
+        problems.extend(write_access_problems(invoking_user, groups))
     return problems
 
 
