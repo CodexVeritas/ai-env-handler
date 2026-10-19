@@ -7,6 +7,7 @@ import shlex
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from envh.common import MAX_MATCH_IDS, SEARCH_MIN_LENGTH
 from envh.core.broker import Broker
 from envh.core.durations import format_duration
 from envh.core.state import Request
@@ -87,6 +88,16 @@ def content(request: Request, broker: Broker) -> tuple[str, str, list[tuple[str,
         summary = f"{who} asks which of {plural(int(request.summary.get('count') or 0), 'key')} envh scan found are in your vault"
         rows.append(("Answer", [styled("The names of the stored keys among them. No values are sent either way.")]))
         rows.append(("", [styled("Each found key comes as 8 characters of its SHA-256. A short password could be guessed and checked this way, so approve only a scan you ran.", DIM)]))
+    elif request.kind == "search":
+        title = f"Search request #{request.id}"
+        summary = f"{who} asks to search your files for copies of your keys"
+        count = int(request.summary.get("count") or 0)
+        rows.append(("Shares", [styled(f"The first and last few characters and the length of {plural(count, 'key')}, as this console shows them. Never the keys.")]))
+        rows.append(("Then", [styled(f"Once, which of up to {MAX_MATCH_IDS:,} values it finds are your keys, and their names.")]))
+        rows.append(("", [styled("Each found value comes as 8 characters of its SHA-256. A short password could be guessed and checked this way, so approve only a scan you ran.", DIM)]))
+        short = int(request.summary.get("short") or 0)
+        if short:
+            rows.append(("Left out", [styled(f"{plural(short, 'key')} under {SEARCH_MIN_LENGTH} characters", DIM)]))
     else:
         title = f"Import request #{request.id}"
         added = request.summary.get("added") or []

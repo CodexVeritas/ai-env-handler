@@ -12,7 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from envh.common import fingerprint, value_id
+from envh.common import MAX_MATCH_IDS, SEARCH_MIN_LENGTH, fingerprint, peek_ends, value_id
 from envh.core.audit import Audit
 from envh.core.config import (
     AUTO,
@@ -41,7 +41,6 @@ MAX_UNKNOWN_SESSION_IDS = 20
 
 
 MAX_PRESET_BYTES = 64 * 1024
-MAX_MATCH_IDS = 50_000
 MATCH_ID = re.compile(r"[0-9a-f]{8}")
 
 
@@ -81,6 +80,16 @@ def first_free_name(base: str, unavailable: set[str]) -> str:
     while candidate in unavailable:
         candidate, suffix = f"{base}_{suffix}", suffix + 1
     return candidate
+
+
+def checked_match_ids(ids: Any) -> list[str]:
+    if not isinstance(ids, list) or not ids:
+        raise RequestError("no ids to match")
+    if len(ids) > MAX_MATCH_IDS:
+        raise RequestError(f"at most {MAX_MATCH_IDS:,} ids can be matched at once, not {len(ids):,}")
+    if not all(isinstance(item, str) and MATCH_ID.fullmatch(item) for item in ids):
+        raise RequestError("each id is 8 lowercase hex characters, as envh scan saves them")
+    return sorted(set(ids))
 
 
 def presets_label(presets: list[Preset]) -> str:
@@ -369,16 +378,40 @@ class Broker:
     def request_match(self, ids: Any, reason: str | None, provenance: Provenance) -> Request:
         """Ask the console whether the requester may learn which of these value ids belong to stored keys. Approval is
         required because the answer confirms a guessed value; a short password could be found that way."""
-        if not isinstance(ids, list) or not ids:
-            raise RequestError("no ids to match")
-        if len(ids) > MAX_MATCH_IDS:
-            raise RequestError(f"at most {MAX_MATCH_IDS:,} ids can be matched at once, not {len(ids):,}")
-        if not all(isinstance(item, str) and MATCH_ID.fullmatch(item) for item in ids):
-            raise RequestError("each id is 8 lowercase hex characters, as envh scan saves them")
-        wanted = sorted(set(ids))
+        wanted = checked_match_ids(ids)
         request = self.state.new_request(kind="match", mapping={}, provenance=provenance, reason=reason, summary={"ids": wanted, "count": len(wanted)})
         self._announce(request)
         return request
+
+    def search_keys(self) -> list[dict[str, Any]]:
+        """Each distinct stored value of at least SEARCH_MIN_LENGTH characters, as its ends and length: what the console
+        shows of it, never more."""
+        keys = {(*peek_ends(value), len(value)) for value in map(self.vault.get, self.vault.names()) if len(value) >= SEARCH_MIN_LENGTH}
+        return [{"start": start, "end": end, "length": length} for start, end, length in sorted(keys)]
+
+    def request_search(self, reason: str | None, provenance: Provenance) -> Request:
+        """Ask the console whether the requester may search its files for copies of the stored keys. Approval gives it
+        each key's ends and length, and one later answer to which of the values it found there are stored keys."""
+        values = [self.vault.get(name) for name in self.vault.names()]
+        count = len(self.search_keys())
+        if not count:
+            raise RequestError(f"no stored key has {SEARCH_MIN_LENGTH} characters or more to search for")
+        short = len({value for value in values if len(value) < SEARCH_MIN_LENGTH})
+        request = self.state.new_request(kind="search", mapping={}, provenance=provenance, reason=reason, summary={"count": count, "short": short})
+        self._announce(request)
+        return request
+
+    def match_after_search(self, request: Request, ids: Any) -> dict[str, list[str]]:
+        """The one answer an approved search gets: which of the ids it found belong to stored keys."""
+        if request.kind != "search" or not request.decided or request.decision.result().outcome != "approved":
+            raise RequestError(f"request #{request.id} is not an approved search")
+        if request.summary.get("answered"):
+            raise RequestError(f"search #{request.id} was already answered")
+        wanted = checked_match_ids(ids)
+        request.summary["answered"] = True
+        matches = self.vault_matches(wanted)
+        self.audit.event("match_answered", id=request.id, uid=request.provenance.uid, asked=len(wanted), matched=sorted(name for names in matches.values() for name in names))
+        return matches
 
     def vault_matches(self, ids: list[str]) -> dict[str, list[str]]:
         wanted = set(ids)
@@ -464,10 +497,13 @@ class Broker:
             self.vault.save()
             self.write_presets(merged)
             self.audit.event("import_applied", added=request.summary["added"], reused=request.summary["reused"], renamed=request.summary["renamed"], presets=request.summary["presets"])
+        elif request.kind == "search":
+            request.result = {"keys": self.search_keys()}
+            self.audit.event("search_answered", id=request.id, uid=request.provenance.uid, keys=len(request.result["keys"]))
         elif request.kind == "match":
             matches = self.vault_matches(request.summary["ids"])
             request.result = {"matches": matches}
-            self.audit.event("match_answered", id=request.id, asked=request.summary["count"], matched=sorted(name for names in matches.values() for name in names))
+            self.audit.event("match_answered", id=request.id, uid=request.provenance.uid, asked=request.summary["count"], matched=sorted(name for names in matches.values() for name in names))
         self.state.decide(request, approved=True, by=by)
         self.audit.event("decision", id=request.id, uid=request.provenance.uid, outcome="approved", by=by)
 

@@ -8,7 +8,7 @@ import pytest
 import envh.server.control as control_mod
 from envh.common import value_id
 from envh.server.control import ControlServer
-from tests.conftest import Client, Harness, approve_next, make_auto
+from tests.conftest import Client, Harness, approve_next, make_auto, random_text
 
 
 async def test_session_lifecycle(control: Path, harness: Harness) -> None:
@@ -182,6 +182,39 @@ async def test_match_over_socket_answers_after_approval(control: Path, harness: 
         assert first["pending"] is True and first["count"] == 2 and "matches" not in first
         await approve_next(harness)
         assert (await client.recv())["matches"] == {value_id("sk-or-team"): ["TEAM_OPENROUTER_KEY"]}
+
+
+async def test_search_over_socket_shares_key_ends_then_answers_one_match(control: Path, harness: Harness) -> None:
+    long_key = random_text("search", 32)
+    harness.broker.vault.set("LONG_KEY", long_key)
+    async with Client(control) as client:
+        await client.send(op="search", reason="envh scan")
+        first = await client.recv()
+        assert first["pending"] is True and "count" not in first and "keys" not in first
+        await approve_next(harness)
+        assert (await client.recv())["keys"] == [{"start": long_key[:3], "end": long_key[-3:], "length": 32}]
+        await client.send(op="match", ids=[value_id(long_key), value_id("elsewhere")])
+        assert (await client.recv())["matches"] == {value_id(long_key): ["LONG_KEY"]}
+        assert client.reader is not None
+        assert await asyncio.wait_for(client.reader.readline(), timeout=5) == b""
+
+
+async def test_a_search_is_followed_only_by_its_match_and_may_end_without_one(control: Path, harness: Harness) -> None:
+    harness.broker.vault.set("LONG_KEY", random_text("search", 32))
+    async with Client(control) as client:
+        await client.send(op="search", reason="envh scan")
+        await client.recv()
+        await approve_next(harness)
+        await client.recv()
+        await client.send(op="run", **{"with": ["OPENAI_API_KEY"]}, command=["true"])
+        assert "followed only by its match" in (await client.recv())["error"]
+    async with Client(control) as client:
+        await client.send(op="search", reason="envh scan")
+        await client.recv()
+        await approve_next(harness)
+        await client.recv()
+    await asyncio.sleep(0.05)
+    assert '"error"' not in (harness.data_dir / "audit.jsonl").read_text()
 
 
 async def test_preset_with_override_mismatch_is_rejected(control: Path, harness: Harness) -> None:

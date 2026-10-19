@@ -16,6 +16,7 @@ from typing import Any
 
 from envh.tools.importer import run_wizard
 from envh.tools.explorer import explore, interactive, main as explore_main
+from envh.tools.vault_search import vault_search
 from envh.tools.scanner import main as scan_main, skipped_folders_help
 from envh.platform import socket_path as default_socket_path
 from envh.client.transport import EXIT_USAGE, ClientError, Connection, waiting_notice
@@ -247,7 +248,7 @@ def cmd_import(args: argparse.Namespace, sock: Path) -> int:
 
 
 def cmd_scan(args: argparse.Namespace, sock: Path) -> int:
-    exit_code, report_dir = scan_main(args)
+    exit_code, report_dir = scan_main(args, (lambda: vault_search(sock)) if not args.json and interactive() else None)
     if report_dir is not None and exit_code == 1 and not args.json and not args.no_explore and interactive():
         if input("\nBrowse them now: each key, its files and the lines around it? [Y/n] ").strip().lower() not in ("n", "no"):
             explore(report_dir, sock)

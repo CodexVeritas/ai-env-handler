@@ -11,7 +11,7 @@ from envh.core.broker import MAX_PRESET_BYTES, MAX_UNKNOWN_SESSION_IDS, RequestE
 from envh.core.config import ConfigError, SecretEntry, dump_presets, load_config
 from envh.core.state import Request
 from envh.core.vault import Vault
-from tests.conftest import PASSPHRASE, Harness, make_auto
+from tests.conftest import PASSPHRASE, Harness, make_auto, random_text
 
 
 def test_mapping_from_with(harness: Harness) -> None:
@@ -504,6 +504,35 @@ async def test_a_denied_match_answers_nothing(harness: Harness) -> None:
     request = harness.broker.request_match([value_id("sk-openai")], None, harness.provenance())
     harness.broker.deny(request)
     assert not request.result
+
+
+async def test_a_search_shares_each_long_keys_ends_and_length_then_answers_one_match(harness: Harness) -> None:
+    broker = harness.broker
+    long_key = "sk-proj-" + random_text("search", 40)
+    broker.vault.set("LONG_KEY", long_key)
+    broker.vault.set("SAME_LONG_KEY", long_key)
+    request = broker.request_search("envh scan", harness.provenance())
+    assert request.pending and request.summary == {"count": 1, "short": 3} and not request.result
+    with pytest.raises(RequestError, match="not an approved search"):
+        broker.match_after_search(request, [value_id(long_key)])
+    broker.approve(request)
+    assert request.result == {"keys": [{"start": long_key[:4], "end": long_key[-4:], "length": len(long_key)}]}
+    with pytest.raises(RequestError, match="8 lowercase hex"):
+        broker.match_after_search(request, ["ABCD1234"])
+    assert broker.match_after_search(request, [value_id(long_key), value_id("elsewhere")]) == {value_id(long_key): ["LONG_KEY", "SAME_LONG_KEY"]}
+    with pytest.raises(RequestError, match="already answered"):
+        broker.match_after_search(request, [value_id("sk-openai")])
+
+
+async def test_a_search_needs_a_long_enough_key_and_a_denied_one_shares_nothing(harness: Harness) -> None:
+    with pytest.raises(RequestError, match="no stored key has 20 characters"):
+        harness.broker.request_search(None, harness.provenance())
+    harness.broker.vault.set("LONG_KEY", random_text("search", 30))
+    request = harness.broker.request_search(None, harness.provenance())
+    harness.broker.deny(request)
+    assert not request.result
+    with pytest.raises(RequestError, match="not an approved search"):
+        harness.broker.match_after_search(request, [value_id("sk-openai")])
 
 
 @pytest.mark.parametrize(("ids", "error"), [

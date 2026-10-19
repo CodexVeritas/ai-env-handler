@@ -27,16 +27,15 @@ from pathlib import Path
 
 from envh.client.transport import ClientError, Connection, waiting_notice
 from envh.common import peek, printable
-from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, in_git_repo, replace_all, replaced_pairs
-from envh.tools.saved_files import SCANS, saved_files_root, shown_path
-from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, place_of, plural, read_if_text, scan_text, shown_folder
+from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, Spot, in_git_repo, replace_all, replaced_pairs, still_there
+from envh.tools.saved_files import SCANS, VAULT_FILE, save_vault_matches, saved_files_root, shown_path
+from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, copies_label, place_of, plural, read_if_text, scan_text, shown_folder
 
 TIERS = ("high", "medium", "low", "fake", "all")
 TIER_LABELS = {"high": "Likely", "medium": "Possible", "low": "Unlikely", "fake": "Placeholder", "all": "All"}
 TIER_PHRASES = {"high": "likely keys", "medium": "possible keys", "low": "unlikely keys", "fake": "placeholders", "all": "every list"}
 GROUPINGS = ("type", "place")
 VAULT_FILTERS = ("all keys", "in your vault", "not in your vault")
-VAULT_FILE = "vault.json"
 GROUP_ABOVE = 5
 LINES_SHOWN_PER_FILE = 3
 CONTEXT_LINES = 3
@@ -64,6 +63,7 @@ class Found:
 
     path: str
     line: int
+    column: int
     confidence: str
     kind: str
     name: str
@@ -116,10 +116,6 @@ class FileView:
     problem: str = ""
     top: int = 0
     revealed_until: float | None = None
-
-
-def copies_label(count: int) -> str:
-    return f"{count:,} {'copy' if count == 1 else 'copies'}"
 
 
 def styled(code: str, text: str) -> str:
@@ -212,7 +208,7 @@ def load_scan(folder: Path) -> list[Found]:
     except (OSError, ValueError) as error:
         raise ClientError(str(error), 2) from error
     return [
-        Found(hit["path"], hit["line"], hit["confidence"], hit["kind"], hit["name"], hit["shown"], hit["fingerprint"], hit["length"], place_of(hit["path"]))
+        Found(hit["path"], hit["line"], hit["column"], hit["confidence"], hit["kind"], hit["name"], hit["shown"], hit["fingerprint"], hit["length"], place_of(hit["path"]))
         for hit in hits
         if (hit["path"], hit["fingerprint"]) not in gone
     ]
@@ -314,8 +310,12 @@ def file_row(kind: str, confidence: str, fingerprint: str, path: str, lines: lis
     return Row(("file", kind, confidence, fingerprint, path), parent, depth, shown_path(Path(path)), lines_label(lines), False)
 
 
-def read_context(path: str, fingerprint: str) -> tuple[list[ContextLine], str]:
-    """The stretches of the file around each copy of the key, read now; or a problem saying why there is nothing to show."""
+def read_context(path: str, fingerprint: str, recorded: list[Found] | None = None) -> tuple[list[ContextLine], str]:
+    """The stretches of the file around each copy of the key, read now; or a problem saying why there is nothing to show.
+
+    The file is scanned again, and each of the scan's recorded hits in it counts too where the same value is still at
+    its place: a copy found only by searching for a stored key is invisible to a rescan, and must be shown and hidden
+    like the rest. As in the scan, a rescan hit overlapping such a copy is dropped, since the copy is exact."""
     file = Path(path)
     try:
         if file.stat().st_size > DEFAULT_MAX_BYTES:
@@ -328,9 +328,20 @@ def read_context(path: str, fingerprint: str) -> tuple[list[ContextLine], str]:
     lines = text.split("\n")
     if lines[-1] == "":
         lines.pop()
+    in_place: dict[int, list[Found]] = defaultdict(list)
+    for found in recorded or []:
+        if still_there(lines, found.line, found.column, found.length, found.fingerprint):
+            in_place[found.line].append(found)
     by_line: dict[int, list[Hit]] = defaultdict(list)
     for hit in scan_text(file, text):
-        by_line[hit.line].append(hit)
+        overlapping = [found for found in in_place.get(hit.line, []) if found.column < hit.column + hit.length and hit.column < found.column + found.length]
+        if all((found.column, found.length) == (hit.column, hit.length) for found in overlapping):
+            by_line[hit.line].append(hit)
+    for number, founds in in_place.items():
+        covered = {(hit.column, hit.length) for hit in by_line.get(number, [])}
+        for found in founds:
+            if (found.column, found.length) not in covered:
+                by_line[number].append(Hit(file, found.line, found.column, found.confidence, found.kind, found.name, found.shown, found.fingerprint, found.length))
     copies = sorted(number for number, hits in by_line.items() if any(hit.fingerprint == fingerprint for hit in hits))
     if not copies:
         return [], "This key isn't in the file any more; it changed after the scan."
@@ -554,8 +565,12 @@ class Explorer:
         self.work = lambda: self.replace(confirm.targets)
 
     def replace(self, targets: dict[str, set[str]]) -> None:
-        outcome = replace_all(targets, self.folder)
-        self.hits = [hit for hit in self.hits if not (hit.path in outcome.replaced and hit.fingerprint in targets[hit.path])]
+        spots: dict[str, list[Spot]] = defaultdict(list)
+        for hit in self.hits:
+            if hit.fingerprint in targets.get(hit.path, ()):
+                spots[hit.path].append(Spot(hit.line, hit.column, hit.length, hit.fingerprint, hit.kind))
+        outcome = replace_all(targets, self.folder, spots)
+        self.hits = [hit for hit in self.hits if hit.fingerprint not in outcome.ids.get(hit.path, ())]
         self.tier_counts = {tier: len({hit.fingerprint for hit in self.hits if tier == "all" or hit.confidence == tier}) for tier in TIERS}
         self._index = None
         reasons = Counter(outcome.skipped.values())
@@ -574,7 +589,7 @@ class Explorer:
     def open_file(self, row: Row) -> None:
         _, kind, confidence, fingerprint, path = row.node
         value = self.index().first[fingerprint]
-        lines, problem = read_context(path, fingerprint)
+        lines, problem = read_context(path, fingerprint, [hit for hit in self.hits if hit.path == path])
         type_label = value.kind if self.tier != "all" else f"{value.kind} ({TIER_NAMES[value.confidence]})"
         self.file_view = FileView(path, value, type_label, lines, problem)
         self.jump(1, self.file_view, from_top=True)
@@ -817,8 +832,7 @@ def match_against_vault(folder: Path, hits: list[Found], sock: Path) -> dict[str
         with waiting_notice(reply, None):
             reply = conn.recv_ok()
     matches: dict[str, list[str]] = reply.get("matches") or {}
-    with os.fdopen(os.open(folder / VAULT_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
-        json.dump({"matches": matches, "checked": datetime.now().isoformat(timespec="seconds")}, handle, indent=2)
+    save_vault_matches(folder, matches)
     return matches
 
 

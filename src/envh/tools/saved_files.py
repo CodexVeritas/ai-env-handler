@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -11,6 +13,7 @@ FOLDER_NAME = "envh-backups-and-scans"
 IMPORT_BACKUPS = "import-backups"
 SCANS = "scans"
 README_NAME = "README.txt"
+VAULT_FILE = "vault.json"
 README_TEXT = f"""\
 envh saves two kinds of files here. Each save gets its own folder, named by its date and time.
 
@@ -39,6 +42,12 @@ def shown_path(path: Path) -> str:
 def ask_where(what: str, default: Path, ask: Callable[[str], str]) -> Path:
     answer = ask(f"Save {what} in a new dated folder inside {shown_path(default)}? Enter to accept, or type another folder: ").strip()
     return Path(answer).expanduser().absolute() if answer else default
+
+
+def save_vault_matches(folder: Path, matches: dict[str, list[str]]) -> None:
+    """Which found values are stored keys, as the broker answered: ids and names only, beside the scan."""
+    with os.fdopen(os.open(folder / VAULT_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
+        json.dump({"matches": matches, "checked": datetime.now().isoformat(timespec="seconds")}, handle, indent=2)
 
 
 def new_dated_folder(parent: Path, stamp: str) -> Path:

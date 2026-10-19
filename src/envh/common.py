@@ -11,6 +11,9 @@ SECRET_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 PRESET_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 REMINDER_REPEAT_SECONDS = 300
 PEEK_STEPS = ((40, 4), (32, 3), (20, 2), (12, 1))
+# A search for copies of stored keys leaves out shorter ones: their ends, one character each, match too much.
+SEARCH_MIN_LENGTH = 20
+MAX_MATCH_IDS = 50_000
 
 
 def reminder_delays() -> Iterator[float]:
@@ -19,11 +22,17 @@ def reminder_delays() -> Iterator[float]:
         yield REMINDER_REPEAT_SECONDS
 
 
-def peek(value: str) -> str:
-    """The first and last few characters of a value, to tell keys apart or match one with a provider's dashboard. Shorter
-    values show fewer, so at most a fifth of a value is shown, and nothing of one under 12 characters."""
+def peek_ends(value: str) -> tuple[str, str]:
+    """The first and last few characters of a value. Shorter values show fewer, so at most a fifth of a value is shown,
+    and nothing of one under 12 characters."""
     shown = next((count for length, count in PEEK_STEPS if len(value) >= length), 0)
-    return f"{value[:shown]}…{value[-shown:]}" if shown else "…"
+    return (value[:shown], value[-shown:]) if shown else ("", "")
+
+
+def peek(value: str) -> str:
+    """The ends of a value, to tell keys apart or match one with a provider's dashboard."""
+    start, end = peek_ends(value)
+    return f"{start}…{end}"
 
 
 def value_id(value: str) -> str:
