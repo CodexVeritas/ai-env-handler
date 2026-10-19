@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""envh setup: install or update, console, .env import, stray-key scan, Claude Code and Cursor, one step at a time.
+"""envh setup: install or update, console, .env import, editor history, stray-key scan, Claude Code and Cursor, one step at a time.
 
 Runs as you with the standard library only, because envh is not installed yet when it starts. Rerunning is safe:
 finished steps are detected. Each step prints one short sentence; `?` at a question shows a few more lines, and the
@@ -37,6 +37,10 @@ BUILD_FILES = ("pyproject.toml", "uv.lock", "README.md", "LICENSE")
 CLAUDE_SOURCE = REPO / "claude"
 CLAUDE_HOME = Path.home() / ".claude"
 CURSOR_HOME = Path.home() / ".cursor"
+EDITOR_USER_FOLDERS = {"VS Code": Path.home() / ".config" / "Code" / "User", "Cursor": Path.home() / ".config" / "Cursor" / "User"}
+HISTORY_EXCLUDE_SETTING = "workbench.localHistory.exclude"
+ENV_FILES_GLOB = "**/.env*"
+HISTORY_EXCLUDE_LINE = f"{json.dumps(HISTORY_EXCLUDE_SETTING)}: {json.dumps({ENV_FILES_GLOB: True})},"
 HOOK_FILE_NAME = "envh_ask.py"
 CURSOR_HOOK_MATCHER = "envh"
 INSTALL_PREFIX = Path("/opt/envh")
@@ -667,10 +671,83 @@ def step_cursor() -> Outcome:
     return step_connect("Cursor", CURSOR_HOME, cursor_changes)
 
 
+def settings_excluding_env_history(settings: Any) -> dict[str, Any] | None:
+    """The editor settings with .env files left out of local history, or None when they already are."""
+    if not isinstance(settings, dict):
+        raise ValueError("it doesn't hold a JSON object")
+    patterns = settings.get(HISTORY_EXCLUDE_SETTING, {})
+    if not isinstance(patterns, dict):
+        raise ValueError(f"its {HISTORY_EXCLUDE_SETTING} isn't an object")
+    if patterns.get(ENV_FILES_GLOB) is True:
+        return None
+    return {**settings, HISTORY_EXCLUDE_SETTING: {**patterns, ENV_FILES_GLOB: True}}
+
+
+def env_history_change(settings_path: Path) -> Change | None:
+    """None when .env files are already left out; a ValueError says why the file can't be changed safely."""
+    exists = settings_path.exists()
+    text = settings_path.read_text() if exists else ""
+    try:
+        settings = json.loads(text) if text.strip() else {}
+    except json.JSONDecodeError as error:
+        raise ValueError("it isn't plain JSON") from error
+    merged = settings_excluding_env_history(settings)
+    if merged is None:
+        return None
+    new_text = json.dumps(merged, indent=4, ensure_ascii=False) + "\n"
+    description = f"Add the setting to {tilde(settings_path)} ({'backed up first' if exists else 'new file'})"
+    return Change(description, lambda: write_with_backup(settings_path, new_text))
+
+
+def env_history_more(changes: list[Change], user_folders: list[Path]) -> str:
+    history_folders = [tilde(folder / "History") for folder in user_folders if (folder / "History").is_dir()]
+    more = [f"Adds this setting: {HISTORY_EXCLUDE_LINE.rstrip(',')}", *(change.description for change in changes)]
+    more.append("Copies already saved stay; envh scan finds them.")
+    if history_folders:
+        more.append(f"rm -r {' '.join(history_folders)} deletes them, with every other file's local history.")
+    return "\n".join([*more, 'Details: README, "Find leftover copies"'])
+
+
+def step_editor_history() -> Outcome:
+    user_folders = {editor: folder for editor, folder in EDITOR_USER_FOLDERS.items() if folder.is_dir()}
+    if not user_folders:
+        note("Skipped: neither VS Code nor Cursor is set up for this user.")
+        return Outcome(False, "skipped")
+    changes: dict[str, Change] = {}
+    left_alone: dict[str, str] = {}
+    for editor, folder in user_folders.items():
+        settings_path = folder / "settings.json"
+        try:
+            change = env_history_change(settings_path)
+        except ValueError as error:
+            left_alone[editor] = f"Left {tilde(settings_path)} as is: {error}. Add this line to it yourself:\n{HISTORY_EXCLUDE_LINE}"
+            continue
+        if change is not None:
+            changes[editor] = change
+    if not changes and not left_alone:
+        ok(f"Local history in {' and '.join(user_folders)} already leaves out .env files")
+        return Outcome(True, "already off")
+    line(f"Local history in {' and '.join([*changes, *left_alone])} keeps a copy of each file you save, .env files included.")
+    if changes:
+        if not ask("Leave .env files out of it?", env_history_more(list(changes.values()), list(user_folders.values()))):
+            return Outcome(False, "skipped")
+        for change in changes.values():
+            change.apply()
+            detail(change.description)
+        ok(f"Local history in {' and '.join(changes)} now leaves out .env files")
+    for warning in left_alone.values():
+        warn(warning)
+    by_hand = f"add it by hand for {' and '.join(left_alone)}"
+    if not changes:
+        return Outcome(False, by_hand)
+    return Outcome(True, "turned off" + (f"; {by_hand}" if left_alone else ""))
+
+
 STEPS: list[tuple[str, Callable[[], Outcome]]] = [
     ("Install envh", step_install),
     ("Start the console", step_console),
     ("Import keys", step_import),
+    ("Editor .env history", step_editor_history),
     ("Find stray keys", step_scan),
     ("Connect Claude Code", step_claude_code),
     ("Connect Cursor", step_cursor),

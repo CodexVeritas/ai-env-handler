@@ -234,6 +234,71 @@ def test_a_tool_that_is_not_set_up_is_skipped(tmp_path: Path) -> None:
     assert not (tmp_path / "missing").exists()
 
 
+def editor_user_folders(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *present: str) -> dict[str, Path]:
+    folders = {"VS Code": tmp_path / "Code" / "User", "Cursor": tmp_path / "Cursor" / "User"}
+    for editor in present:
+        folders[editor].mkdir(parents=True)
+    monkeypatch.setattr(wizard, "EDITOR_USER_FOLDERS", folders)
+    return folders
+
+
+def test_env_history_setting_is_merged_and_the_file_backed_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folders = editor_user_folders(monkeypatch, tmp_path, "VS Code")
+    settings_path = folders["VS Code"] / "settings.json"
+    original = '{"editor.fontSize": 14, "workbench.localHistory.exclude": {"**/secrets/**": true}}\n'
+    settings_path.write_text(original)
+    answer_inputs(monkeypatch, "")
+    assert wizard.step_editor_history() == wizard.Outcome(True, "turned off")
+    saved = json.loads(settings_path.read_text())
+    assert saved["editor.fontSize"] == 14
+    assert saved["workbench.localHistory.exclude"] == {"**/secrets/**": True, "**/.env*": True}
+    assert [backup.read_text() for backup in settings_path.parent.glob("settings.json.before-envh-*")] == [original]
+    assert not folders["Cursor"].exists()
+
+
+def test_a_second_env_history_run_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folders = editor_user_folders(monkeypatch, tmp_path, "VS Code", "Cursor")
+    (folders["VS Code"] / "settings.json").write_text('{"editor.fontSize": 14}\n')
+    answer_inputs(monkeypatch, "")
+    assert wizard.step_editor_history() == wizard.Outcome(True, "turned off")
+    written = {editor: (folder / "settings.json").read_text() for editor, folder in folders.items()}
+    answer_inputs(monkeypatch)
+    assert wizard.step_editor_history() == wizard.Outcome(True, "already off")
+    assert {editor: (folder / "settings.json").read_text() for editor, folder in folders.items()} == written
+    assert len(list(tmp_path.rglob("*.before-envh-*"))) == 1
+
+
+def test_a_settings_file_with_comments_is_left_alone_with_the_line_to_add(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folders = editor_user_folders(monkeypatch, tmp_path, "VS Code", "Cursor")
+    cursor_settings = folders["Cursor"] / "settings.json"
+    original = b'{\n    // bigger text\n    "editor.fontSize": 14,\n}\n'
+    cursor_settings.write_bytes(original)
+    answer_inputs(monkeypatch, "")
+    assert wizard.step_editor_history() == wizard.Outcome(True, "turned off; add it by hand for Cursor")
+    assert cursor_settings.read_bytes() == original
+    assert not list(folders["Cursor"].glob("*.before-envh-*"))
+    assert json.loads((folders["VS Code"] / "settings.json").read_text()) == {"workbench.localHistory.exclude": {"**/.env*": True}}
+    output = capsys.readouterr().out
+    assert f"Left {cursor_settings} as is: it isn't plain JSON." in output
+    assert '"workbench.localHistory.exclude": {"**/.env*": true},' in output
+
+
+def test_editors_that_are_not_set_up_are_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    editor_user_folders(monkeypatch, tmp_path)
+    answer_inputs(monkeypatch)
+    assert wizard.step_editor_history() == wizard.Outcome(False, "skipped")
+    assert "neither VS Code nor Cursor" in capsys.readouterr().out
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("settings", [[], {"workbench.localHistory.exclude": ["**/.env*"]}])
+def test_unexpected_editor_settings_shapes_are_refused(settings: object) -> None:
+    with pytest.raises(ValueError):
+        wizard.settings_excluding_env_history(settings)
+
+
 def test_quit_answer_stops_the_wizard(monkeypatch: pytest.MonkeyPatch) -> None:
     answer_inputs(monkeypatch, "maybe", "q")
     with pytest.raises(wizard.Quit):
