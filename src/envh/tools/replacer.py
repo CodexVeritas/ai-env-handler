@@ -1,7 +1,8 @@
 """Replace every copy of chosen keys in files with a placeholder, in place. Standard library only.
 
 Each file is read now and scanned again, so only what is there at that moment is replaced, and it is written back byte
-for byte apart from the replaced keys. There is no backup on purpose: a backup would be one more copy of the keys.
+for byte apart from the replaced keys. A copy the scan found only by searching for a stored key is replaced where the
+scan saw it, if the same value is still there. There is no backup on purpose: a backup would be one more copy of the keys.
 """
 
 from __future__ import annotations
@@ -14,7 +15,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
+from envh.common import value_id
 from envh.tools.scanner import place_of, scan_text
 
 IN_USE_SECONDS = 600
@@ -28,6 +31,16 @@ def placeholder(kind: str, fingerprint: str) -> str:
     return f"envh-removed-{kind}-{fingerprint}"
 
 
+class Spot(NamedTuple):
+    """Where the scan saw a copy, so it can be replaced there once the value is checked to be the same."""
+
+    line: int
+    column: int
+    length: int
+    fingerprint: str
+    kind: str
+
+
 @dataclass
 class Outcome:
     replaced: dict[str, int] = field(default_factory=dict)
@@ -39,7 +52,16 @@ def in_git_repo(path: Path) -> bool:
     return any((folder / ".git").exists() for folder in path.parents)
 
 
-def replace_in_file(path: Path, fingerprints: set[str], now: float) -> tuple[int, str]:
+def without_overlaps(changes: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
+    """The changes to one line with duplicates dropped and, of two that overlap, only the first kept."""
+    kept: list[tuple[int, int, str]] = []
+    for column, length, replacement in sorted(set(changes)):
+        if not kept or column >= kept[-1][0] + kept[-1][1]:
+            kept.append((column, length, replacement))
+    return kept
+
+
+def replace_in_file(path: Path, fingerprints: set[str], now: float, spots: list[Spot] | tuple[Spot, ...] = ()) -> tuple[int, str]:
     """(copies replaced, why nothing was) for one file. A file changed in the last IN_USE_SECONDS is left alone, since a
     program, such as an agent writing its transcript, may still be writing it and would lose what it writes. A rewritten
     file keeps its timestamp, so envh's own rewrite never looks like that."""
@@ -59,9 +81,14 @@ def replace_in_file(path: Path, fingerprints: set[str], now: float) -> tuple[int
     for hit in scan_text(path, text):
         if hit.fingerprint in fingerprints and hit.kind not in LEFT_FOR_HAND:
             edits[hit.line - 1].append((hit.column, hit.length, placeholder(hit.kind, hit.fingerprint)))
+    lines = text.split("\n")
+    for spot in spots:
+        seen = lines[spot.line - 1][spot.column:spot.column + spot.length] if 0 < spot.line <= len(lines) else ""
+        if spot.fingerprint in fingerprints and spot.kind not in LEFT_FOR_HAND and len(seen) == spot.length and value_id(seen) == spot.fingerprint:
+            edits[spot.line - 1].append((spot.column, spot.length, placeholder(spot.kind, spot.fingerprint)))
     if not edits:
         return 0, "the key isn't in it any more"
-    lines = text.split("\n")
+    edits = {index: without_overlaps(changes) for index, changes in edits.items()}
     for index, changes in edits.items():
         line = lines[index]
         for column, length, replacement in sorted(changes, reverse=True):
@@ -99,13 +126,13 @@ def replaced_pairs(log_folder: Path) -> set[tuple[str, str]]:
     return pairs
 
 
-def replace_all(targets: dict[str, set[str]], log_folder: Path) -> Outcome:
+def replace_all(targets: dict[str, set[str]], log_folder: Path, spots: dict[str, list[Spot]] | None = None) -> Outcome:
     """Replace the chosen keys in each file, and log what was replaced (paths and ids, never values) beside the scan."""
     outcome = Outcome()
     now = time.time()
     log_lines: list[str] = []
     for path, fingerprints in sorted(targets.items()):
-        count, problem = replace_in_file(Path(path), fingerprints, now)
+        count, problem = replace_in_file(Path(path), fingerprints, now, (spots or {}).get(path, ()))
         if problem:
             outcome.skipped[path] = problem
             continue

@@ -19,7 +19,7 @@ from envh.server.console.tui import DIM, MARKS, Line, Span, styled, wrap
 ACTIVITY_KEPT = 500
 TEXT_INDENT = " " * len("  14:32  ✓ ")
 NO_REASON = "(no reason given)"
-KIND_NAMES = {"session": "Session request", "run": "Run request", "preset": "Preset proposal", "import": "Import request", "match": "Match request"}
+KIND_NAMES = {"session": "Session request", "run": "Run request", "preset": "Preset proposal", "import": "Import request", "match": "Match request", "search": "Search request"}
 UNSHOWN = {"reload", "broker_start", "broker_stop", "run_auto_approved", "client_connection_lost"}
 
 

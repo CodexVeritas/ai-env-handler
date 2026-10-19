@@ -86,6 +86,7 @@ Import more projects later with: envh import <folder>"""
 SCAN_MORE = """Checks shell history, Claude Code transcripts, notebooks and other repos.
 Skips installed packages, caches and browser profiles; the report lists what it skipped.
 Saves where each copy is, never the key itself. Then the explorer opens so you can go through it.
+It also offers to search for copies of your vault's keys; you approve that on the console.
 Scan somewhere else with: envh scan <folder>"""
 SAVE_MORE = """Each scan gets its own dated folder inside this one: report.txt, files.txt and hits.json.
 They hold where keys are, never the keys, so they are safe to keep."""

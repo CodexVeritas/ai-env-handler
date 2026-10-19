@@ -27,16 +27,15 @@ from pathlib import Path
 
 from envh.client.transport import ClientError, Connection, waiting_notice
 from envh.common import peek, printable
-from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, in_git_repo, replace_all, replaced_pairs
-from envh.tools.saved_files import SCANS, saved_files_root, shown_path
-from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, place_of, plural, read_if_text, scan_text, shown_folder
+from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, Spot, in_git_repo, replace_all, replaced_pairs
+from envh.tools.saved_files import SCANS, VAULT_FILE, save_vault_matches, saved_files_root, shown_path
+from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, copies_label, place_of, plural, read_if_text, scan_text, shown_folder
 
 TIERS = ("high", "medium", "low", "fake", "all")
 TIER_LABELS = {"high": "Likely", "medium": "Possible", "low": "Unlikely", "fake": "Placeholder", "all": "All"}
 TIER_PHRASES = {"high": "likely keys", "medium": "possible keys", "low": "unlikely keys", "fake": "placeholders", "all": "every list"}
 GROUPINGS = ("type", "place")
 VAULT_FILTERS = ("all keys", "in your vault", "not in your vault")
-VAULT_FILE = "vault.json"
 GROUP_ABOVE = 5
 LINES_SHOWN_PER_FILE = 3
 CONTEXT_LINES = 3
@@ -64,6 +63,7 @@ class Found:
 
     path: str
     line: int
+    column: int
     confidence: str
     kind: str
     name: str
@@ -116,10 +116,6 @@ class FileView:
     problem: str = ""
     top: int = 0
     revealed_until: float | None = None
-
-
-def copies_label(count: int) -> str:
-    return f"{count:,} {'copy' if count == 1 else 'copies'}"
 
 
 def styled(code: str, text: str) -> str:
@@ -212,7 +208,7 @@ def load_scan(folder: Path) -> list[Found]:
     except (OSError, ValueError) as error:
         raise ClientError(str(error), 2) from error
     return [
-        Found(hit["path"], hit["line"], hit["confidence"], hit["kind"], hit["name"], hit["shown"], hit["fingerprint"], hit["length"], place_of(hit["path"]))
+        Found(hit["path"], hit["line"], hit["column"], hit["confidence"], hit["kind"], hit["name"], hit["shown"], hit["fingerprint"], hit["length"], place_of(hit["path"]))
         for hit in hits
         if (hit["path"], hit["fingerprint"]) not in gone
     ]
@@ -554,7 +550,11 @@ class Explorer:
         self.work = lambda: self.replace(confirm.targets)
 
     def replace(self, targets: dict[str, set[str]]) -> None:
-        outcome = replace_all(targets, self.folder)
+        spots: dict[str, list[Spot]] = defaultdict(list)
+        for hit in self.hits:
+            if hit.fingerprint in targets.get(hit.path, ()):
+                spots[hit.path].append(Spot(hit.line, hit.column, hit.length, hit.fingerprint, hit.kind))
+        outcome = replace_all(targets, self.folder, spots)
         self.hits = [hit for hit in self.hits if not (hit.path in outcome.replaced and hit.fingerprint in targets[hit.path])]
         self.tier_counts = {tier: len({hit.fingerprint for hit in self.hits if tier == "all" or hit.confidence == tier}) for tier in TIERS}
         self._index = None
@@ -817,8 +817,7 @@ def match_against_vault(folder: Path, hits: list[Found], sock: Path) -> dict[str
         with waiting_notice(reply, None):
             reply = conn.recv_ok()
     matches: dict[str, list[str]] = reply.get("matches") or {}
-    with os.fdopen(os.open(folder / VAULT_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
-        json.dump({"matches": matches, "checked": datetime.now().isoformat(timespec="seconds")}, handle, indent=2)
+    save_vault_matches(folder, matches)
     return matches
 
 

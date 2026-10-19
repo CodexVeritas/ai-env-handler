@@ -15,7 +15,7 @@ DETACHED_GRACE = timedelta(minutes=10)
 HISTORY_RETENTION = timedelta(hours=1)
 MAX_PENDING_PER_USER = 20
 RESUME_CODE_BYTES = 8
-RequestKind = Literal["session", "run", "import", "preset", "match"]
+RequestKind = Literal["session", "run", "import", "preset", "match", "search"]
 Outcome = Literal["approved", "denied", "withdrawn"]
 
 

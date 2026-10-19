@@ -482,6 +482,18 @@ async def test_a_match_card_says_what_approving_reveals(harness: Harness) -> Non
     assert "No values are sent either way" in screen and "approve only a scan you ran" in screen
 
 
+async def test_a_search_card_says_what_approving_shares(harness: Harness) -> None:
+    console = new_console(harness)
+    long_key = "sk-proj-" + "A1b2C3d4" * 5
+    harness.broker.vault.set("LONG_KEY", long_key)
+    harness.broker.request_search("envh scan", harness.provenance())
+    screen = console.screen(140, 40)
+    assert "Search request #" in screen and "asks to search your files for copies of your keys" in screen
+    assert "first and last few characters and the length of 1 key" in screen and "Never the keys" in screen
+    assert "Once, which of up to 50,000 values it finds are your keys" in screen and "so approve only" in screen
+    assert "3 keys under 20 characters" in screen and long_key not in screen
+
+
 async def test_a_preset_proposal_card_says_what_would_change(harness: Harness) -> None:
     console = new_console(harness)
     harness.broker.request_preset("presets: {team: {env: {OPENAI_API_KEY: DATABASE_URL}}}", "repoint", harness.provenance())

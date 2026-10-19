@@ -13,13 +13,14 @@ import re
 import sys
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterator, TextIO
 
-from envh.common import peek, value_id
-from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, saved_files_root, say_where_saved, shown_path
+from envh.common import MAX_MATCH_IDS, peek, value_id
+from envh.tools.saved_files import FOLDER_NAME, SCANS, ask_where, new_dated_folder, save_vault_matches, saved_files_root, say_where_saved, shown_path
 
 # Provider formats that are distinctive enough to recognize anywhere, including transcripts and shell history. Each
 # regex starts with literal text, which lets the regex engine jump straight to candidates; one that started with a
@@ -382,27 +383,70 @@ def value_matches(text: str) -> list[tuple[int, int, str, int]]:
     return kept
 
 
+# A place that starts and ends like a stored key, at its length; the broker says later whether it is one.
+UNCONFIRMED_COPY = "unconfirmed copy"
+
+
+class KeyEnds:
+    """Where copies of stored keys could be: places that start and end like one, at its length, with no whitespace in
+    between. Each key's shape is a regex; those that start with the same character are joined into one pass."""
+
+    def __init__(self, keys: list[tuple[str, str, int]]) -> None:
+        self.count = len(keys)
+        by_first: dict[str, list[re.Pattern[str]]] = defaultdict(list)
+        for start, end, length in keys:
+            by_first[start[0]].append(re.compile(f"{re.escape(start)}\\S{{{length - len(start) - len(end)}}}{re.escape(end)}"))
+        self.passes = tuple((re.compile("|".join(shape.pattern for shape in shapes)), tuple(shapes)) for shapes in by_first.values())
+
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        found: set[tuple[int, int]] = set()
+        for joined, shapes in self.passes:
+            candidate = joined.search(text)
+            while candidate is not None:
+                start = candidate.start()
+                found.update(match.span() for match in (shape.match(text, start) for shape in shapes) if match is not None)
+                candidate = joined.search(text, start + 1)
+        return sorted(found)
+
+
+@dataclass(frozen=True)
+class VaultSearch:
+    """A search for copies of stored keys: where to look, and confirm, which asks the broker once which of the found
+    values are stored keys. confirm returns None when it could not ask."""
+
+    keys: KeyEnds
+    confirm: Callable[[list[str]], dict[str, list[str]] | None]
+
+
 def shown_value(value: str, fixed: int = 0) -> str:
     """The format's literal prefix, then the first and last few characters of the rest, as the console shows a key."""
     return value[:fixed] + peek(value[fixed:])
 
 
-def scan_text(path: Path, text: str) -> Iterator[Hit]:
+def scan_text(path: Path, text: str, vault: KeyEnds | None = None) -> Iterator[Hit]:
+    """Every hit in the text, line by line. With vault, a place shaped like a stored key that no other hit covers is
+    reported as an UNCONFIRMED_COPY."""
     lines = text.split("\n")
     matches_by_line: dict[int, list[tuple[int, int, str, int]]] = defaultdict(list)
+    copies_by_line: dict[int, list[tuple[int, int]]] = defaultdict(list)
     matches = value_matches(text)
-    if matches:
+    copies = vault.spans(text) if vault is not None else []
+    if matches or copies:
         line_starts = list(itertools.accumulate((len(line) + 1 for line in lines[:-1]), initial=0))
         for start, end, kind, fixed in matches:
             index = bisect.bisect_right(line_starts, start) - 1
             matches_by_line[index].append((start - line_starts[index], end - line_starts[index], kind, fixed))
+        for start, end in copies:
+            index = bisect.bisect_right(line_starts, start) - 1
+            copies_by_line[index].append((start - line_starts[index], end - line_starts[index]))
     for index, line in enumerate(lines):
+        found: list[Hit] = []
         spans = matches_by_line.get(index, [])
         for start, end, kind, fixed in spans:
             value = line[start:end]
             harmless = (kind == "database-url" and default_login(value)) or (kind == "jwt" and demo_token(value))
             confidence = "fake" if looks_fake(value, fixed) or harmless else "high"
-            yield Hit(path, index + 1, start, confidence, kind, "", shown_value(value, fixed), value_id(value), len(value), fixed)
+            found.append(Hit(path, index + 1, start, confidence, kind, "", shown_value(value, fixed), value_id(value), len(value), fixed))
         for match in ASSIGNMENT_REGEX.finditer(line):
             name = match.group("name")
             if SECRET_WORD.search(name, 1) is None:
@@ -414,7 +458,42 @@ def scan_text(path: Path, text: str) -> Iterator[Hit]:
                 continue
             confidence, service = classify_name(name)
             confidence = "fake" if looks_fake(value) else confidence
-            yield Hit(path, index + 1, match.start("value"), confidence, service, name, peek(value), value_id(value), len(value))
+            found.append(Hit(path, index + 1, match.start("value"), confidence, service, name, peek(value), value_id(value), len(value)))
+        yield from found
+        covered = {(hit.column, hit.length) for hit in found}
+        for start, end in copies_by_line.get(index, []):
+            if (start, end - start) not in covered:
+                value = line[start:end]
+                yield Hit(path, index + 1, start, "high", UNCONFIRMED_COPY, "", peek(value), value_id(value), len(value))
+
+
+def with_vault_copies(hits: list[Hit], matches: dict[str, list[str]]) -> list[Hit]:
+    """The hits once the broker has said which found values are stored keys. Each stored key is a likely key. A copy
+    found only by the search takes its type from the stored key's name, an unconfirmed one is dropped, and another hit
+    overlapping a copy on its line is dropped, since the copy is exact."""
+    copies: dict[tuple[Path, int], list[tuple[int, int]]] = defaultdict(list)
+    for hit in hits:
+        if hit.kind == UNCONFIRMED_COPY and hit.fingerprint in matches:
+            copies[(hit.path, hit.line)].append((hit.column, hit.column + hit.length))
+    kept: list[Hit] = []
+    for hit in hits:
+        if hit.kind == UNCONFIRMED_COPY:
+            if hit.fingerprint in matches:
+                kept.append(replace(hit, kind=classify_name(matches[hit.fingerprint][0])[1]))
+            continue
+        if any(start < hit.column + hit.length and hit.column < end for start, end in copies.get((hit.path, hit.line), [])):
+            continue
+        kept.append(replace(hit, confidence="high") if hit.fingerprint in matches else hit)
+    return kept
+
+
+def ids_to_confirm(hits: list[Hit]) -> tuple[list[str], int]:
+    """The ids to ask the broker about, copies found only by the search first, then by tier, and how many were left
+    out because at most MAX_MATCH_IDS are asked at once."""
+    order = {confidence: rank for rank, confidence in enumerate(CONFIDENCE_ORDER)}
+    ranked = sorted(hits, key=lambda hit: (hit.kind != UNCONFIRMED_COPY, order[hit.confidence]))
+    ids = list(dict.fromkeys(hit.fingerprint for hit in ranked))
+    return ids[:MAX_MATCH_IDS], max(len(ids) - MAX_MATCH_IDS, 0)
 
 
 def read_if_text(path: Path) -> str | None:
@@ -474,7 +553,7 @@ def find_files(roots: list[Path], max_bytes: int, unreadable: list[Path], found:
     return files
 
 
-def scan_files(files: list[tuple[Path, int]], unreadable: list[Path], progress: Progress | None = None) -> tuple[list[Hit], int]:
+def scan_files(files: list[tuple[Path, int]], unreadable: list[Path], progress: Progress | None = None, vault: KeyEnds | None = None) -> tuple[list[Hit], int]:
     hits: list[Hit] = []
     scanned = 0
     done = 0
@@ -491,7 +570,7 @@ def scan_files(files: list[tuple[Path, int]], unreadable: list[Path], progress: 
         if text is None:
             continue
         scanned += 1
-        hits.extend(scan_text(path, text))
+        hits.extend(scan_text(path, text, vault))
     return hits, scanned
 
 
@@ -574,6 +653,10 @@ def skipped_folders_help() -> str:
     return f"Skipped folders: {', '.join(sorted(SKIP_DIR_NAMES, key=str.lower))}, and any folder tagged with {CACHE_TAG}."
 
 
+def copies_label(count: int) -> str:
+    return f"{count:,} {'copy' if count == 1 else 'copies'}"
+
+
 def plural(count: int, word: str) -> str:
     return f"{count:,} {word}" + ("" if count == 1 else "s")
 
@@ -597,7 +680,7 @@ def headline(hits: list[Hit], scanned: int, elapsed: float) -> str:
 def confidence_lines(hits: list[Hit]) -> list[str]:
     tiers = group_by(hits, lambda hit: hit.confidence)
     return [
-        f"Likely keys, in a provider's key format: {spread(tiers['high'])}. Start here.",
+        f"Likely keys, in a provider's key format or your vault: {spread(tiers['high'])}. Start here.",
         f"Possible keys, assigned to a key-like name such as OPENAI_API_KEY=...: {spread(tiers['medium'])}.",
         f"Unlikely keys, other names holding KEY, TOKEN, SECRET or PASS, such as cache_key: {spread(tiers['low'])}.",
         f"Placeholders, fake or default values such as 123456789 or postgres:postgres@localhost: {spread(tiers['fake'])}.",
@@ -610,7 +693,7 @@ def notes(unreadable: list[Path], say: Callable[[str], None]) -> None:
     say("")
     for line in (*SKIPPED_SUMMARY, *NOT_SCANNED_NOTE):
         say(line)
-    say(f"Keys without a distinctive format ({', '.join(NAME_ONLY_PROVIDERS)}) are only recognized inside named assignments such as FRED_API_KEY=...; a bare copy of one in a transcript cannot be identified reliably.")
+    say(f"Keys without a distinctive format ({', '.join(NAME_ONLY_PROVIDERS)}) are only recognized inside named assignments such as FRED_API_KEY=...; a bare copy of one in a transcript is found only when the scan searches for your vault's keys.")
 
 
 def summary_section(hits: list[Hit], say: Callable[[str], None]) -> None:
@@ -668,7 +751,7 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     say("Sections: Summary, Likely keys, Possible keys, Unlikely keys, Placeholders, Every hit by file, Notes.")
     say("\n== Summary ==")
     summary_section(hits, say)
-    say("\n== Likely keys: values in a provider's key format, with every file each is in ==")
+    say("\n== Likely keys: values in a provider's key format or your vault, with every file each is in ==")
     say("Private-key ids come from the BEGIN ... PRIVATE KEY line, so keys of the same type share an id.")
     values_section(tiers["high"], say, with_paths=True)
     say("\n== Possible keys: values assigned to key-like names, with every file each is in ==")
@@ -690,12 +773,14 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
         say("  " + line)
 
 
-def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, report_dir: Path, say: Callable[[str], None] = print) -> None:
+def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, report_dir: Path, say: Callable[[str], None] = print, searched: str | None = None) -> None:
     """The terminal's short version of the report: a fixed number of lines however many keys were found."""
     say(headline(hits, scanned, elapsed))
     if hits:
         for line in confidence_lines(hits):
             say("  " + line)
+    if searched:
+        say("  · " + searched)
     if unreadable:
         say(f"  · {len(unreadable):,} " + ("file or folder" if len(unreadable) == 1 else "files or folders") + " could not be read (permissions).")
     say("  · What the scan skips and cannot see is under Notes at the end of report.txt.")
@@ -723,8 +808,23 @@ def save_results(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed:
     return report_dir
 
 
-def main(args: argparse.Namespace) -> tuple[int, Path | None]:
-    """The exit code (1 when something was found) and the folder the results were saved in, if they were."""
+def confirmed_copies(hits: list[Hit], vault: VaultSearch) -> tuple[list[Hit], dict[str, list[str]] | None, str]:
+    """The hits once the broker has said which are stored keys, its answer, and a line saying what the search found."""
+    ids, left_out = ids_to_confirm(hits)
+    if left_out:
+        print(f"envh scan: {left_out:,} found values are not checked against your vault; at most {MAX_MATCH_IDS:,} are checked at once.", file=sys.stderr)
+    matches = vault.confirm(ids) if ids else {}
+    if matches is None:
+        return [hit for hit in hits if hit.kind != UNCONFIRMED_COPY], None, "Not checked against your vault (see above)."
+    only_by_search = sum(hit.kind == UNCONFIRMED_COPY and hit.fingerprint in matches for hit in hits)
+    hits = with_vault_copies(hits, matches)
+    yours = len({name for names in matches.values() for name in names})
+    return hits, matches, f"Searched for {plural(vault.keys.count, 'vault key')}: {plural(yours, 'stored key')} found, {copies_label(only_by_search)} only by that search."
+
+
+def main(args: argparse.Namespace, vault_search: Callable[[], AbstractContextManager[VaultSearch | None]] | None = None) -> tuple[int, Path | None]:
+    """The exit code (1 when something was found) and the folder the results were saved in, if they were. vault_search,
+    asked after where to save, may start a search for copies of stored keys; its answer is saved as vault.json."""
     roots = [Path(raw).expanduser().absolute() for raw in (args.paths or [str(Path.home())])]
     missing = [root for root in roots if not root.exists()]
     if missing:
@@ -736,15 +836,20 @@ def main(args: argparse.Namespace) -> tuple[int, Path | None]:
     if parent.exists() and not parent.is_dir():
         print(f"envh scan: {parent} is a file, not a folder", file=sys.stderr)
         return 2, None
-    progress = Progress(sys.stderr) if sys.stderr.isatty() else None
-    started = time.monotonic()
-    unreadable: list[Path] = []
-    try:
-        files = find_files(roots, args.max_size * 1024 * 1024, unreadable, progress.finding if progress is not None else None)
-        hits, scanned = scan_files(files, unreadable, progress)
-    finally:
-        if progress is not None:
-            progress.clear()
+    matches: dict[str, list[str]] | None = None
+    searched: str | None = None
+    with vault_search() if vault_search is not None else nullcontext() as vault:
+        progress = Progress(sys.stderr) if sys.stderr.isatty() else None
+        started = time.monotonic()
+        unreadable: list[Path] = []
+        try:
+            files = find_files(roots, args.max_size * 1024 * 1024, unreadable, progress.finding if progress is not None else None)
+            hits, scanned = scan_files(files, unreadable, progress, vault.keys if vault is not None else None)
+        finally:
+            if progress is not None:
+                progress.clear()
+        if vault is not None:
+            hits, matches, searched = confirmed_copies(hits, vault)
     elapsed = time.monotonic() - started
     finished = datetime.now()
     try:
@@ -755,8 +860,10 @@ def main(args: argparse.Namespace) -> tuple[int, Path | None]:
             report(hits, scanned, unreadable, elapsed, roots, finished)
             return (1 if hits else 0), None
     else:
+        if matches is not None:
+            save_vault_matches(report_dir, matches)
         if not args.json:
-            summary(hits, scanned, unreadable, elapsed, report_dir)
+            summary(hits, scanned, unreadable, elapsed, report_dir, searched=searched)
             return (1 if hits else 0), report_dir
         print(f"Results saved in {shown_path(report_dir)}", file=sys.stderr)
     print(json.dumps(results_json(hits, scanned, unreadable), indent=2))

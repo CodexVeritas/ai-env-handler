@@ -1,4 +1,4 @@
-"""Control plane: newline-delimited JSON over a Unix socket, one operation per connection."""
+"""Control plane: newline-delimited JSON over a Unix socket, one operation per connection (a search sends a second line, its match)."""
 
 from __future__ import annotations
 
@@ -320,6 +320,27 @@ class Connection:
         if not await self._decided_or_withdrawn(request):
             return
         await self._reply_decision(request)
+
+    async def op_search(self, message: dict[str, Any]) -> None:
+        """Two steps on one connection: once approved, the requester gets each stored key's ends and length; then, once,
+        it sends the ids of the values it found that way and learns which are stored keys."""
+        request = self.broker.request_search(self._reason(message), self.provenance)
+        await self.send(self._pending(request, count=request.summary["count"]))
+        if not await self._decided_or_withdrawn(request):
+            return
+        await self._reply_decision(request)
+        if request.decision.result().outcome != "approved":
+            return
+        line = await self.reader.readline()
+        if not line:
+            return
+        try:
+            follow_up = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise RequestError(f"malformed request: {error}") from error
+        if not isinstance(follow_up, dict) or follow_up.get("op") != "match":
+            raise RequestError("a search is followed only by its match")
+        await self.send({"ok": True, "request_id": request.id, "matches": self.broker.match_after_search(request, follow_up.get("ids"))})
 
     async def op_import(self, message: dict[str, Any]) -> None:
         secrets = message.get("secrets") or {}

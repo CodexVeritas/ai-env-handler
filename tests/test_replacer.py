@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from envh.common import value_id
-from envh.tools.replacer import placeholder, replace_all, replace_in_file, replaced_pairs
+from envh.tools.replacer import Spot, placeholder, replace_all, replace_in_file, replaced_pairs
 from envh.tools.scanner import scan_paths, scan_text
 from tests.conftest import HEX, random_text
 
@@ -81,3 +81,22 @@ def test_the_log_lists_what_was_replaced(tmp_path: Path) -> None:
     file = old_file(tmp_path / "a" / ".env", f"KEY={OPENROUTER}\n".encode())
     replace_all({str(file): {value_id(OPENROUTER)}}, tmp_path)
     assert replaced_pairs(tmp_path) == {(str(file), value_id(OPENROUTER))} and replaced_pairs(tmp_path / "none") == set()
+
+
+def test_a_copy_found_only_by_the_vault_search_is_replaced_where_the_scan_saw_it(tmp_path: Path) -> None:
+    file = old_file(tmp_path / "notes.md", f"my fred key: {FRED}\nagain {FRED} here\n".encode())
+    spots = [Spot(1, 13, len(FRED), value_id(FRED), "fred"), Spot(2, 6, len(FRED), value_id(FRED), "fred")]
+    assert replace_in_file(file, {value_id(FRED)}, time.time()) == (0, "the key isn't in it any more")
+    assert replace_in_file(file, {value_id(FRED)}, time.time(), spots) == (2, "")
+    removed = placeholder("fred", value_id(FRED))
+    assert file.read_text() == f"my fred key: {removed}\nagain {removed} here\n"
+    assert replace_in_file(file, {value_id(FRED)}, time.time(), spots) == (0, "the key isn't in it any more")
+
+
+def test_overlapping_copies_are_replaced_once_and_the_line_stays_whole(tmp_path: Path) -> None:
+    key = random_text("overlap", 24)
+    file = old_file(tmp_path / "app.py", f"API_KEY={key}/v2/extra\n".encode())
+    longer = f"{key}/v2/extra"
+    assert [hit.fingerprint for hit in scan_text(file, file.read_text())] == [value_id(longer)]
+    count, _ = replace_in_file(file, {value_id(key), value_id(longer)}, time.time(), [Spot(1, 8, len(key), value_id(key), "unknown")])
+    assert count == 1 and file.read_text() == f"API_KEY={placeholder('unknown', value_id(key))}/v2/extra\n"

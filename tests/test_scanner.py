@@ -10,10 +10,14 @@ from pathlib import Path
 
 import pytest
 
-from envh.common import peek
+from envh.common import peek, peek_ends
 from envh.tools.saved_files import ask_where
 from tests.conftest import HEX, random_text
-from envh.tools.scanner import COMPILED_PATTERNS, FORMAT_PASSES, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_fake, looks_placeholder, main, place_of, scan_paths, scan_text, shown_value, value_id
+import envh.tools.scanner as scanner_module
+from envh.tools.scanner import (
+    COMPILED_PATTERNS, FORMAT_PASSES, STANDALONE_KINDS, UNCONFIRMED_COPY, VALUE_PATTERNS, KeyEnds, Progress, classify_name, ids_to_confirm, looks_fake, looks_placeholder, main,
+    place_of, scan_paths, scan_text, shown_value, value_id, with_vault_copies,
+)
 
 OPENAI = "sk-proj-" + random_text("openai", 48)
 OPENROUTER = "sk-or-v1-" + random_text("openrouter", 64, HEX)
@@ -265,7 +269,7 @@ def test_results_are_saved_to_a_private_folder_and_the_terminal_gets_a_summary(t
     assert any("In short (details at the top)" in line for line in report.splitlines()[-6:])
     shown = capsys.readouterr().out
     assert f"Results saved in ~/envh-backups-and-scans/scans/{report_dir.name}" in shown and "notes.md" not in shown
-    assert "90 key-shaped strings in 30 files" in shown and "Likely keys, in a provider's key format: 1 distinct value in 30 files" in shown
+    assert "90 key-shaped strings in 30 files" in shown and "Likely keys, in a provider's key format or your vault: 1 distinct value in 30 files" in shown
     for entry in report_dir.iterdir():
         assert OPENAI not in entry.read_text() and FRED not in entry.read_text()
     assert scan_paths([report_dir], 1024 * 1024)[0] == []
@@ -376,6 +380,41 @@ def test_a_prefix_and_a_long_random_run_is_a_key_not_a_name() -> None:
     hits = list(scan_text(Path("app.py"), text))
     assert [hit.name for hit in hits] == ["HYPERBROWSER_API_KEY", "SERVICE_TOKEN"]
     assert (hits[0].confidence, hits[0].kind) == ("medium", "hyperbrowser")
+
+
+def stored(*values: str) -> KeyEnds:
+    return KeyEnds([(*peek_ends(value), len(value)) for value in values])
+
+
+def test_the_vault_search_finds_copies_the_rules_miss_and_keeps_those_the_broker_confirms() -> None:
+    fred = random_text("vault fred", 32, HEX)
+    text = "\n".join([
+        f"my fred key: {fred}",
+        f"curl -H 'X-Api-Key: {fred}' https://api.example.com",
+        f'{{"key": "{fred}"}}',
+        f"FRED_API_KEY={fred}",
+        f"{fred[:16]} {fred[16:]}",
+    ])
+    hits = list(scan_text(Path("t.jsonl"), text + "\n", stored(fred)))
+    assert [(hit.line, hit.kind) for hit in hits] == [(1, UNCONFIRMED_COPY), (2, UNCONFIRMED_COPY), (3, UNCONFIRMED_COPY), (4, "fred")]
+    assert fred not in str([hit.to_json() for hit in hits])
+    confirmed = with_vault_copies(hits, {value_id(fred): ["NEWS_BOT_FRED_API_KEY"]})
+    assert [(hit.line, hit.kind, hit.confidence) for hit in confirmed] == [(1, "fred", "high"), (2, "fred", "high"), (3, "fred", "high"), (4, "fred", "high")]
+    assert with_vault_copies(hits, {}) == [hits[3]]
+
+
+def test_a_hit_overlapping_a_confirmed_copy_is_dropped_since_the_copy_is_exact() -> None:
+    key = random_text("overlap", 24)
+    hits = list(scan_text(Path("app.py"), f"API_KEY={key}/v2/extra\n", stored(key)))
+    assert [(hit.kind, hit.length) for hit in hits] == [("unknown", len(key) + 9), (UNCONFIRMED_COPY, len(key))]
+    assert [(hit.kind, hit.length) for hit in with_vault_copies(hits, {value_id(key): ["MY_TOKEN"]})] == [("unknown", len(key))]
+
+
+def test_copies_found_only_by_the_search_are_checked_first_when_there_are_too_many(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = random_text("first", 24)
+    hits = list(scan_text(Path("f"), f"FRED_API_KEY={FRED}\n{OPENROUTER}\nkey: {key}\n", stored(key)))
+    monkeypatch.setattr(scanner_module, "MAX_MATCH_IDS", 2)
+    assert ids_to_confirm(hits) == ([value_id(key), value_id(OPENROUTER)], 1)
 
 
 @pytest.mark.parametrize(("path", "place"), [
