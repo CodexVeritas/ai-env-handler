@@ -410,7 +410,7 @@ class Broker:
         wanted = checked_match_ids(ids)
         request.summary["answered"] = True
         matches = self.vault_matches(wanted)
-        self.audit.event("match_answered", id=request.id, asked=len(wanted), matched=sorted(name for names in matches.values() for name in names))
+        self.audit.event("match_answered", id=request.id, uid=request.provenance.uid, asked=len(wanted), matched=sorted(name for names in matches.values() for name in names))
         return matches
 
     def vault_matches(self, ids: list[str]) -> dict[str, list[str]]:
@@ -499,11 +499,11 @@ class Broker:
             self.audit.event("import_applied", added=request.summary["added"], reused=request.summary["reused"], renamed=request.summary["renamed"], presets=request.summary["presets"])
         elif request.kind == "search":
             request.result = {"keys": self.search_keys()}
-            self.audit.event("search_answered", id=request.id, keys=len(request.result["keys"]))
+            self.audit.event("search_answered", id=request.id, uid=request.provenance.uid, keys=len(request.result["keys"]))
         elif request.kind == "match":
             matches = self.vault_matches(request.summary["ids"])
             request.result = {"matches": matches}
-            self.audit.event("match_answered", id=request.id, asked=request.summary["count"], matched=sorted(name for names in matches.values() for name in names))
+            self.audit.event("match_answered", id=request.id, uid=request.provenance.uid, asked=request.summary["count"], matched=sorted(name for names in matches.values() for name in names))
         self.state.decide(request, approved=True, by=by)
         self.audit.event("decision", id=request.id, uid=request.provenance.uid, outcome="approved", by=by)
 

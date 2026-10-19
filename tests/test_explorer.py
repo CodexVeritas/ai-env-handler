@@ -276,6 +276,21 @@ def test_the_file_view_shows_and_hides_copies_only_the_vault_search_found(tmp_pa
     assert stored not in rows and other not in rows
 
 
+def test_the_file_view_finds_a_vault_copy_inside_a_longer_value_the_rescan_reports(tmp_path: Path) -> None:
+    stored = random_text("inside", 24)
+    app = tmp_path / "project" / "app.py"
+    app.parent.mkdir(parents=True)
+    app.write_text(f"API_KEY={stored}/v2/extra\n")
+    vault = {value_id(stored): ["MY_TOKEN"]}
+    found = list(scan_text(app, app.read_text(), KeyEnds([(*peek_ends(stored), len(stored))])))
+    folder = save_results(with_vault_copies(found, vault), 1, [], 1.0, [app.parent], tmp_path / "scans", datetime(2026, 10, 17, 20, 0, 0))
+    explorer = Explorer(load_scan(folder), folder, vault=vault)
+    explorer.selected = next(index for index, row in enumerate(explorer.rows()) if row.node[0] == "top")
+    open_first_file(explorer)
+    rows = "\n".join(screen(explorer))
+    assert "isn't in the file any more" not in rows and "API_KEY=" in rows and "/v2/extra" in rows and stored not in rows
+
+
 def test_x_replaces_every_copy_under_a_row_after_y(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {"a/.env": f"LOG_LEVEL=info\nOPENROUTER_API_KEY={OPENROUTER}\n", "b/notes.md": f"use {OPENROUTER} or {ANTHROPIC}\n"})
     for file in (tmp_path / "project").rglob("*"):

@@ -26,8 +26,8 @@ from datetime import datetime
 from pathlib import Path
 
 from envh.client.transport import ClientError, Connection, waiting_notice
-from envh.common import peek, printable, value_id
-from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, Spot, in_git_repo, replace_all, replaced_pairs
+from envh.common import peek, printable
+from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, Spot, in_git_repo, replace_all, replaced_pairs, still_there
 from envh.tools.saved_files import SCANS, VAULT_FILE, save_vault_matches, saved_files_root, shown_path
 from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, copies_label, place_of, plural, read_if_text, scan_text, shown_folder
 
@@ -315,7 +315,7 @@ def read_context(path: str, fingerprint: str, recorded: list[Found] | None = Non
 
     The file is scanned again, and each of the scan's recorded hits in it counts too where the same value is still at
     its place: a copy found only by searching for a stored key is invisible to a rescan, and must be shown and hidden
-    like the rest."""
+    like the rest. As in the scan, a rescan hit overlapping such a copy is dropped, since the copy is exact."""
     file = Path(path)
     try:
         if file.stat().st_size > DEFAULT_MAX_BYTES:
@@ -328,14 +328,20 @@ def read_context(path: str, fingerprint: str, recorded: list[Found] | None = Non
     lines = text.split("\n")
     if lines[-1] == "":
         lines.pop()
+    in_place: dict[int, list[Found]] = defaultdict(list)
+    for found in recorded or []:
+        if still_there(lines, found.line, found.column, found.length, found.fingerprint):
+            in_place[found.line].append(found)
     by_line: dict[int, list[Hit]] = defaultdict(list)
     for hit in scan_text(file, text):
-        by_line[hit.line].append(hit)
-    for found in recorded or []:
-        seen = lines[found.line - 1][found.column:found.column + found.length] if 0 < found.line <= len(lines) else ""
-        taken = any(start < found.column + found.length and found.column < start + length for start, length in ((hit.column, hit.length) for hit in by_line[found.line]))
-        if not taken and len(seen) == found.length and value_id(seen) == found.fingerprint:
-            by_line[found.line].append(Hit(file, found.line, found.column, found.confidence, found.kind, found.name, found.shown, found.fingerprint, found.length))
+        overlapping = [found for found in in_place.get(hit.line, []) if found.column < hit.column + hit.length and hit.column < found.column + found.length]
+        if all((found.column, found.length) == (hit.column, hit.length) for found in overlapping):
+            by_line[hit.line].append(hit)
+    for number, founds in in_place.items():
+        covered = {(hit.column, hit.length) for hit in by_line.get(number, [])}
+        for found in founds:
+            if (found.column, found.length) not in covered:
+                by_line[number].append(Hit(file, found.line, found.column, found.confidence, found.kind, found.name, found.shown, found.fingerprint, found.length))
     copies = sorted(number for number, hits in by_line.items() if any(hit.fingerprint == fingerprint for hit in hits))
     if not copies:
         return [], "This key isn't in the file any more; it changed after the scan."
@@ -564,7 +570,7 @@ class Explorer:
             if hit.fingerprint in targets.get(hit.path, ()):
                 spots[hit.path].append(Spot(hit.line, hit.column, hit.length, hit.fingerprint, hit.kind))
         outcome = replace_all(targets, self.folder, spots)
-        self.hits = [hit for hit in self.hits if not (hit.path in outcome.replaced and hit.fingerprint in targets[hit.path])]
+        self.hits = [hit for hit in self.hits if hit.fingerprint not in outcome.ids.get(hit.path, ())]
         self.tier_counts = {tier: len({hit.fingerprint for hit in self.hits if tier == "all" or hit.confidence == tier}) for tier in TIERS}
         self._index = None
         reasons = Counter(outcome.skipped.values())
