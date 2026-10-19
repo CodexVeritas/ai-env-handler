@@ -247,6 +247,14 @@ def in_tier(hit: Found, tier: str, vault: dict[str, list[str]]) -> bool:
     return tier == "all" or hit.confidence == tier
 
 
+def visible(hit: Found, needle: str, vault: dict[str, list[str]], vault_filter: str) -> bool:
+    """Whether the vault filter and the typed filter let the hit show, whatever its list."""
+    if vault_filter != "all keys" and (hit.fingerprint in vault) != (vault_filter == "in your vault"):
+        return False
+    stored = " ".join(vault.get(hit.fingerprint, ())).lower()
+    return not needle or any(needle in field_text for field_text in (hit.kind.lower(), hit.name.lower(), hit.path.lower(), hit.place, stored))
+
+
 def build_index(hits: list[Found], tier: str, needle: str, grouping: str = "type", vault: dict[str, list[str]] | None = None, vault_filter: str = "all keys") -> Index:
     vault = vault or {}
     tree: Tree = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
@@ -254,12 +262,7 @@ def build_index(hits: list[Found], tier: str, needle: str, grouping: str = "type
     names: dict[str, set[str]] = defaultdict(set)
     needle = needle.lower()
     for hit in hits:
-        if not in_tier(hit, tier, vault):
-            continue
-        if vault_filter != "all keys" and (hit.fingerprint in vault) != (vault_filter == "in your vault"):
-            continue
-        stored = " ".join(vault.get(hit.fingerprint, ())).lower()
-        if needle and not any(needle in field_text for field_text in (hit.kind.lower(), hit.name.lower(), hit.path.lower(), hit.place, stored)):
+        if not in_tier(hit, tier, vault) or not visible(hit, needle, vault, vault_filter):
             continue
         tree[(hit.kind if grouping == "type" else hit.place, tier)][hit.fingerprint][hit.path].append(hit.line)
         first.setdefault(hit.fingerprint, hit)
@@ -514,10 +517,19 @@ class Explorer:
         index = self.index()
         return list(index.tree.values()) if row.node[0] == "every" else [index.tree[(row.node[1], row.node[2])]]
 
+    def label_of(self, hit: Found) -> str:
+        return hit.kind if self.grouping == "type" else hit.place
+
+    def place_of_row(self, row: Row) -> str | None:
+        """The place a row is limited to: its own when grouped by place, none for All your keys or a type."""
+        return row.node[1] if self.grouping == "place" and row.node[0] != "every" else None
+
     def targets_under(self, row: Row) -> dict[str, set[str]]:
-        """Every file and key under the row, within the current tier and filters."""
+        """The files and keys x on the row replaces, within the filters. A row of whole keys (a type, a key, All your
+        keys) covers every copy of them, in any list and under any type, or anywhere in its place when grouped by place,
+        since x replaces every copy of the keys. A folder or file row covers its own files."""
         kind = row.node[0]
-        targets: dict[str, set[str]] = defaultdict(set)
+        chosen: dict[str, set[str]] = defaultdict(set)
         for values in self.groups_under(row):
             for fingerprint, paths in values.items():
                 if kind not in ("every", "top") and fingerprint != row.node[3]:
@@ -527,13 +539,21 @@ class Explorer:
                         continue
                     if kind == "file" and path != row.node[4]:
                         continue
-                    targets[path].add(fingerprint)
+                    chosen[path].add(fingerprint)
+        if kind in ("folder", "file"):
+            return dict(chosen)
+        keys = {fingerprint for fingerprints in chosen.values() for fingerprint in fingerprints}
+        place = self.place_of_row(row)
+        targets: dict[str, set[str]] = defaultdict(set)
+        for hit in self.hits:
+            if hit.fingerprint in keys and (place is None or hit.place == place) and visible(hit, self.needle.lower(), self.vault or {}, self.vault_filter):
+                targets[hit.path].add(hit.fingerprint)
         return dict(targets)
 
     def confirm_for(self, row: Row) -> Confirm:
         targets = self.targets_under(row)
         index = self.index()
-        copies = sum(len(lines) for values in self.groups_under(row) for fingerprint, paths in values.items() for path, lines in paths.items() if fingerprint in targets.get(path, ()))
+        copies = sum(1 for hit in self.hits if hit.fingerprint in targets.get(hit.path, ()))
         keys = {fingerprint for fingerprints in targets.values() for fingerprint in fingerprints}
         places = Counter(place_of(path) for path in targets)
         scope = row.label if row.node[0] != "file" else shown_path(Path(row.node[4]))
@@ -544,12 +564,21 @@ class Explorer:
         ]
         if len(places) > 1:
             lines.append(("   " + " · ".join(f"{place} {count:,}" for place, count in places.most_common()), "2"))
-        staying = self.other_lists_under(row)
+        if row.node[0] not in ("folder", "file"):
+            where = f"in {self.place_of_row(row)}" if self.place_of_row(row) else "wherever the scan found it"
+            lines.append((f"   Every copy of these keys is included, in any list or type, {where}" + (", within the filter." if self.needle else "."), "2"))
+        staying = self.other_keys_under(row, keys)
         if staying:
-            listed = ", ".join(f"{count:,} {TIER_NAMES[tier]}" for tier, count in staying)
-            lines.append((f" ! Only {TIER_PHRASES[self.tier]} are replaced. {copies_label(sum(count for _, count in staying))} in other lists stay here:", "33"))
-            lines.append((f"   {listed}.", "33"))
-            lines.append(("   To replace every list, press Esc, then Tab to All.", "33"))
+            listed = ", ".join(f"{count:,} {TIER_NAMES[tier]}" for tier, count in staying.most_common())
+            count = sum(staying.values())
+            others = len({hit.fingerprint for hit in self.hits if hit.fingerprint not in keys and self.label_of(hit) == row.node[1]})
+            noun = plural(others, f"other {row.node[1]} key") if self.grouping == "type" else f"{plural(others, 'other key')} in {row.node[1]}"
+            if self.tier == "yours":
+                lines.append((f" ! {copies_label(count)} of {noun} {'stays' if count == 1 else 'stay'}, not in your vault ({listed}).", "33"))
+                lines.append((f"   Maybe an old key, or one you never imported. To replace {'it' if others == 1 else 'them'} too, press Esc, then Tab to {'its' if others == 1 else 'their'} list.", "33"))
+            else:
+                lines.append((f" ! {copies_label(count)} of {noun} {'stays' if count == 1 else 'stay'}, in other lists ({listed}).", "33"))
+                lines.append(("   To replace every list, press Esc, then Tab to All.", "33"))
         lines += [
             ("", ""),
             (" Each copy becomes envh-removed-<type>-<id>, so you can see where a key was.", ""),
@@ -578,13 +607,11 @@ class Explorer:
         lines.extend([("", ""), (" Type y to replace them. Any other key cancels.", "1;33")])
         return Confirm(targets, lines)
 
-    def other_lists_under(self, row: Row) -> list[tuple[str, int]]:
-        """Copies under the row's type or place that are in other lists than the one shown, which x leaves alone."""
+    def other_keys_under(self, row: Row, keys: set[str]) -> Counter[str]:
+        """Copies of other keys of the row's type or place, by list, which x on it leaves alone."""
         if self.tier == "all" or row.node[0] != "top":
-            return []
-        label = row.node[1]
-        counts = Counter(hit.confidence for hit in self.hits if not in_tier(hit, self.tier, self.vault or {}) and (hit.kind if self.grouping == "type" else hit.place) == label)
-        return [(tier, counts[tier]) for tier in TIERS if counts.get(tier)]
+            return Counter()
+        return Counter(hit.confidence for hit in self.hits if hit.fingerprint not in keys and self.label_of(hit) == row.node[1] and visible(hit, self.needle.lower(), self.vault or {}, self.vault_filter))
 
     def handle_confirm(self, key: str) -> None:
         confirm = self.confirm

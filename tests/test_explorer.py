@@ -356,6 +356,28 @@ def test_x_on_all_your_keys_replaces_every_copy_of_them_and_nothing_else(tmp_pat
     assert "Every copy of your keys is replaced. Tab shows the other lists." in screen(explorer)[3]
 
 
+def test_x_on_a_type_in_yours_covers_copies_under_other_types_and_names_keys_not_in_the_vault(tmp_path: Path) -> None:
+    old_key = "hb_" + random_text("rotated hyperbrowser", 28, HEX)
+    files = {"a/.env": f"HYPERBROWSER_API_KEY={FRED}\n", "b/notes.md": f"token: {FRED}\n", "c/.env": f"HYPERBROWSER_API_KEY={old_key}\n"}
+    folder = saved_scan(tmp_path, files)
+    for file in (tmp_path / "project").rglob("*"):
+        os.utime(file, (time.time() - 3600, time.time() - 3600))
+    hits = load_scan(folder)
+    assert {hit.kind for hit in hits if hit.fingerprint == value_id(FRED)} == {"hyperbrowser", "unknown"}
+    explorer = Explorer(hits, folder, vault={value_id(FRED): ["MY_HYPERBROWSER_API_KEY"]})
+    explorer.selected = next(index for index, row in enumerate(explorer.rows()) if row.label == "hyperbrowser")
+    press(explorer, "x")
+    rows = "\n".join(screen(explorer, width=160))
+    assert "hyperbrowser, your keys: 2 copies of 1 key in 2 files" in rows
+    assert "Every copy of these keys is included, in any list or type, wherever the scan found it." in rows
+    assert "1 copy of 1 other hyperbrowser key stays, not in your vault (1 possible)." in rows and "Maybe an old key" in rows
+    press(explorer, "y")
+    explorer.work()
+    project = tmp_path / "project"
+    assert FRED not in (project / "a" / ".env").read_text() and FRED not in (project / "b" / "notes.md").read_text()
+    assert old_key in (project / "c" / ".env").read_text()
+
+
 def test_the_replace_summary_warns_about_keys_outside_the_vault_and_low_values_in_code(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {"a/.env": f"{OPENROUTER}\n{ANTHROPIC}\nGENERATION_KEY={FRED}\n"})
     hits = load_scan(folder)
@@ -395,7 +417,8 @@ def test_all_shows_each_place_once_and_x_there_replaces_every_list(tmp_path: Pat
     choose(explorer, "top")
     press(explorer, "x")
     rows = "\n".join(screen(explorer, width=160))
-    assert "Only likely keys are replaced. 3 copies in other lists stay here:" in rows and "   3 possible." in rows and "Tab to All" in rows
+    assert "3 copies of 1 other key in editor history stay, in other lists (3 possible)." in rows and "Tab to All" in rows
+    assert "Every copy of these keys is included, in any list or type, in editor history." in rows
     press(explorer, "escape")
     explorer.tier = "all"
     assert [row.label for row in explorer.rows()] == ["editor history"]
