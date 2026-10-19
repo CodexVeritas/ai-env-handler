@@ -1,0 +1,17 @@
+envh red-team v2 — pre-commitment freeze record
+================================================
+
+charter_file      = redteam/2026-10-19/CHARTER.md
+charter_sha256    = 93a3904a2b7368bb70cd6c6cb9d37338f4d0b3ff823d13c36f3238e37fe6a548
+frozen_at_utc     = 2026-10-19T19:08:37Z
+pre_commit_commit = 3927a7a8d3143324dc2ab4eed430a109d6a955bb
+base_commit       = b1a150e75b0bb3288239fc1f73b3a639cbfdfc5c
+branch            = claude/practical-ptolemy-fem3wo
+
+This records that the scope, win conditions, novelty test, and grading rubric in CHARTER.md were
+committed and hashed BEFORE any attack agent ran. Verify with:
+
+    git show 3927a7a8d3143324dc2ab4eed430a109d6a955bb:redteam/2026-10-19/CHARTER.md | sha256sum
+
+The arena the attackers ran against is reproducible from arena/bootstrap.sh at the pre-commit
+commit; each finding additionally records the arena environment_id from arena/fingerprint.py.
