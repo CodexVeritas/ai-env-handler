@@ -67,7 +67,7 @@ git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
 python3 scripts/setup_wizard.py
 ```
 
-The wizard walks through seven short steps and asks before each change. One of them keeps VS Code and Cursor from storing copies of `.env` files in their local history; another scans your home folder for stray copies of keys and then opens the explorer (`envh explore`) right there, so you can go through what it found and replace copies before setup continues. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
+The wizard walks through seven short steps and asks before each change. One of them keeps VS Code and Cursor from storing copies of `.env` files in their local history. The last one scans your home folder for stray copies of keys and then opens the explorer (`envh explore`) right there, so you can go through what it found and replace copies. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
 
 Later, run it again to upgrade (after `git pull`) or to import more projects.
 
@@ -428,7 +428,7 @@ The wizard refuses to run inside Claude Code, but it cannot tell when another AI
 
 envh never runs from your clone. Your agents can edit the clone, and the console runs the code that holds your keys, so that code must live where only root can change it.
 
-**Upgrade:** `git pull` in your clone and run the wizard again. It asks before updating (`?` shows the installed commit next to the clone's), and asks again if the clone has uncommitted changes, since root installs those too. The vault, its passphrase and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then. The last two steps then compare the skill and hook copies for Claude Code and Cursor with the clone, and say if they are out of date. Copies you made by hand somewhere else, such as in a project, you update yourself.
+**Upgrade:** `git pull` in your clone and run the wizard again. It asks before updating (`?` shows the installed commit next to the clone's), and asks again if the clone has uncommitted changes, since root installs those too. The vault, its passphrase and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then. The Claude Code and Cursor steps then compare the skill and hook copies with the clone, and say if they are out of date. Copies you made by hand somewhere else, such as in a project, you update yourself.
 
 **Uninstall:** `sudo envh uninstall` keeps the vault; `sudo envh uninstall --purge` deletes it too.
 

@@ -90,7 +90,7 @@ Scan somewhere else with: envh scan <folder>"""
 SAVE_MORE = """Each scan gets its own dated folder inside this one: report.txt, files.txt and hits.json.
 They hold where keys are, never the keys, so they are safe to keep."""
 EXPLORER_MORE = """The explorer reads each file when you open it, so it always shows the file as it is now.
-It runs full screen; q closes it and setup continues. Reopen it any time with: envh explore
+It runs full screen; q closes it and finishes setup. Reopen it any time with: envh explore
 Details: README, "Find leftover copies\""""
 EXPLORER_PANEL = [
     "Lists each key the scan found, the files it is in, and the lines",
@@ -99,7 +99,7 @@ EXPLORER_PANEL = [
     "  Tab    switch list: Likely, Possible, Unlikely keys, Placeholders",
     "  ↑↓ →←  move and open            g   group by place",
     "  v      only keys in your vault  x   replace every copy under a row",
-    "  q      close it and continue setup",
+    "  q      close it and finish setup",
 ]
 
 
@@ -785,9 +785,9 @@ STEPS: list[tuple[str, Callable[[], Outcome]]] = [
     ("Start the console", step_console),
     ("Import keys", step_import),
     ("Editor .env history", step_editor_history),
-    ("Find stray keys", step_scan),
     ("Connect Claude Code", step_claude_code),
     ("Connect Cursor", step_cursor),
+    ("Find stray keys", step_scan),
 ]
 
 

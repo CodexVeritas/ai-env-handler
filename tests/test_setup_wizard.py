@@ -366,7 +366,11 @@ def test_a_scan_that_finds_keys_opens_the_explorer_in_the_flow(tmp_path: Path, m
     scans = str(tmp_path / "scans")
     assert calls == [["envh", "scan", "--out", scans, "--no-explore"], ["envh", "explore", scans]]
     shown = capsys.readouterr().out
-    assert "╭─ The explorer" in shown and "q      close it and continue setup" in shown and "Reopen it any time with: envh explore" in shown
+    assert "╭─ The explorer" in shown and "q      close it and finish setup" in shown and "Reopen it any time with: envh explore" in shown
+
+
+def test_the_scan_is_the_last_step_so_setup_ends_in_the_explorer() -> None:
+    assert wizard.STEPS[-1] == ("Find stray keys", wizard.step_scan)
 
 
 def test_the_explorer_can_be_skipped_and_a_clean_scan_shows_no_panel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
