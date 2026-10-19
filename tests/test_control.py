@@ -190,7 +190,7 @@ async def test_search_over_socket_shares_key_ends_then_answers_one_match(control
     async with Client(control) as client:
         await client.send(op="search", reason="envh scan")
         first = await client.recv()
-        assert first["pending"] is True and first["count"] == 1 and "keys" not in first
+        assert first["pending"] is True and "count" not in first and "keys" not in first
         await approve_next(harness)
         assert (await client.recv())["keys"] == [{"start": long_key[:3], "end": long_key[-3:], "length": 32}]
         await client.send(op="match", ids=[value_id(long_key), value_id("elsewhere")])

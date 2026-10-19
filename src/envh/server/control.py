@@ -325,7 +325,7 @@ class Connection:
         """Two steps on one connection: once approved, the requester gets each stored key's ends and length; then, once,
         it sends the ids of the values it found that way and learns which are stored keys."""
         request = self.broker.request_search(self._reason(message), self.provenance)
-        await self.send(self._pending(request, count=request.summary["count"]))
+        await self.send(self._pending(request))
         if not await self._decided_or_withdrawn(request):
             return
         await self._reply_decision(request)

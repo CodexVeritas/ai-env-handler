@@ -517,9 +517,11 @@ async def test_a_search_shares_each_long_keys_ends_and_length_then_answers_one_m
         broker.match_after_search(request, [value_id(long_key)])
     broker.approve(request)
     assert request.result == {"keys": [{"start": long_key[:4], "end": long_key[-4:], "length": len(long_key)}]}
-    assert broker.match_after_search(request, [value_id(long_key), value_id("elsewhere")]) == {value_id(long_key): ["LONG_KEY", "SAME_LONG_KEY"]}
     with pytest.raises(RequestError, match="8 lowercase hex"):
         broker.match_after_search(request, ["ABCD1234"])
+    assert broker.match_after_search(request, [value_id(long_key), value_id("elsewhere")]) == {value_id(long_key): ["LONG_KEY", "SAME_LONG_KEY"]}
+    with pytest.raises(RequestError, match="already answered"):
+        broker.match_after_search(request, [value_id("sk-openai")])
 
 
 async def test_a_search_needs_a_long_enough_key_and_a_denied_one_shares_nothing(harness: Harness) -> None:

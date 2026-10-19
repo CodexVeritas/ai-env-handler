@@ -405,7 +405,10 @@ class Broker:
         """The one answer an approved search gets: which of the ids it found belong to stored keys."""
         if request.kind != "search" or not request.decided or request.decision.result().outcome != "approved":
             raise RequestError(f"request #{request.id} is not an approved search")
+        if request.summary.get("answered"):
+            raise RequestError(f"search #{request.id} was already answered")
         wanted = checked_match_ids(ids)
+        request.summary["answered"] = True
         matches = self.vault_matches(wanted)
         self.audit.event("match_answered", id=request.id, asked=len(wanted), matched=sorted(name for names in matches.values() for name in names))
         return matches
