@@ -1,0 +1,59 @@
+{
+  "agent_id": "w1-identity",
+  "surface": "F6 peer-creds-identity",
+  "persona": "identity/kernel-creds",
+  "environment_id": "58a8c6c9cf00b67a",
+  "candidates": [
+    {
+      "id": "w1-identity-1",
+      "title": "SCM_RIGHTS fd-passing lets outsider speak on rt1's authenticated connection (cooperative delegation only)",
+      "win_condition": "CROSS-USER",
+      "repro_cmds": [
+        "# /tmp/p4/fd_sender.py (rt1): connect to broker, bind abstract rendezvous \\0p4fdpass, accept, sendmsg(SCM_RIGHTS,[broker.fileno()]), sleep",
+        "# /tmp/p4/fd_receiver.py (outsider): connect \\0p4fdpass, recvmsg the fd, send {\"op\":\"status\"}, print reply",
+        "sudo -u rt1 env ENVH_SOCKET=/run/envh-arena/p4-identity.sock /opt/envh-arena/venv/bin/python -I /tmp/p4/fd_sender.py &",
+        "sleep 1.2; sudo -u outsider /opt/envh-arena/venv/bin/python -I /tmp/p4/fd_receiver.py",
+        "# control: sudo -u outsider env ENVH_SOCKET=/run/envh-arena/p4-identity.sock /opt/envh-arena/venv/bin/python /opt/envh-arena/scripts/raw_client.py '{\"op\":\"status\"}'"
+      ],
+      "observed_output": "outsider(pid=2855, uid=30035): speaking on rt1's fd\nREPLY: {\"ok\": true, \"pending\": [], \"runs\": [], \"sessions\": []}\n--- control (outsider's OWN connect): {\"ok\": false, \"error\": \"uid 30035 is not in the broker's users list; a listed user can add it on the console under /settings\"}",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "NOT novel. It only restates the kernel SO_PEERCRED property: credentials are frozen at the connect()-ing process. The outsider gains rt1's identity ONLY because rt1 voluntarily initiated the connection and handed over the fd; this is identical to rt1 running the command and piping the value to outsider, which the README already acknowledges (the approved command sees its own values; same-user clipboard/show/delegation). An outsider connecting on its OWN fd is always rejected (control line). No non-cooperating user can impersonate another and no envh trust boundary is crossed.",
+      "taxonomy": ["ATTACK:T1134", "ASVS:V3", "OWASP-LLM:LLM06"],
+      "severity": "LOW",
+      "self_assessment": "REJECTED",
+      "notes": "Root cause is by-design: server/control.py:109-112 _provenance() captures peer_credentials once at connect; platform.py:62-65 reads SO_PEERCRED, which the kernel binds to the process that called connect(). fd-passing moves the fd, not the recorded identity. Requires victim (rt1) cooperation => not a boundary bypass. Confirms, does not beat, the acknowledged model."
+    },
+    {
+      "id": "w1-identity-2",
+      "title": "Unlisted outsider's pre-gate side effects (one capped audit line + transient connection accounting)",
+      "win_condition": "CROSS-USER",
+      "repro_cmds": [
+        "sudo -u outsider env ENVH_SOCKET=/run/envh-arena/p4-identity.sock /opt/envh-arena/venv/bin/python /opt/envh-arena/scripts/raw_client.py '{\"op\":\"preset_propose\",\"yaml\":\"presets:\\n  x:\\n    env:\\n      A: CAPTURE_THE_FLAG\\n\"}'",
+        "sudo -u outsider env ENVH_SOCKET=/run/envh-arena/p4-identity.sock /opt/envh-arena/venv/bin/python -I -c 'import socket,os,time; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.connect(os.environ[\"ENVH_SOCKET\"]); print(s.recv(65536)); print(repr(s.recv(65536)))'"
+      ],
+      "observed_output": "preset_propose -> {\"ok\": false, \"error\": \"uid 30035 is not in the broker's users list; ...\"} (NO policy write; op did not run)\nhold test -> reply after 0.0021s: {uid rejection}; second recv after 0.0001s returned b'' (broker closed, slot freed)",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "NOT a capability. The only effects an unlisted uid triggers before the gate are: (i) the broker reading the outsider's OWN /proc/<pid>/cmdline (no cross-user read), (ii) exactly one rejected_uid audit line whose cmdline is capped to 4000 chars by logged_command (control.py:32-38,125), and (iii) incrementing a per-uid connection counter that is immediately decremented. The connection is torn down in ~2ms and cannot be held open, and the per-uid cap (MAX_CONNECTIONS_PER_UID=32) applies to the unlisted uid too, so one unlisted account cannot approach the global cap (256). No op runs, no secret/allowed_uids is revealed. Any disk-fill via sustained rejection flooding is a generic connection-flood DoS (F9/F14), not an F6 identity capability.",
+      "taxonomy": ["ATTACK:T1190", "ASVS:V13", "ASVS:V7"],
+      "severity": "LOW",
+      "self_assessment": "REJECTED",
+      "notes": "Ordering: server/control.py _handle (line 67-91) runs the connection-cap check then serve(); serve() line 124 is the uid gate, which is the FIRST statement and raises before any readline or handler dispatch. Logging a rejected auth attempt is desirable defensive behavior and is bounded. Hand the flood-to-disk-fill angle to the DoS/blue-team families."
+    }
+  ],
+  "negative_results": [
+    "(a) outsider op dispatch: {op:list}, {op:preset_propose ...}, {op:does_not_exist}, and raw non-JSON 'not json at all' ALL return the identical '{ok:false, error: uid 30035 is not in the broker's users list...}' as outsider on p4-identity. The uid gate (control.py:124) precedes readline and getattr dispatch, so no handler (not even a side-effecting one like preset_propose) executes; no enumeration of ops or allowed_uids; no secret in the rejection.",
+    "(b) SO_PEERCRED identity is bound to the connect()-ing process: verified by SCM_RIGHTS fd-pass (outsider on rt1's fd -> ok:true; outsider's own connect -> rejected). So an attacker cannot launder their uid through a listed process; only the listed user initiating connect() and cooperatively handing over the fd changes the apparent peer (= delegation, see w1-identity-1).",
+    "(b) pid reuse / exit-before-read: uid is kernel-cached at connect() and cannot be flipped by the client process exiting or its pid being reused; only cmdline() (platform.py:35-45, read later from /proc) can go stale/'(command line unavailable)', which is display-only and acknowledged KNOWN. Outsider connect is rejected in ~2ms and the socket is closed immediately (second recv = b''), so the connection cannot be held to occupy a slot.",
+    "(b) identity-changing helper / setuid connector: no setuid binary is available to a non-root attacker to connect as a listed uid; the only listed-uid wrappers go through sudo (out of scope).",
+    "(c) no op trusts provenance pid/cmdline to GRANT: grep across src confirms provenance.pid and .cmdline feed only audit events, uid-filtered status/list payloads, the console request_card display (request_card.py:109), and a 'by=pid N' label (control.py:237). gid is discarded in _provenance (control.py:112). Every authorization decision uses uid: the allowed_uids gate, owned_session uid check (broker.py:244-254), for_uid filtering (broker.py:655-697), and the uid-scoped hmac resume_code (state.py:151-158). The acknowledged 'cmdline/pid unverified for display' cannot be turned into a capability.",
+    "(d) uid vs allowed_uids: gate is `provenance.uid not in config.allowed_uids` with allowed_uids resolved from login names via pwd.getpwnam at load (config.py:189-200). Live check: rt1(30033) and rt2(30034) accepted, outsider(30035) refused. No uid collision/aliasing exists (distinct uids); creating an alias would need root."
+  ],
+  "out_of_scope_observations": [
+    "SO_PEERCRED is unpacked as SIGNED ('3i') in platform.py:63-64 while pwd.getpwnam().pw_uid is unsigned: a uid >= 2^31 (e.g. (uid_t)-1 = 4294967295 for 'nobody') would unpack to a negative int and mismatch allowed_uids. This can only cause a FALSE REJECTION, never a false grant, and no listed user here has such a uid, so it is not exploitable; noted as a latent correctness nit only.",
+    "A passwd uid-alias (two login names sharing one pw_uid) would let a process of the aliased name pass the gate, but creating the alias requires writing /etc/passwd (root) -> out of scope.",
+    "Sustained flooding of rejected-connection audit lines by an unlisted user could fill the audit disk; this is a generic connection-flood DoS (F9) / detection-under-attack (F14) concern, not an F6 identity capability, and each line is capped at 4000 chars. Belongs to the DoS/blue-team families and their own instance.",
+    "Reading the broker's memory, /proc/<svc pid>/*, the instance data/ dir, secrets.env, or becoming the svc/root user to inspect credential handling were NOT attempted (CHARTER section 3)."
+  ]
+}
