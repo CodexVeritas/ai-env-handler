@@ -15,7 +15,8 @@ import pytest
 
 from envh.client.transport import ClientError
 from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, load_vault_matches, main, newest_scan, split_keys
-from envh.tools.scanner import scan_paths, save_results, shown_value
+from envh.common import peek_ends, value_id
+from envh.tools.scanner import KeyEnds, scan_paths, scan_text, save_results, shown_value, with_vault_copies
 from tests.conftest import HEX, random_text
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -256,6 +257,23 @@ def test_v_without_a_vault_check_says_how_to_get_one(tmp_path: Path) -> None:
     explorer = Explorer(load_scan(folder), folder)
     press(explorer, "v")
     assert "Not checked against your vault" in screen(explorer)[-2] and "vault not checked" in screen(explorer)[2]
+
+
+def test_the_file_view_shows_and_hides_copies_only_the_vault_search_found(tmp_path: Path) -> None:
+    stored = random_text("vault only", 32, HEX)
+    other = random_text("other stored", 24)
+    notes = tmp_path / "project" / "notes.md"
+    notes.parent.mkdir(parents=True)
+    notes.write_text(f"intro\nmy fred key: {stored}\nnext line has {other} too\n")
+    vault = {value_id(stored): ["MY_FRED_KEY"], value_id(other): ["MY_OTHER_TOKEN"]}
+    found = list(scan_text(notes, notes.read_text(), KeyEnds([(*peek_ends(value), len(value)) for value in (stored, other)])))
+    folder = save_results(with_vault_copies(found, vault), 1, [], 1.0, [notes.parent], tmp_path / "scans", datetime(2026, 10, 17, 20, 0, 0))
+    explorer = Explorer(load_scan(folder), folder, vault=vault)
+    explorer.selected = next(index for index, row in enumerate(explorer.rows()) if row.label == "fred")
+    open_first_file(explorer)
+    rows = "\n".join(screen(explorer))
+    assert "isn't in the file any more" not in rows and "my fred key:" in rows and "next line has" in rows
+    assert stored not in rows and other not in rows
 
 
 def test_x_replaces_every_copy_under_a_row_after_y(tmp_path: Path) -> None:
