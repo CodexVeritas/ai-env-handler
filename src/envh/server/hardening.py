@@ -8,9 +8,10 @@ import resource
 import sys
 from pathlib import Path
 
-from envh.platform import PlatformError, ancestor_terminals, legacy_tiocsti_enabled, make_non_dumpable
+from envh.platform import PlatformError, ancestor_terminals, ancestors, legacy_tiocsti_enabled, make_non_dumpable, process_real_uid
 
 LOCK_FILE = "lock"
+TERMINAL_SHARERS = ("tmux", "screen", "zellij", "dtach", "abduco")
 
 
 class HardeningError(RuntimeError):
@@ -44,6 +45,20 @@ def assert_terminal_is_ours() -> None:
             raise HardeningError(
                 f"the terminal {terminal} is owned by uid {owner}, not by this process (uid {os.geteuid()}); start the console with `sudo envh-console`, and if you did, rerun the setup wizard to update it"
             )
+
+
+def shared_terminal_warning() -> str | None:
+    """tmux, screen and the like keep the terminal the console reads from, and let anything running as the user who
+    started them see and type into it. A warning, not a refusal, like X11, which does the same for a whole desktop."""
+    try:
+        found = [(pid, name) for pid, name in ancestors(os.getpid()) if name.split(":")[0].strip().lower() in TERMINAL_SHARERS]
+        foreign = [(pid, name) for pid, name in found if process_real_uid(pid) != 0]
+    except (OSError, PlatformError) as error:
+        return f"Can't check whether the console runs inside tmux or screen: {error}"
+    if not foreign:
+        return None
+    pid, name = foreign[0]
+    return f"The console runs inside {name} (pid {pid}): programs you run can see and type into it. Start it in a window of its own."
 
 
 def assert_no_tiocsti() -> None:

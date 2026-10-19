@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from envh.platform import socket_path as default_socket_path
+from envh.platform import listed_user_warnings, socket_path as default_socket_path
 from envh.core.audit import AUDIT_FILE, Audit
 from envh.core.broker import Broker
 from envh.core.config import ConfigError, load_config
@@ -20,7 +20,7 @@ from envh.server.console.app import ConsoleApp
 from envh.server.console.summaries import plural
 from envh.server.console.tui import Terminal
 from envh.server.control import ControlServer
-from envh.server.hardening import HardeningError, acquire_instance_lock, assert_no_tiocsti, assert_terminal_is_ours, harden_process
+from envh.server.hardening import HardeningError, acquire_instance_lock, assert_no_tiocsti, assert_terminal_is_ours, harden_process, shared_terminal_warning
 from envh.server.init_cmd import PHRASE_FILE, default_data_dir
 from envh.core.state import StateTable
 from envh.core.vault import VAULT_FILE, Vault, VaultError
@@ -89,6 +89,10 @@ def unlock_vault(data_dir: Path, phrase: str) -> Vault:
 async def run_broker(data_dir: Path, socket_path: Path) -> None:
     loop = asyncio.get_running_loop()
     phrase = read_phrase(data_dir)
+    terminal_warning = shared_terminal_warning()
+    if terminal_warning:
+        say()
+        say(f"  {paint('33', '!')} {terminal_warning}")
     vault = unlock_vault(data_dir, phrase)
     try:
         config = load_config(data_dir, set(vault.names()))
@@ -115,6 +119,9 @@ async def run_broker(data_dir: Path, socket_path: Path) -> None:
     loop.add_signal_handler(signal.SIGWINCH, app.wake.set)
     audit.event("broker_start", pid=os.getpid(), socket=str(socket_path))
     activity.note("ok", f"Console ready · {plural(len(vault.names()), 'key')} · {plural(len(broker.config.presets), 'preset')}")
+    for warning in [terminal_warning, *listed_user_warnings(config.users)]:
+        if warning:
+            audit.event("startup_warning", detail=warning)
 
     async def sweeper() -> None:
         while True:

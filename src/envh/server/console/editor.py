@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,20 +20,40 @@ if TYPE_CHECKING:
     from envh.server.console.app import ConsoleApp
 
 
+def root_controlled_program(name: str) -> str | None:
+    """The program's path, if the file it runs and every folder above it and above its link belong to root and only
+    root can write them. The editor runs as the envh user, next to the vault and the policy. The path keeps its link
+    name, since programs such as busybox act on the name they are run by."""
+    found = shutil.which(name)
+    if found is None:
+        return None
+    located = Path(found).absolute()
+    target = located.resolve()
+    for part in (target, *target.parents, *located.parents):
+        status = part.stat()
+        if status.st_uid != 0 or status.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return None
+    return str(located)
+
+
 def pick_editor() -> str | None:
     for candidate in (os.environ.get("VISUAL"), os.environ.get("EDITOR"), "nano", "vi"):
-        if candidate and shutil.which(candidate):
-            return candidate
+        program = root_controlled_program(candidate) if candidate else None
+        if program:
+            return program
     return None
 
 
 def start_edit(app: ConsoleApp, which: str) -> None:
     editor = pick_editor()
     if editor is None:
-        app.tell("No text editor found. Install nano, or set $EDITOR for the envh user.", "warn")
+        app.tell("No text editor owned by root found. Install nano, or set $EDITOR for the envh user.", "warn")
         return
     path = app.broker.data_dir / (CONFIG_FILE if which == "config" else PRESETS_FILE)
     details = [styled("What you save is checked, and shown for a last look, before it is used.")]
+    skipped = [name for name in (os.environ.get("VISUAL"), os.environ.get("EDITOR")) if name and root_controlled_program(name) is None]
+    if skipped:
+        details.append(styled(f"Not {', '.join(skipped)}: the editor runs as envh, so only one that root owns and alone can change is used.", DIM))
     app.ask_passphrase(f"Open {path.name} in {editor}", details, lambda: edit(app, which, editor, path, path.read_text()))
 
 

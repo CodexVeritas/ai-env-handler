@@ -18,7 +18,9 @@ from envh.core.config import load_config
 from envh.core.state import Provenance, Request
 from envh.core.vault import Vault
 from envh.server.console import app as app_module
+from envh.server.console import editor as editor_module
 from envh.server.console import logs
+from envh.server.console import settings as settings_module
 from envh.server.console.activity import Activity
 from envh.server.console.app import ConsoleApp
 from envh.server.console.summaries import login_name
@@ -345,6 +347,18 @@ async def test_settings_show_every_option_and_save_with_the_passphrase(harness: 
     assert reloaded.policy_for("OPENAI_API_KEY").max_session == timedelta(hours=1)
 
 
+async def test_a_new_allowed_user_who_can_become_root_is_named_before_saving(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings_module, "listed_user_warnings", lambda users: [f"{user} is in docker, which can become root" for user in users])
+    console = new_console(harness)
+    console.command("settings")
+    console.press("down", "enter", "ctrl_u")
+    console.type(" ".join([*harness.broker.config.users, "root"]))
+    console.press("enter", "ctrl_s")
+    screen = console.screen()
+    assert "root is in docker, which can become root" in screen
+    assert not any(f"{user} is in docker" in screen for user in harness.broker.config.users)
+
+
 async def test_a_wrong_passphrase_saves_nothing(harness: Harness) -> None:
     console = new_console(harness)
     before = (harness.data_dir / "config.yaml").read_text()
@@ -440,8 +454,11 @@ async def test_editing_presets_in_an_editor_is_checked_before_saving(harness: Ha
     )
     os.chmod(editor, stat.S_IRWXU)
     monkeypatch.setenv("VISUAL", str(editor))
+    monkeypatch.setenv("EDITOR", "untrusted-editor")
+    monkeypatch.setattr(editor_module, "root_controlled_program", lambda name: name if name == str(editor) else None)
     console = new_console(harness)
     console.command("edit-presets")
+    assert "Not untrusted-editor: the editor runs as envh" in console.screen()
     console.type(PASSPHRASE)
     console.press("enter")
     assert "presets.yaml has a problem" in console.screen() and "not in the vault" in console.screen()
@@ -452,6 +469,20 @@ async def test_editing_presets_in_an_editor_is_checked_before_saving(harness: Ha
     assert list(harness.broker.config.presets) == ["edited"]
     assert not (harness.data_dir / "presets.yaml.edit").exists()
     assert any("config_edited" in line for line in harness.echoed)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="as root a script in a temporary folder is root's too")
+def test_only_an_editor_that_root_owns_and_alone_can_change_is_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    script = tmp_path / "editor.sh"
+    script.write_text("#!/bin/sh\n")
+    os.chmod(script, stat.S_IRWXU)
+    assert editor_module.root_controlled_program(str(script)) is None
+    assert editor_module.root_controlled_program("no-such-editor-anywhere") is None
+    system_shell = editor_module.root_controlled_program("sh")
+    assert system_shell is not None and Path(system_shell).stat().st_uid == 0
+    monkeypatch.setenv("VISUAL", str(script))
+    monkeypatch.setenv("EDITOR", "sh")
+    assert editor_module.pick_editor() == system_shell
 
 
 async def test_ctrl_c_twice_stops_the_console(harness: Harness) -> None:

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from envh.core.broker import RequestError
 from envh.core.config import AUTO, CONFIG_FILE, ConfigError, SecretEntry, Settings, parse_config_for_broker, parse_settings, render_config
 from envh.core.durations import DurationError, format_duration, parse_duration
+from envh.platform import listed_user_warnings
 from envh.server.console.dialogs import Choice, KeyPicker, Prompt, View, text_lines
 from envh.server.console.presets import check_duration
 from envh.server.console.summaries import merge, plural, rule_text, settings_changes, settings_fields, settings_from_fields
@@ -137,6 +138,9 @@ class SettingsView(View):
             hand_written = False
         if hand_written:
             lines += [[], styled("Saving rewrites config.yaml in envh's layout; comments added there by hand are not kept.", DIM)]
+        warnings = listed_user_warnings(user for user in self.draft.users if user not in self.base.users)
+        if warnings:
+            lines += [[], *(mark("warn", warning) for warning in warnings)]
         return lines
 
     def save(self, then_leave: bool = False) -> None:
