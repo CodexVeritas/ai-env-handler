@@ -1,4 +1,5 @@
 import argparse
+import base64
 import io
 import re
 import json
@@ -11,14 +12,15 @@ import pytest
 
 from envh.common import peek
 from envh.tools.saved_files import ask_where
-from envh.tools.scanner import COMPILED_PATTERNS, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_placeholder, main, scan_paths, scan_text, shown_value, value_id
+from tests.conftest import HEX, random_text
+from envh.tools.scanner import COMPILED_PATTERNS, STANDALONE_KINDS, VALUE_PATTERNS, Progress, classify_name, looks_fake, looks_placeholder, main, place_of, scan_paths, scan_text, shown_value, value_id
 
-OPENAI = "sk-proj-" + "A1b2C3d4" * 6
-OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
-ANTHROPIC = "sk-ant-api03-" + "Zz9yY8xX7wW6vV5u" * 3
-GEMINI = "AIza" + "Syd8f7g6h5j4k3l2m1n0pQrStUvWxYz0123"
-PPLX = "pplx-" + "q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8"
-FRED = "3f2a9c8b7d6e5f4a3b2c1d0e9f8a7b6c"
+OPENAI = "sk-proj-" + random_text("openai", 48)
+OPENROUTER = "sk-or-v1-" + random_text("openrouter", 64, HEX)
+ANTHROPIC = "sk-ant-api03-" + random_text("anthropic", 48)
+GEMINI = "AIza" + random_text("gemini", 35)
+PPLX = "pplx-" + random_text("perplexity", 48)
+FRED = random_text("fred", 32, HEX)
 TRANSCRIPT = json.dumps({"role": "assistant", "content": f"use export OPENAI_API_KEY={OPENAI} then run"})
 
 
@@ -81,7 +83,7 @@ def test_skips_binaries_large_files_and_vendor_dirs_but_reads_git_config(tmp_pat
 
 
 def test_database_url_and_private_key() -> None:
-    text = "DATABASE_URL=postgres://admin:hunter2secret@db.internal:5432/app\n-----BEGIN OPENSSH PRIVATE KEY-----\n"
+    text = "DATABASE_URL=postgres://admin:hunter2secret@db.internal:5432/app\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB\n"
     kinds = [hit.kind for hit in scan_text(Path("f"), text)]
     assert kinds == ["database-url", "private-key"]
 
@@ -182,7 +184,7 @@ SAMPLES = {
     "resend": "re_" + "a1B2c3D4" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2",
     "browserbase": "bb_live_" + "a1B2c3D4e5" * 3,
     "jwt": "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2Q",
-    "private-key": "-----BEGIN RSA PRIVATE KEY-----",
+    "private-key": "-----BEGIN RSA PRIVATE KEY-----\\n" + "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0t",
     "database-url": "postgres://admin:hunter2secret@db.internal:5432/app",
 }
 
@@ -248,13 +250,13 @@ def test_results_are_saved_to_a_private_folder_and_the_terminal_gets_a_summary(t
     assert (report_dir / "files.txt").read_text().splitlines() == expected
     assert len(json.loads((report_dir / "hits.json").read_text())["hits"]) == 90
     report = (report_dir / "report.txt").read_text()
-    assert report.index("== Summary ==") < report.index("== High confidence") < report.index("== Medium confidence") < report.index("== Low confidence") < report.index("== Every hit by file ==")
+    assert report.index("== Summary ==") < report.index("== Likely keys") < report.index("== Possible keys") < report.index("== Unlikely keys") < report.index("== Placeholders") < report.index("== Every hit by file ==")
     assert f"{shown_value(OPENAI, len('sk-'))} ({len(OPENAI)} chars, id {value_id(OPENAI)})  openai: in 30 files, 30 places" in report
     assert f"{peek(FRED)} ({len(FRED)} chars, id {value_id(FRED)})  fred  FRED_API_KEY: in 30 files, 30 places" in report
-    assert "In short (details at the top)" in report.splitlines()[-4]
+    assert any("In short (details at the top)" in line for line in report.splitlines()[-6:])
     shown = capsys.readouterr().out
     assert f"Results saved in ~/envh-backups-and-scans/scans/{report_dir.name}" in shown and "notes.md" not in shown
-    assert "90 key-shaped strings in 30 files" in shown and "known key format: 1 distinct value in 30 files" in shown
+    assert "90 key-shaped strings in 30 files" in shown and "Likely keys, in a provider's key format: 1 distinct value in 30 files" in shown
     for entry in report_dir.iterdir():
         assert OPENAI not in entry.read_text() and FRED not in entry.read_text()
     assert scan_paths([report_dir], 1024 * 1024)[0] == []
@@ -294,6 +296,10 @@ def test_the_out_folder_gets_the_dated_results_folder(tmp_path: Path, capsys: py
     ("prompt_tokens", "low", "unknown"),
     ("NOPASSWD", "low", "unknown"),
     ("publicKeyToken", "low", "unknown"),
+    ("getAccessToken", "low", "unknown"),
+    ("withCredentials", "low", "unknown"),
+    ("updateApiKey", "low", "unknown"),
+    ("refresh_token", "medium", "unknown"),
 ])
 def test_names_set_the_confidence_and_service(name: str, confidence: str, service: str) -> None:
     assert classify_name(name) == (confidence, service)
@@ -302,8 +308,9 @@ def test_names_set_the_confidence_and_service(name: str, confidence: str, servic
 def test_values_are_shown_like_the_console_shows_them_after_the_formats_fixed_prefix() -> None:
     [openrouter] = scan_text(Path("f"), f"{OPENROUTER}\n")
     assert openrouter.shown == "sk-or-v1-" + OPENROUTER[9:13] + "\u2026" + OPENROUTER[-4:] and openrouter.confidence == "high"
-    [short] = scan_text(Path("f"), f"MY_API_KEY={FRED[:16]}\n")
-    assert short.shown == FRED[0] + "\u2026" + FRED[15] and short.confidence == "medium"
+    sixteen = random_text("short key", 16)
+    [short] = scan_text(Path("f"), f"MY_API_KEY={sixteen}\n")
+    assert short.shown == sixteen[0] + "\u2026" + sixteen[15] and short.confidence == "medium"
 
 
 def test_ask_where_keeps_the_default_or_takes_a_typed_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -327,3 +334,81 @@ def test_a_fixed_length_format_inside_a_longer_string_is_not_a_key() -> None:
 def test_a_key_prefix_inside_a_base64_blob_is_not_a_key() -> None:
     blob = "iVBORw0KGgo" + "QmFzZTY0" * 40 + "ABSK" + "QmVkcm9jayBrZXk" * 30 + "AIza" + "QmFzZTY0" * 40
     assert list(scan_text(Path("transcript.jsonl"), json.dumps({"image": blob}))) == []
+
+
+@pytest.mark.parametrize("kind", ["openai-legacy", "deepseek", "stripe", "aws-access-key", "github"])
+def test_placeholder_samples_are_fake_and_random_keys_are_not(kind: str) -> None:
+    [placeholder] = scan_text(Path("README.md"), f"{SAMPLES[kind]}\n")
+    assert placeholder.confidence == "fake"
+    assert [hit.confidence for hit in scan_text(Path("f"), f"{OPENROUTER} {OPENAI}\n")] == ["high", "high"]
+    assert looks_fake("AKIAIOSFODNN7EXAMPLE", 4) and looks_fake("your-openai-key-goes-here-1234") and not looks_fake(FRED)
+
+
+def test_code_that_reads_a_key_is_not_reported() -> None:
+    text = "\n".join([
+        "api_key = self.settings.openai_api_key",
+        "OPENROUTER_API_KEY: OPENROUTER_API_KEY_PROD",
+        "const secretKey = process.env.STRIPE_SECRET_KEY",
+        "authToken: refreshAccessTokenNow",
+        "private_key = CertificateIssuerTypes",
+        f"FRED_API_KEY={FRED}",
+    ])
+    assert [hit.name for hit in scan_text(Path("app.py"), text)] == ["FRED_API_KEY"]
+
+
+@pytest.mark.parametrize(("path", "place"), [
+    ("/h/.config/Cursor/User/History/-1a2b/abcd", "editor history"),
+    ("/h/.claude/projects/x/session.jsonl", "agent transcripts"),
+    ("/h/.codex/sessions/2026/x.jsonl", "agent transcripts"),
+    ("/h/.claude/ide/26078.lock", "credential files"),
+    ("/h/.claude/todos/x.json", "agent transcripts"),
+    ("/h/.claude/.credentials.json", "credential files"),
+    ("/h/.config/gh/hosts.yml", "credential files"),
+    ("/h/.aws/credentials", "credential files"),
+    ("/h/.codex/.tmp/plugins/x/README.md", "agent app data"),
+    ("/h/code/app/.claude/worktrees/fix-x/README.md", "worktree copies"),
+    ("/h/code/app/.kilo/worktrees/meteor/.env.template", "worktree copies"),
+    ("/h/code/app/logs/run.log", "logs"),
+    ("/h/code/app/temp/1_bot_logs/run_bot.txt", "logs"),
+    ("/h/code/app/tests/test_keys.py", "tests"),
+    ("/h/code/app/README.md", "docs and notes"),
+    ("/h/code/app/.env.local", ".env files"),
+    ("/h/code/app/output_runs/traces.jsonl", "data and output"),
+    ("/h/code/app/main.py", "code and config"),
+    ("/h/code/app/catalog/blog/post", "other"),
+    ("/h/.local/share/Trash/files/.env", "trash"),
+    ("/elsewhere/.claude/projects/x.py", "code and config"),
+])
+def test_each_hit_gets_a_place(path: str, place: str) -> None:
+    assert place_of(path, home="/h") == place
+
+
+@pytest.mark.parametrize(("url", "fake"), [
+    ("postgres://postgres:postgres@localhost:5432/metaculus", True),
+    ("postgres://app:" + random_text("db", 24) + "@localhost/app", True),
+    ("mysql://admin:admin@db.internal:3306/app", True),
+    ("postgres://app:" + random_text("db", 24) + "@db.internal.acme-prod.net:5432/app", False),
+])
+def test_default_and_local_database_logins_are_fake(url: str, fake: bool) -> None:
+    [hit] = scan_text(Path("README.md"), f"DATABASE_URL={url}\n")
+    assert (hit.kind, hit.confidence == "fake") == ("database-url", fake)
+
+
+def test_a_private_key_header_without_key_material_is_not_a_key() -> None:
+    assert list(scan_text(Path("pem.py"), 'if line.startswith("-----BEGIN PRIVATE KEY-----"):\n')) == []
+    escaped = json.dumps({"private_key": "-----BEGIN PRIVATE KEY-----\n" + random_text("pem", 64) + "\n"})
+    assert [hit.kind for hit in scan_text(Path("service.json"), escaped)] == ["private-key"]
+
+
+def test_a_database_url_stops_at_escaped_newlines_and_markdown() -> None:
+    url = "postgres://app:" + random_text("db password", 16) + "@db.acme-prod.net:5432/app"
+    lines = [json.dumps({"text": f"use {url}\n\nthen run"}), f"[db]({url}) and `{url}`"]
+    assert {hit.length for hit in scan_text(Path("t.jsonl"), "\n".join(lines))} == {len(url)}
+
+
+def test_a_demo_jwt_is_fake_and_a_uuid_key_is_kept() -> None:
+    payload = base64.urlsafe_b64encode(json.dumps({"iss": "supabase-demo", "role": "anon"}).encode()).decode().rstrip("=")
+    [demo] = scan_text(Path("f"), f"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.{payload}.{random_text('sig', 43)}\n")
+    assert (demo.kind, demo.confidence) == ("jwt", "fake")
+    exa = "facedbad-7a3b-4c8d-9e5f-b2a1c3d4e5f6"
+    assert [(hit.name, hit.confidence) for hit in scan_text(Path(".env"), f"EXA_API_KEY={exa}\n")] == [("EXA_API_KEY", "medium")]

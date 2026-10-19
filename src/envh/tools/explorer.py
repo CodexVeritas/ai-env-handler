@@ -28,10 +28,11 @@ from pathlib import Path
 from envh.client.transport import ClientError
 from envh.common import peek, printable
 from envh.tools.saved_files import SCANS, saved_files_root, shown_path
-from envh.tools.scanner import DEFAULT_MAX_BYTES, Hit, plural, read_if_text, scan_text, shown_folder
+from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, place_of, plural, read_if_text, scan_text, shown_folder
 
-TIERS = ("high", "medium", "low", "all")
-TIER_LABELS = {"high": "High", "medium": "Medium", "low": "Low", "all": "All"}
+TIERS = ("high", "medium", "low", "fake", "all")
+TIER_LABELS = {"high": "Likely", "medium": "Possible", "low": "Unlikely", "fake": "Placeholder", "all": "All"}
+GROUPINGS = ("type", "place")
 GROUP_ABOVE = 5
 LINES_SHOWN_PER_FILE = 3
 CONTEXT_LINES = 3
@@ -65,6 +66,7 @@ class Found:
     shown: str
     fingerprint: str
     length: int
+    place: str
 
     def describe(self) -> str:
         return f"{self.shown} ({self.length} chars, id {self.fingerprint})"
@@ -145,7 +147,7 @@ def glimpse(value: str, fixed: int) -> str:
     return value[:fixed] + (f"{rest[:8]}…{rest[-4:]}" if len(rest) >= LONG_REST else peek(rest))
 
 
-ROW_HINTS = {"type": "→ shows its keys", "value": "→ shows the files it is in", "group": "→ shows these files", "file": "Enter shows the lines around the key"}
+ROW_HINTS = {"top": "→ shows its keys", "value": "→ shows the files it is in", "folder": "→ shows these files", "file": "Enter shows the lines around the key"}
 
 
 def row_hint(row: Row, expanded: set[tuple[str, ...]]) -> str:
@@ -189,7 +191,10 @@ def load_scan(folder: Path) -> list[Found]:
     hits = data["hits"]
     if hits and "confidence" not in hits[0]:
         raise ClientError(f"{shown_path(folder)} was saved by an older envh scan; run envh scan again", 2)
-    return [Found(hit["path"], hit["line"], hit["confidence"], hit["kind"], hit["name"], hit["shown"], hit["fingerprint"], hit["length"]) for hit in hits]
+    return [
+        Found(hit["path"], hit["line"], hit["confidence"], hit["kind"], hit["name"], hit["shown"], hit["fingerprint"], hit["length"], place_of(hit["path"]))
+        for hit in hits
+    ]
 
 
 def newest_scan(root: Path) -> Path:
@@ -205,14 +210,15 @@ Tree = dict[TypeKey, dict[str, dict[str, list[int]]]]
 
 @dataclass
 class Index:
-    """The hits of one tier and filter, as type → value → file → line numbers, with each value's names."""
+    """The hits of one tier and filter, as type (or place) → value → file → line numbers, with each value's names."""
 
     tree: Tree
     first: dict[str, Found]
     names: dict[str, set[str]]
+    grouping: str = "type"
 
 
-def build_index(hits: list[Found], tier: str, needle: str) -> Index:
+def build_index(hits: list[Found], tier: str, needle: str, grouping: str = "type") -> Index:
     tree: Tree = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     first: dict[str, Found] = {}
     names: dict[str, set[str]] = defaultdict(set)
@@ -220,13 +226,13 @@ def build_index(hits: list[Found], tier: str, needle: str) -> Index:
     for hit in hits:
         if tier != "all" and hit.confidence != tier:
             continue
-        if needle and needle not in hit.kind.lower() and needle not in hit.name.lower() and needle not in hit.path.lower():
+        if needle and needle not in hit.kind.lower() and needle not in hit.name.lower() and needle not in hit.path.lower() and needle not in hit.place:
             continue
-        tree[(hit.kind, hit.confidence)][hit.fingerprint][hit.path].append(hit.line)
+        tree[(hit.kind if grouping == "type" else hit.place, hit.confidence)][hit.fingerprint][hit.path].append(hit.line)
         first.setdefault(hit.fingerprint, hit)
         if hit.name:
             names[hit.fingerprint].add(hit.name)
-    return Index(tree, first, names)
+    return Index(tree, first, names, grouping)
 
 
 def file_count(values: dict[str, dict[str, list[int]]]) -> int:
@@ -245,15 +251,17 @@ def tree_rows(index: Index, expanded: set[tuple[str, ...]], show_tier: bool) -> 
     groups them by folder."""
     rows: list[Row] = []
     for (kind, confidence), values in sorted(index.tree.items(), key=lambda item: (-file_count(item[1]), item[0])):
-        type_node = ("type", kind, confidence)
+        type_node = ("top", kind, confidence)
         detail = f"{plural(len(values), 'key')} in {plural(file_count(values), 'file')}"
-        rows.append(Row(type_node, None, 0, kind, (f"{confidence} · " if show_tier else "") + detail, True))
+        rows.append(Row(type_node, None, 0, kind, (f"{TIER_NAMES[confidence]} · " if show_tier else "") + detail, True))
         if type_node not in expanded:
             continue
         for fingerprint, paths in sorted(values.items(), key=lambda item: (-len(item[1]), item[0])):
             value_node = ("value", kind, confidence, fingerprint)
             names = sorted(index.names.get(fingerprint, ()))
             label = index.first[fingerprint].describe() + ("  " + ", ".join(names[:2]) + (" …" if len(names) > 2 else "") if names else "")
+            if index.grouping == "place":
+                label = f"{index.first[fingerprint].kind}  {label}"
             rows.append(Row(value_node, type_node, 1, label, plural(len(paths), "file"), True))
             if value_node not in expanded:
                 continue
@@ -267,7 +275,7 @@ def tree_rows(index: Index, expanded: set[tuple[str, ...]], show_tier: bool) -> 
                 if len(members) == 1:
                     rows.append(file_row(kind, confidence, fingerprint, members[0], paths[members[0]], value_node, 2))
                     continue
-                group_node = ("group", kind, confidence, fingerprint, folder)
+                group_node = ("folder", kind, confidence, fingerprint, folder)
                 rows.append(Row(group_node, value_node, 2, folder, plural(len(members), "file"), True))
                 if group_node in expanded:
                     rows.extend(file_row(kind, confidence, fingerprint, path, paths[path], group_node, 3) for path in sorted(members))
@@ -346,6 +354,7 @@ class Explorer:
         self.tier_counts = {tier: len({hit.fingerprint for hit in hits if tier == "all" or hit.confidence == tier}) for tier in TIERS}
         self.tier = next((tier for tier in TIERS if self.tier_counts[tier]), "all")
         self.needle = ""
+        self.grouping = "type"
         self.editing_filter = False
         self.expanded: set[tuple[str, ...]] = set()
         self.selected = 0
@@ -353,12 +362,12 @@ class Explorer:
         self.file_view: FileView | None = None
         self.message = ""
         self.done = False
-        self._index_key: tuple[str, str] | None = None
+        self._index_key: tuple[str, str, str] | None = None
         self._index: Index | None = None
 
     def index(self) -> Index:
-        if self._index_key != (self.tier, self.needle) or self._index is None:
-            self._index_key, self._index = (self.tier, self.needle), build_index(self.hits, self.tier, self.needle)
+        if self._index_key != (self.tier, self.needle, self.grouping) or self._index is None:
+            self._index_key, self._index = (self.tier, self.needle, self.grouping), build_index(self.hits, self.tier, self.needle, self.grouping)
         return self._index
 
     def rows(self) -> list[Row]:
@@ -397,6 +406,9 @@ class Explorer:
             self.selected, self.expanded = 0, set()
         elif key == "/":
             self.editing_filter = True
+        elif key == "g":
+            self.grouping = GROUPINGS[(GROUPINGS.index(self.grouping) + 1) % len(GROUPINGS)]
+            self.selected, self.expanded = 0, set()
         elif key in ("q", "escape"):
             if key == "escape" and self.needle:
                 self.needle, self.selected = "", 0
@@ -430,7 +442,7 @@ class Explorer:
         _, kind, confidence, fingerprint, path = row.node
         value = self.index().first[fingerprint]
         lines, problem = read_context(path, fingerprint)
-        type_label = kind if self.tier != "all" else f"{kind} ({confidence})"
+        type_label = value.kind if self.tier != "all" else f"{value.kind} ({TIER_NAMES[confidence]})"
         self.file_view = FileView(path, value, type_label, lines, problem)
         self.jump(1, self.file_view, from_top=True)
 
@@ -486,14 +498,19 @@ class Explorer:
 
     def header(self, width: int, crumbs: list[str]) -> list[str]:
         title = [(" envh explore", "1;36"), *[(f" › {crumb}", "1") for crumb in crumbs]]
-        tabs: list[tuple[str, str]] = [(" ", "")]
+        tabs: list[tuple[str, str]] = [(" Real key? ", "2")]
         for tier in TIERS:
             label = f" {TIER_LABELS[tier]} {self.tier_counts[tier]:,} "
             tabs.append((label, "1;7" if tier == self.tier else "2"))
             tabs.append((" ", ""))
+        return [fit(title, width), fit(tabs, width), fit(self.state_line(), width)]
+
+    def state_line(self) -> list[tuple[str, str]]:
+        """How the list is grouped and filtered, under the tabs."""
+        state: list[tuple[str, str]] = [(f" Grouped by {self.grouping} (g)", "2")]
         if self.editing_filter or self.needle:
-            tabs.append((f"  filter: {self.needle}" + ("▏" if self.editing_filter else ""), "36"))
-        return [fit(title, width), fit(tabs, width), ""]
+            state.append((f" · filter: {self.needle}" + ("▏" if self.editing_filter else ""), "36"))
+        return state
 
     def scan_label(self) -> str:
         try:
@@ -512,7 +529,7 @@ class Explorer:
             self.top = self.selected - visible + 1
         self.top = min(self.top, max(len(rows) - visible, 0))
         if not rows:
-            lines.append("  No keys here. Tab switches between High, Medium, Low and All; Esc clears the filter.")
+            lines.append("  No keys here. Tab switches between the Likely, Possible, Unlikely and Placeholder lists; Esc clears the filter.")
         for index in range(self.top, min(self.top + visible, len(rows))):
             row = rows[index]
             mark = ("▾ " if row.node in self.expanded else "▸ ") if row.expandable else "  "
@@ -523,9 +540,9 @@ class Explorer:
             lines.append(fit(segments, width))
         lines = (lines + [""] * height)[: height - 2]
         if self.editing_filter:
-            hint = "Type to filter by service, name or path · Enter keep · Esc clear"
+            hint = "Type to filter by service, name, place or path · Enter keep · Esc clear"
         else:
-            hint = "↑↓ move · → open · ← close · Enter view · Tab tier · / filter · q quit"
+            hint = "↑↓ move · → open · ← close · Enter view · Tab next list · g group · / filter · q quit"
         lines.append(fit([(f" {self.message}", "33")], width) if self.message else "")
         lines.append(fit([(f" {hint}", "2")], width))
         return lines
