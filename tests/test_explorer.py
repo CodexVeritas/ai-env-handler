@@ -330,6 +330,9 @@ def test_x_on_all_your_keys_replaces_every_copy_of_them_and_nothing_else(tmp_pat
     assert (first.label, first.detail) == ("All your keys", "2 keys in 2 files") and "x replaces every copy of them" in screen(explorer)[3]
     press(explorer, "enter")
     assert explorer.message.startswith("x replaces every copy of your keys") and explorer.file_view is None
+    explorer.needle = "fred"
+    assert (explorer.rows()[0].label, explorer.rows()[0].detail) == ('All your keys matching "fred"', "1 key in 1 file")
+    explorer.needle = ""
     press(explorer, "x")
     rows = "\n".join(screen(explorer))
     assert "All your keys: 3 copies of 2 keys in 2 files" in rows and "in your vault" not in rows.split("Each copy becomes")[1]

@@ -436,7 +436,8 @@ class Explorer:
         if self.tier != "yours" or not rows:
             return rows
         files = {path for values in index.tree.values() for paths in values.values() for path in paths}
-        return [Row(("every", EVERY_COPY, self.tier), None, 0, EVERY_COPY, f"{plural(len(index.first), 'key')} in {plural(len(files), 'file')}", False), *rows]
+        label = f'{EVERY_COPY} matching "{self.needle}"' if self.needle else EVERY_COPY
+        return [Row(("every", EVERY_COPY, self.tier), None, 0, label, f"{plural(len(index.first), 'key')} in {plural(len(files), 'file')}", False), *rows]
 
     def handle(self, key: str, height: int) -> None:
         self.message = ""

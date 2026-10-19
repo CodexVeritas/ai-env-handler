@@ -823,7 +823,7 @@ def confirmed_copies(hits: list[Hit], vault: VaultSearch) -> tuple[list[Hit], di
     lines = (f"· Searched for {plural(vault.keys.count, 'vault key')}: {plural(yours, 'stored key')} found, {copies_label(only_by_search)} only by that search.",)
     copies = [hit for hit in hits if hit.fingerprint in matches]
     if copies:
-        where = f"{copies_label(len(copies))} of {plural(yours, 'key')} in {plural(len({hit.path for hit in copies}), 'file')}"
+        where = f"{copies_label(len(copies))} of {plural(len({hit.fingerprint for hit in copies}), 'key')} in {plural(len({hit.path for hit in copies}), 'file')}"
         lines += (styled("1;33", f'! Start with your own keys: {where}. envh explore opens on them; x on "All your keys" replaces them all.'),)
     return hits, matches, lines
 
