@@ -4,6 +4,7 @@ import io
 import re
 import json
 import os
+import sqlite3
 import stat
 import time
 from pathlib import Path
@@ -85,6 +86,17 @@ def test_skips_binaries_large_files_and_vendor_dirs_but_reads_git_config(tmp_pat
     hits, scanned, _ = scan_paths([tmp_path], 1024 * 1024)
     assert {hit.path.name for hit in hits} == {"config"}
     assert {hit.kind for hit in hits} == {"github"}
+
+
+def test_a_key_in_a_sqlite_database_is_not_read_and_is_listed(tmp_path: Path) -> None:
+    with sqlite3.connect(tmp_path / "state.vscdb") as database:
+        database.execute("CREATE TABLE items (key TEXT, value TEXT)")
+        database.execute("INSERT INTO items VALUES ('env', ?)", (f"OPENAI_API_KEY={OPENAI}",))
+    database.close()
+    not_read = NotRead(1024 * 1024)
+    unreadable: list[Path] = []
+    hits, _ = scan_files(find_files([tmp_path], not_read.limit, unreadable, None, not_read), unreadable, None, None, not_read)
+    assert hits == [] and not_read.binary == [tmp_path / "state.vscdb"]
 
 
 def test_database_url_and_private_key() -> None:

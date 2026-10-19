@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from envh import platform
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("setup_wizard", ROOT / "scripts" / "setup_wizard.py")
 wizard = importlib.util.module_from_spec(spec)
@@ -382,4 +384,65 @@ def test_the_explorer_can_be_skipped_and_a_clean_scan_shows_no_panel(tmp_path: P
     calls = fake_envh(tmp_path, monkeypatch, scan_exit=0)
     answer_inputs(monkeypatch, "", "")
     assert wizard.step_scan() == wizard.Outcome(True, "nothing found")
-    assert "The explorer" not in capsys.readouterr().out and len(calls) == 1
+    shown = capsys.readouterr().out
+    assert "The explorer" not in shown and len(calls) == 1
+    assert "No stray keys found in the files it could read" in shown
+
+
+def test_the_scan_says_what_it_misses_before_it_asks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    fake_envh(tmp_path, monkeypatch, scan_exit=0)
+    answer_inputs(monkeypatch, "n")
+    assert wizard.step_scan() == wizard.Outcome(False, "skipped")
+    assert "It will miss some: it can't read databases (such as SQLite)" in capsys.readouterr().out
+
+
+def fake_sudo(monkeypatch: pytest.MonkeyPatch, groups: list[str], failing: str | None = None) -> list[list[str]]:
+    monkeypatch.setattr(wizard, "root_granting_groups", lambda user: groups)
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1 if failing in argv else 0, "", "gpasswd: failed")
+
+    monkeypatch.setattr(wizard.subprocess, "run", run)
+    return calls
+
+
+def test_the_root_groups_step_is_first_so_the_install_checks_pass() -> None:
+    assert wizard.STEPS[0] == ("Docker group", wizard.step_root_groups)
+
+
+def test_someone_outside_root_granting_groups_is_not_asked(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls = fake_sudo(monkeypatch, [])
+    assert wizard.step_root_groups() == wizard.Outcome(True, "not in one")
+    assert calls == [] and "not in docker" in capsys.readouterr().out
+
+
+def test_staying_in_the_docker_group_is_the_default(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls = fake_sudo(monkeypatch, ["docker"])
+    answer_inputs(monkeypatch, "")
+    assert wizard.step_root_groups() == wizard.Outcome(False, "kept")
+    shown = capsys.readouterr().out
+    assert calls == [] and "Being in the docker group is the same as having root without a password." in shown
+
+
+def test_leaving_runs_gpasswd_for_each_group_then_forgets_sudo(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls = fake_sudo(monkeypatch, ["docker", "lxd"])
+    answer_inputs(monkeypatch, "y")
+    user = wizard.pwd.getpwuid(wizard.os.getuid()).pw_name
+    assert wizard.step_root_groups() == wizard.Outcome(True, "left; log out and back in")
+    assert calls == [[wizard.SUDO, "gpasswd", "-d", user, "docker"], [wizard.SUDO, "gpasswd", "-d", user, "lxd"], [wizard.SUDO, "-k"]]
+    assert "Left the docker and lxd groups. Log out and back in to finish." in capsys.readouterr().out
+
+
+def test_a_failed_gpasswd_stops_the_step_and_still_forgets_sudo(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls = fake_sudo(monkeypatch, ["docker"], failing="docker")
+    answer_inputs(monkeypatch, "y")
+    assert wizard.step_root_groups() == wizard.Outcome(False, "failed to leave docker")
+    assert calls[-1] == [wizard.SUDO, "-k"] and "gpasswd: failed" in capsys.readouterr().out
+
+
+def test_root_granting_groups_come_from_envh_platform_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "modules", dict(sys.modules))
+    user = wizard.pwd.getpwuid(wizard.os.getuid()).pw_name
+    assert wizard.root_granting_groups(user) == platform.root_granting_groups_of(user)
