@@ -431,7 +431,7 @@ def test_leaving_runs_gpasswd_for_each_group_then_forgets_sudo(monkeypatch: pyte
     answer_inputs(monkeypatch, "y")
     user = wizard.pwd.getpwuid(wizard.os.getuid()).pw_name
     assert wizard.step_root_groups() == wizard.Outcome(True, "left; log out and back in")
-    assert calls == [[wizard.SUDO, "gpasswd", "-d", user, "docker"], [wizard.SUDO, "gpasswd", "-d", user, "lxd"], [wizard.SUDO, "-k"]]
+    assert calls == [[wizard.SUDO, "/usr/bin/gpasswd", "-d", user, "docker"], [wizard.SUDO, "/usr/bin/gpasswd", "-d", user, "lxd"], [wizard.SUDO, "-k"]]
     assert "Left the docker and lxd groups. Log out and back in to finish." in capsys.readouterr().out
 
 

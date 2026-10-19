@@ -53,6 +53,7 @@ ROOT_FLAG = "--install-as-root"
 PREFLIGHT_EXIT = 3
 SUDO = "/usr/bin/sudo"
 SYSTEM_PYTHON = "/usr/bin/python3"
+GPASSWD = "/usr/bin/gpasswd"
 SERVICE_USER = "envh"
 SUDO_SECURE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 UV_ROOT_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | /usr/bin/sudo env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
@@ -343,7 +344,7 @@ def step_root_groups() -> Outcome:
     try:
         for group in groups:
             detail(f"Running: sudo gpasswd -d {user} {group}")
-            result = subprocess.run([SUDO, "gpasswd", "-d", user, group], capture_output=True, text=True)
+            result = subprocess.run([SUDO, GPASSWD, "-d", user, group], capture_output=True, text=True)
             if result.returncode != 0:
                 warn(f"Couldn't leave {group}: {result.stderr.strip() or f'exit code {result.returncode}'}")
                 return Outcome(False, f"failed to leave {group}")
