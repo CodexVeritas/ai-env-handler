@@ -57,9 +57,10 @@ REGRESSION_TESTS=(
   "tests/test_durations.py::test_absurdly_long_durations_are_clean_errors_not_crashes"                   # V5
   "tests/test_state.py::test_ids_are_per_user_sequential_and_do_not_leak_other_users_activity"           # V7
 )
-if (cd "$REPO" && uv run pytest -q "${REGRESSION_TESTS[@]}" tests/test_hook.py >/tmp/arena-regression.log 2>&1); then
+regression_log="$(mktemp "${TMPDIR:-/tmp}/arena-regression.XXXXXX")"
+if (cd "$REPO" && uv run pytest -q "${REGRESSION_TESTS[@]}" tests/test_hook.py >"$regression_log" 2>&1); then
   ok "V1-V8 regression tests pass (fixes intact)"
-else bad "a prior-pass regression test FAILED; a fix may have regressed -- see /tmp/arena-regression.log"; fi
+else bad "a prior-pass regression test FAILED; a fix may have regressed -- see $regression_log"; fi
 
 echo
 if [[ "$fail" == 0 ]]; then echo "SELFCHECK: SOUND -- the arena can observe leaks, enforces the boundary, and the prior fixes hold."; else echo "SELFCHECK: UNSOUND -- do NOT trust campaign results until fixed."; fi

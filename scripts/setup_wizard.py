@@ -576,10 +576,16 @@ def cursor_hook_commands(config: dict[str, Any]) -> list[str]:
 
 
 def with_cursor_hook(config: Any, hook_command: str) -> dict[str, Any]:
-    # No command-text matcher: the hook must run on every beforeShellExecution so it also sees
-    # commands where bash reconstructs the name (e""nvh, $'\x65nvh') with no literal "envh" substring.
+    # No command-text matcher: the hook must run on every beforeShellExecution so it also sees commands
+    # where bash reconstructs the name (e""nvh, $'\x65nvh') with no literal "envh" substring. Replace
+    # any existing envh entry (e.g. a stale one carrying a "matcher") with the single matcher-free
+    # entry, so a rerun MIGRATES an old hook instead of leaving the bypassable one in place.
     entry = {"command": hook_command, "timeout": 10}
-    return {"version": 1, **with_hook_entry(config, "beforeShellExecution", entry, "hooks.json")}
+    merged = {"version": 1, **with_hook_entry(config, "beforeShellExecution", entry, "hooks.json")}
+    execs = merged["hooks"]["beforeShellExecution"]
+    kept = [item for item in execs if not (isinstance(item, dict) and HOOK_FILE_NAME in str(item.get("command", "")))]
+    merged["hooks"]["beforeShellExecution"] = kept + [entry]
+    return merged
 
 
 def config_with_hook(
@@ -597,6 +603,21 @@ def config_with_hook(
     except (json.JSONDecodeError, ValueError, AttributeError) as error:
         raise SystemExit(f"✗ Can't add the hook to {config_path}: {error}. Fix the file and rerun the wizard.") from error
     return None if existing else json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
+
+
+def cursor_config_text(config_path: Path, hook_command: str) -> str | None:
+    """New hooks.json text for Cursor, or None when the matcher-free envh entry is already present.
+
+    Unlike config_with_hook (which treats any existing envh command as done), this REPLACES a stale
+    entry — e.g. one with a command-text "matcher" from before that matcher was dropped — so a rerun
+    migrates it. with_cursor_hook is idempotent, so an already-correct config maps to itself → None."""
+    original_text = config_path.read_text() if config_path.exists() else ""
+    try:
+        config = json.loads(original_text) if original_text.strip() else {}
+        merged = with_cursor_hook(config, hook_command)
+    except (json.JSONDecodeError, ValueError, AttributeError) as error:
+        raise SystemExit(f"✗ Can't add the hook to {config_path}: {error}. Fix the file and rerun the wizard.") from error
+    return None if merged == config else json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
 
 
 def write_with_backup(path: Path, text: str) -> None:
@@ -657,9 +678,18 @@ def claude_code_changes(claude_home: Path) -> list[Change]:
 
 
 def cursor_changes(cursor_home: Path) -> list[Change]:
-    """Each change the Cursor step would make; empty when everything is in place."""
+    """Each change the Cursor step would make; empty when everything is in place. Unlike Claude's
+    settings.json, an existing Cursor hook entry is MIGRATED (a stale command-text matcher removed)
+    rather than treated as already-done, so a rerun fixes a hook installed before the matcher was dropped."""
     hook_command = f"python3 {shlex.quote(str(cursor_home / 'hooks' / HOOK_FILE_NAME))}"
-    return skill_and_hook_changes(cursor_home) + hook_config_changes(cursor_home / "hooks.json", hook_command, with_cursor_hook, cursor_hook_commands)
+    changes = skill_and_hook_changes(cursor_home)
+    config_path = cursor_home / "hooks.json"
+    config_text = cursor_config_text(config_path, hook_command)
+    if config_text is not None:
+        outdated = "hook" if config_path.exists() else None
+        verb = "Update" if outdated else "Turn on"
+        changes.append(Change(f"{verb} the hook in {tilde(config_path)} (backed up first)", lambda: write_with_backup(config_path, config_text), outdated))
+    return changes
 
 
 def step_connect(tool: str, tool_home: Path, changes_for: Callable[[Path], list[Change]]) -> Outcome:

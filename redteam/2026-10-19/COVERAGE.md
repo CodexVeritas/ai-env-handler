@@ -13,8 +13,9 @@ Silent gaps are not allowed.
   blind spots.
 - **Independent grading**: each candidate was reproduced from scratch by a separate grader agent, as
   a **non-root user** (`rt1`/`rt2`/`outsider`) on its own fresh arena instance, before any CONFIRMED
-  verdict (`evidence/grading/`). Two of the four DoS findings were additionally found by two
-  independent attackers.
+  verdict (`evidence/grading/`). One of the four DoS findings (V9) was additionally found by two
+  independent attackers (w1-crossuser and w1-protocol); the V16 `minutes`-overflow item (LOW
+  robustness, not DoS) was likewise found by two (w1-protocol and w1-lifecycle).
 - **Effort**: 9 attacker agents (~0.9–1.2 M tokens of tool work) + a 9-grader verification wave. Not
   an exhaustive search — see "not covered".
 

@@ -28,9 +28,14 @@ async def test_run_done_fields_are_clamped_so_a_client_cannot_flood_the_audit_lo
         assert reply["ok"] is True and reply["env"] == {"OPENAI_API_KEY": "sk-openai"}
         blob = "9" * 500_000  # attacker-controlled run_done fields, half a megabyte each
         await client.send(op="run_done", exit_code=blob, lingering_terminated=blob)
-        await asyncio.sleep(0.1)
-    assert harness.echoed, "expected audit events to be recorded"
-    assert max(len(line) for line in harness.echoed) < 10_000, "run_end must not write the half-megabyte blob to the audit log"
+        run_end = None
+        for _ in range(500):  # wait (up to ~5s) for the broker to actually record the run_end event
+            run_end = next((line for line in harness.echoed if "run_end" in line), None)
+            if run_end is not None:
+                break
+            await asyncio.sleep(0.01)
+    assert run_end is not None, "the broker never recorded a run_end event"
+    assert len(run_end) < 10_000, "run_end must not carry the half-megabyte blob into the audit log"
 
 
 async def test_a_run_with_too_many_with_items_is_refused(control: Path, harness: Harness) -> None:

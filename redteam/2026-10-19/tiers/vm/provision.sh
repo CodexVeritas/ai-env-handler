@@ -10,7 +10,7 @@ export DEBIAN_FRONTEND=noninteractive
 (command -v dnf && dnf install -y python3 sudo curl git) || true
 
 command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | sh; ln -sf "$HOME/.local/bin/uv" /usr/local/bin/uv; }
-[[ -x "$VENV/bin/python" ]] || { uv venv "$VENV" --python python3; uv pip install --python "$VENV/bin/python" "$REPO"; }
+[[ -x "$VENV/bin/python" ]] || { uv venv "$VENV" --python 3.12; uv pip install --python "$VENV/bin/python" "$REPO"; }
 
 echo "guest kernel: $(uname -r)"
 echo "legacy_tiocsti control present: $([[ -e /proc/sys/dev/tty/legacy_tiocsti ]] && echo yes || echo no)"

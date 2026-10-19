@@ -15,7 +15,8 @@ cross-user all came back sound — see the per-agent files). What this pass surf
 (DoS)**: four novel ways for a single listed user to wedge or flood the single-threaded broker, each
 bypassing a 2026-10-05 fix or an uncapped surface; plus three **hook-attention** bypasses (the hook
 is explicitly not the boundary) and a class of **low-severity robustness** gaps. All are fixed here
-with regression tests (`REMEDIATION.md`).
+with regression tests (`REMEDIATION.md`) — except **V15, which is mitigated, not closed**: the
+positional-argument wrappers `chrt`/`setarch` are still not peeled by the (attention-only) hook.
 
 ## CONFIRMED (novel)
 
@@ -27,7 +28,7 @@ with regression tests (`REMEDIATION.md`).
 | **V12** | HIGH | F9/F5 | **YAML merge-key (`<<`) expansion bomb (bypasses V1/V2).** A ~500-byte document expands width**depth inside `yaml.safe_load`'s `flatten_mapping` — before any validation — via the no-approval `op_preset_validate`/`op_preset_propose`; attacker-chosen block time, depth ~10 OOM-kills. Tiny payload evades the byte cap; blow-up precedes the V1 error path. | ATT&CK T1499.004, LLM10, CWE-776, ASVS V5 |
 | **V13** | MEDIUM | F10 | **Hook: ANSI-C quoting not decoded.** `$'\x65nvh' …` runs as `envh`, but the hook's lexer stripped the backslash without decoding `\xHH`/octal/unicode, so the command name didn't match and no "a passphrase will be needed" heads-up fired. | LLM01, ATLAS AML.T0051 |
 | **V14** | MEDIUM | F10 | **Hook: Cursor's matcher was a bare `"envh"` substring.** Commands where bash reconstructs the name with no literal `envh` (`e""nvh`, the ANSI-C form) never invoked the hook at all (silent allow). The Claude path (tool-name matcher) was unaffected. | LLM01 |
-| **V15** | MEDIUM | F10 | **Hook: unlisted prefix wrappers hide envh.** `ionice`/`taskset`/`chrt`/`setarch` and `pipenv`/`pdm`/`rye run` weren't in the allow-list peeler, so the real `envh` command after them was missed. (Same shape as the V8 runner-table work; the wrapper list is inherently curated — see REMEDIATION.) | LLM01 |
+| **V15** | MEDIUM | F10 | **Hook: unlisted prefix wrappers hide envh.** `ionice`/`taskset`/`chrt`/`setarch` and `pipenv`/`pdm`/`rye run` weren't in the allow-list peeler, so the real `envh` command after them was missed. **Mitigated, not closed:** `ionice`/`taskset`/`nocache`/`pipenv`/`pdm`/`rye` are now peeled, but `chrt`/`setarch` take a positional argument before the command and remain unpeeled; the wrapper list is inherently curated and the hook is not the boundary (see REMEDIATION/COVERAGE). | LLM01 |
 | **V16** | LOW | F1/F2/F5 | **Robustness: client inputs cause an uncaught "internal error".** Four client-triggerable uncaught exceptions, each a per-connection failure (broker survives, no value/traceback leaks): `op_session_start` integer `minutes` overflow (a V5 gap — the fix covered duration *strings*, not the int field), a huge JSON number literal raising `ValueError` not `JSONDecodeError`, a session-run `--with` list with non-string items, and deeply nested YAML raising `RecursionError`. | ASVS V5 |
 
 ## KNOWN / REJECTED

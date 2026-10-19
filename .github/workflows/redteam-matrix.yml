@@ -14,6 +14,11 @@ on:
   schedule:
     - cron: "0 6 * * 1"   # weekly
 
+# Read-only token; neither leg needs write access, and the container leg copies the checkout into a
+# --privileged image, so the checkout token must not be persisted in .git/config.
+permissions:
+  contents: read
+
 jobs:
   container-leg:
     runs-on: ubuntu-latest
@@ -23,6 +28,8 @@ jobs:
         distro: ["ubuntu:24.04", "debian:12", "fedora:41", "archlinux:latest"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Arena bootstrap + selfcheck on ${{ matrix.distro }}
         run: |
           docker build -f redteam/2026-10-19/tiers/container/Dockerfile \
@@ -33,8 +40,11 @@ jobs:
         run: echo "distro=${{ matrix.distro }} kernel(shared)=$(uname -r)"
 
   vm-leg:
-    # KVM-capable runner required (nested virt). On GitHub-hosted runners use a nested-virt action
-    # or a self-hosted KVM runner; the gate tests need a guest kernel we control.
+    # The hardening GATE tests need a guest kernel we control, so they require a KVM-capable runner.
+    # Skipped by default (shown as "skipped", NOT a passing gate) so a green run never implies the
+    # gate tests ran. Enable only on a KVM/libvirt or nested-virt runner by setting the repo variable
+    # ENABLE_VM_GATE_TESTS=true; the step then actually provisions the VM and runs gate_tests.sh.
+    if: ${{ vars.ENABLE_VM_GATE_TESTS == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -42,11 +52,15 @@ jobs:
         box: ["generic/ubuntu2404", "generic/debian12", "generic/fedora40"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Hardening gate tests in a VM (${{ matrix.box }})
         run: |
-          echo "Provision a VM ($ARENA_VM_BOX) and run the gate tests:"
-          echo "  cd redteam/2026-10-19/tiers/vm && ARENA_VM_BOX='${{ matrix.box }}' vagrant up"
-          echo "  vagrant ssh -c 'sudo bash /vagrant/redteam/2026-10-19/tiers/vm/gate_tests.sh'"
-          echo "Requires a KVM/libvirt or nested-virt runner; see tiers/README.md. Marked expected-manual here."
+          set -euo pipefail
+          command -v vagrant >/dev/null || { echo "::error::vagrant/KVM not available on this runner; cannot run the VM gate tests"; exit 1; }
+          cd redteam/2026-10-19/tiers/vm
+          ARENA_VM_BOX="${{ matrix.box }}" vagrant up
+          vagrant ssh -c 'sudo bash /vagrant/redteam/2026-10-19/tiers/vm/provision.sh && sudo bash /vagrant/redteam/2026-10-19/tiers/vm/gate_tests.sh'
+          vagrant destroy -f
         env:
           ARENA_VM_BOX: ${{ matrix.box }}

@@ -27,27 +27,31 @@ Chain**.
 
 | Family | ATT&CK | ATLAS | OWASP LLM | ASVS |
 |---|---|---|---|---|
-| F1 socket-protocol | T1190 | — | — | V13 (API), V5 (validation) |
-| F2 request-lifecycle | T1499 | — | — | V11 (business logic) |
-| F3 session-tokens | T1528, T1552 | — | — | V3 (session), V7 (tokens) |
-| F4 preset-and-import | T1565 (data manip.) | AML.T0024 (exfil via ML inference API — oracle analogue) | LLM05 (improper output), LLM02 | V1 (architecture), V5 |
-| F5 config-parsing | T1499.004 | — | — | V5 |
-| F6 peer-creds-identity | T1134 (token/identity) | — | — | V3, V13 |
-| F7 client-side-run | T1055, T1057 | — | — | V13 |
-| F8 info-leak | T1552 | AML.T0024 | LLM02 | V8 (data protection) |
-| F9 dos-resilience | T1499 | AML.T0029 (denial of ML service) | LLM10 (unbounded consumption) | V11 |
-| F10 hook-bypass | T1562 (impair defenses) | AML.T0051 (LLM prompt injection) | LLM01 | V5 |
-| F11 supply-chain | T1195 | AML.T0010 (ML supply chain) | LLM03 | V10 (malicious code) |
-| F12 cross-user | T1078 (valid accounts) | — | — | V3, V8 |
-| F13 excessive-agency / confused-deputy | T1548 (abuse elevation) | AML.T0053 | LLM06, LLM08 | V1, V11 |
-| F14 detection / defense-in-depth | T1562 | — | — | V7 (logging) |
-| F15 host-config / hardening-gate matrix | T1200 / T1556 (per gate) | — | — | V1, V14 (config); NIST SP 800-53 SI-6 |
-| F16 automated fuzz sweep | T1190 | — | — | V13 |
+| F1 socket-protocol | T1190 | — | — | V4 (API), V2 (validation) |
+| F2 request-lifecycle | T1499 | — | — | V2 (validation & business logic) |
+| F3 session-tokens | T1528, T1552 | — | — | V7 (session), V9 (self-contained tokens) |
+| F4 preset-and-import | T1565 (data manip.) | AML.T0024 (exfil via ML inference API — oracle analogue) | LLM05 (improper output), LLM02 | V2 (validation), V13 (config) |
+| F5 config-parsing | T1499.004 | — | — | V2 (validation), V13 (config) |
+| F6 peer-creds-identity | T1134 (token/identity) | — | — | V8 (authorization) |
+| F7 client-side-run | T1055, T1057 | — | — | V15 (secure coding) |
+| F8 info-leak | T1552 | AML.T0024 | LLM02 | V14 (data protection) |
+| F9 dos-resilience | T1499 | AML.T0029 (denial of ML service) | LLM10 (unbounded consumption) | V2 (business logic / anti-automation) |
+| F10 hook-bypass | T1562 (impair defenses) | AML.T0051 (LLM prompt injection) | LLM01 | V2 (validation) |
+| F11 supply-chain | T1195 | AML.T0010 (ML supply chain) | LLM03 | V15 (secure coding) |
+| F12 cross-user | T1078 (valid accounts) | — | — | V8 (authorization), V7 (session) |
+| F13 excessive-agency / confused-deputy | T1548 (abuse elevation) | AML.T0053 | LLM06 | V8 (authorization), V2 (validation) |
+| F14 detection / defense-in-depth | T1562 | — | — | V16 (security logging) |
+| F15 host-config / hardening-gate matrix | T1200 / T1556 (per gate) | — | — | V13 (config); NIST SP 800-53 SI-6 |
+| F16 automated fuzz sweep | T1190 | — | — | V4 (API), V2 (validation) |
+
+> ASVS references are OWASP ASVS **5.0** chapters (V2 Validation & Business Logic, V4 API & Web
+> Service, V7 Session Management, V8 Authorization, V9 Self-contained Tokens, V13 Configuration,
+> V14 Data Protection, V15 Secure Coding, V16 Security Logging).
 
 ## Finding tags
 
 Each confirmed finding in `FINDINGS.md` carries a `taxonomy` list using these IDs (schema field in
-`CHARTER.md` §8), e.g. a new import oracle → `["ATTACK:T1552","ATLAS:AML.T0024","OWASP-LLM:LLM02","ASVS:V8"]`.
+`CHARTER.md` §8), e.g. a new import oracle → `["ATTACK:T1552","ATLAS:AML.T0024","OWASP-LLM:LLM02","ASVS:V14"]`.
 This lets a reader cross-reference every finding to the public body of knowledge and lets us state
 coverage in a shared vocabulary rather than ad-hoc labels.
 

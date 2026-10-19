@@ -22,7 +22,8 @@ REPO="${ENVH_ARENA_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}
 SVC_USER="envh-arena-svc"
 LISTED_USERS=(rt1 rt2)
 UNLISTED_USER="outsider"
-PY="/usr/bin/python3.12"
+PY="${ENVH_ARENA_PYTHON:-3.12}"                     # a version request, not a path: uv finds or downloads a match
+export UV_PYTHON_INSTALL_DIR="$ARENA_ROOT/python"   # keep any uv-managed interpreter out of root-only /root
 VENV="$ARENA_ROOT/venv"
 SCRIPTS="$ARENA_ROOT/scripts"
 BIN="$ARENA_ROOT/bin"
@@ -65,7 +66,7 @@ fi
 mkdir -p "$SCRIPTS" "$BIN" "$RUN_DIR" "$ARENA_ROOT/instances"
 cp "$(dirname "${BASH_SOURCE[0]}")"/*.py "$SCRIPTS/"
 chmod 755 "$ARENA_ROOT" "$ARENA_ROOT/instances" 2>/dev/null || true
-chmod -R a+rX "$VENV" "$SCRIPTS" "$BIN" 2>/dev/null || true
+chmod -R a+rX "$VENV" "$SCRIPTS" "$BIN" "$UV_PYTHON_INSTALL_DIR" 2>/dev/null || true
 chown "$SVC_USER":"$SVC_USER" "$RUN_DIR"; chmod 755 "$RUN_DIR"
 
 # --- wrapper CLIs: `envh-rt1 <args>` runs the real client as that user against this socket ---
@@ -88,7 +89,7 @@ mkdir -p "$DATA"
 rm -f "$DATA"/vault.age "$DATA"/config.yaml "$DATA"/presets.yaml "$DATA"/audit.jsonl 2>/dev/null || true
 chown -R "$SVC_USER":"$SVC_USER" "$(dirname "$DATA")"; chmod 700 "$DATA"
 
-PASS="$("$PY" -c 'import secrets;print(secrets.token_urlsafe(24))')"
+PASS="$("$VENV/bin/python" -c 'import secrets;print(secrets.token_urlsafe(24))')"
 
 # --- init the vault as the service user; capture PASS/FLAG/CANARY (kept 0600 root) ----------
 say "initializing vault for instance '$INSTANCE'"

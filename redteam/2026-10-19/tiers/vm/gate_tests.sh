@@ -29,6 +29,17 @@ sys.exit(0 if got == expected else 1)
 PY
 }
 
+# envh's installer/startup preflight flags a Yama problem when ptrace_scope is 0 or the LSM is absent.
+check_yama_preflight() {  # $1 = expected: "problem" | "clear"
+  "$PY" - "$1" <<'PY'
+import sys
+from envh.platform import preflight_problems
+expected = sys.argv[1]
+has = any(("Yama LSM is not available" in p) or ("kernel.yama.ptrace_scope is 0" in p) for p in preflight_problems(None))
+sys.exit(0 if ("problem" if has else "clear") == expected else 1)
+PY
+}
+
 echo "== GATE: dev.tty.legacy_tiocsti (console keystroke-injection defense) =="
 if [[ -e /proc/sys/dev/tty/legacy_tiocsti ]]; then
   sysctl -w dev.tty.legacy_tiocsti=0 >/dev/null
@@ -42,11 +53,14 @@ fi
 
 echo "== GATE: kernel.yama.ptrace_scope (anti-ptrace of the broker) =="
 if [[ -e /proc/sys/kernel/yama/ptrace_scope ]]; then
-  for v in 0 1 2; do sysctl -w kernel.yama.ptrace_scope=$v >/dev/null; echo "  set ptrace_scope=$v (README requires >=1); current=$(cat /proc/sys/kernel/yama/ptrace_scope)"; done
-  sysctl -w kernel.yama.ptrace_scope=1 >/dev/null
-  ok "Yama present and settable (README preflight requires >=1; enforced by the installer/preflight, see install/)"
+  for v in 0 1 2; do
+    sysctl -w kernel.yama.ptrace_scope=$v >/dev/null
+    expected=clear; [[ "$v" == 0 ]] && expected=problem
+    if check_yama_preflight "$expected"; then ok "ptrace_scope=$v -> envh preflight reports the expected state ($expected)"; else bad "ptrace_scope=$v -> envh preflight reported the wrong state (wanted $expected)"; fi
+  done
+  sysctl -w kernel.yama.ptrace_scope=1 >/dev/null   # restore
 else
-  bad "Yama node absent on this guest -> ptrace_scope guarantee cannot hold; choose a box with Yama"
+  if check_yama_preflight problem; then ok "Yama node absent -> envh preflight flags it (fails closed)"; else bad "Yama node absent -> envh preflight did not flag it"; fi
 fi
 
 echo "== GATE: /dev/uinput (virtual-keyboard injection surface) =="
