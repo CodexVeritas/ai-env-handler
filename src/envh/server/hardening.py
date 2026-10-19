@@ -8,7 +8,7 @@ import resource
 import sys
 from pathlib import Path
 
-from envh.platform import PlatformError, ancestor_terminals, ancestors, legacy_tiocsti_enabled, make_non_dumpable, process_owner
+from envh.platform import PlatformError, ancestor_terminals, ancestors, legacy_tiocsti_enabled, make_non_dumpable, process_real_uid
 
 LOCK_FILE = "lock"
 TERMINAL_SHARERS = ("tmux", "screen", "zellij", "dtach", "abduco")
@@ -52,7 +52,7 @@ def shared_terminal_warning() -> str | None:
     started them see and type into it. A warning, not a refusal, like X11, which does the same for a whole desktop."""
     try:
         found = [(pid, name) for pid, name in ancestors(os.getpid()) if name.split(":")[0].strip().lower() in TERMINAL_SHARERS]
-        foreign = [(pid, name) for pid, name in found if process_owner(pid) != 0]
+        foreign = [(pid, name) for pid, name in found if process_real_uid(pid) != 0]
     except (OSError, PlatformError) as error:
         return f"Can't check whether the console runs inside tmux or screen: {error}"
     if not foreign:

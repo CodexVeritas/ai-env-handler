@@ -275,7 +275,7 @@ def test_logins_allowed_to_ask_are_warned_about_root_and_key_reading_groups(monk
 
 def test_the_console_warns_when_it_runs_under_a_terminal_sharer_started_by_a_user(monkeypatch: pytest.MonkeyPatch) -> None:
     owners = {300: 1000, 400: 0}
-    monkeypatch.setattr(hardening, "process_owner", lambda pid: owners[pid])
+    monkeypatch.setattr(hardening, "process_real_uid", lambda pid: owners[pid])
     monkeypatch.setattr(hardening, "ancestors", lambda pid: [(100, "sudo"), (200, "bash"), (400, "tmux: server")])
     assert hardening.shared_terminal_warning() is None
     monkeypatch.setattr(hardening, "ancestors", lambda pid: [(100, "sudo"), (200, "bash"), (300, "tmux: server")])
@@ -291,5 +291,14 @@ def test_the_console_warns_when_it_runs_under_a_terminal_sharer_started_by_a_use
 
 
 def test_ancestors_are_named_nearest_first() -> None:
-    names = [name for _, name in platform.ancestors(os.getpid())]
-    assert names and names[0] == Path(f"/proc/{os.getppid()}/comm").read_text().strip()
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        nearest = platform.ancestors(process.pid)[0]
+    finally:
+        process.kill()
+        process.wait()
+    assert nearest == (os.getpid(), Path(f"/proc/{os.getpid()}/comm").read_text().strip())
+
+
+def test_the_real_uid_is_read_from_the_process_status() -> None:
+    assert platform.process_real_uid(os.getpid()) == os.getuid()

@@ -109,29 +109,34 @@ def terminal_path(device: int) -> Path:
     raise PlatformError(f"no node in /dev for terminal device {os.major(device)}:{os.minor(device)}")
 
 
-def ancestor_terminals(pid: int) -> list[Path]:
-    """The terminals the process's ancestors run on, nearest first."""
-    devices: list[int] = []
+def ancestor_chain(pid: int) -> list[tuple[int, int]]:
+    """The pid and controlling terminal device (0 for none) of each of the process's ancestors, nearest first."""
+    chain: list[tuple[int, int]] = []
     ancestor, _ = parent_and_terminal(pid)
     while ancestor > 1:
-        ancestor, device = parent_and_terminal(ancestor)
-        if device and device not in devices:
-            devices.append(device)
+        parent, device = parent_and_terminal(ancestor)
+        chain.append((ancestor, device))
+        ancestor = parent
+    return chain
+
+
+def ancestor_terminals(pid: int) -> list[Path]:
+    """The terminals the process's ancestors run on, nearest first."""
+    devices = dict.fromkeys(device for _, device in ancestor_chain(pid) if device)
     return [terminal_path(device) for device in devices]
 
 
 def ancestors(pid: int) -> list[tuple[int, str]]:
     """The pid and name of each of the process's ancestors, nearest first."""
-    found: list[tuple[int, str]] = []
-    ancestor, _ = parent_and_terminal(pid)
-    while ancestor > 1:
-        found.append((ancestor, Path(f"/proc/{ancestor}/comm").read_text().strip()))
-        ancestor, _ = parent_and_terminal(ancestor)
-    return found
+    return [(ancestor, Path(f"/proc/{ancestor}/comm").read_text().strip()) for ancestor, _ in ancestor_chain(pid)]
 
 
-def process_owner(pid: int) -> int:
-    return Path(f"/proc/{pid}").stat().st_uid
+def process_real_uid(pid: int) -> int:
+    """The uid that started the process. The owner of /proc/<pid> is root for a setuid or non-dumpable process."""
+    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+        if line.startswith("Uid:"):
+            return int(line.split()[1])
+    raise PlatformError(f"/proc/{pid}/status has no Uid line")
 
 
 def legacy_tiocsti_enabled() -> bool | None:
@@ -169,13 +174,11 @@ def key_reading_groups_of(username: str) -> list[str]:
 
 
 def listed_user_warnings(users: Iterable[str]) -> list[str]:
-    """Warnings about logins allowed to ask for keys that can become root or read what is typed. Groups change after
-    the install checked the account that installed, and other logins are never checked there."""
+    """A warning for each login in a root-granting group, and for each in a group that can read what is typed."""
     warnings: list[str] = []
     for user in users:
-        groups = group_names_of(user)
-        root_granting = [name for name in groups if name in ROOT_GRANTING_GROUPS]
-        key_reading = [name for name in groups if name in KEY_READING_GROUPS]
+        root_granting = root_granting_groups_of(user)
+        key_reading = key_reading_groups_of(user)
         if root_granting:
             warnings.append(f"{user} is in {', '.join(root_granting)}, which can become root, so anything {user} runs can read every key: `sudo gpasswd -d {user} <group>`")
         if key_reading:
