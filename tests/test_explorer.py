@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from envh.client.transport import ClientError
+import envh.tools.explorer as explorer_module
 from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, load_vault_matches, main, newest_scan, split_keys
 from envh.common import peek_ends, value_id
 from envh.tools.scanner import KeyEnds, scan_paths, scan_text, save_results, shown_value, with_vault_copies
@@ -273,7 +274,7 @@ def test_the_file_view_shows_and_hides_copies_only_the_vault_search_found(tmp_pa
     other = random_text("other stored", 24)
     notes = tmp_path / "project" / "notes.md"
     notes.parent.mkdir(parents=True)
-    notes.write_text(f"intro\nmy fred key: {stored}\nnext line has {other} too\n")
+    notes.write_text(f"intro\nmy fred one: {stored}\nnext line has {other} too\n")
     vault = {value_id(stored): ["MY_FRED_KEY"], value_id(other): ["MY_OTHER_TOKEN"]}
     found = list(scan_text(notes, notes.read_text(), KeyEnds([(*peek_ends(value), len(value)) for value in (stored, other)])))
     folder = save_results(with_vault_copies(found, vault), 1, [], 1.0, [notes.parent], tmp_path / "scans", datetime(2026, 10, 17, 20, 0, 0))
@@ -281,7 +282,7 @@ def test_the_file_view_shows_and_hides_copies_only_the_vault_search_found(tmp_pa
     explorer.selected = next(index for index, row in enumerate(explorer.rows()) if row.label == "fred")
     open_first_file(explorer)
     rows = "\n".join(screen(explorer))
-    assert "isn't in the file any more" not in rows and "my fred key:" in rows and "next line has" in rows
+    assert "isn't in the file any more" not in rows and "my fred one:" in rows and "next line has" in rows
     assert stored not in rows and other not in rows
 
 
@@ -298,6 +299,16 @@ def test_the_file_view_finds_a_vault_copy_inside_a_longer_value_the_rescan_repor
     open_first_file(explorer)
     rows = "\n".join(screen(explorer))
     assert "isn't in the file any more" not in rows and "API_KEY=" in rows and "/v2/extra" in rows and stored not in rows
+
+
+def test_a_large_file_opens_after_the_screen_says_it_is_reading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = saved_scan(tmp_path, {"logs/server.log": f"boot {OPENROUTER}\n" + "filler\n" * 1000})
+    monkeypatch.setattr(explorer_module, "DEFAULT_MAX_BYTES", 100)
+    explorer = Explorer(load_scan(folder), folder)
+    open_first_file(explorer)
+    assert explorer.file_view is None and explorer.message.startswith("Reading ") and "server.log" in explorer.message
+    explorer.work()
+    assert explorer.file_view is not None and not explorer.file_view.problem
 
 
 def test_x_replaces_every_copy_under_a_row_after_y(tmp_path: Path) -> None:

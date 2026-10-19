@@ -14,9 +14,9 @@ import sys
 import time
 from collections import Counter, defaultdict
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Iterator, TextIO
 
 from envh.common import MAX_MATCH_IDS, peek, value_id
@@ -119,7 +119,10 @@ WORD_CHARACTER = re.compile(r"[A-Za-z0-9_]")
 # word inside the regex backtracked over every identifier and made the scan several times slower. A name can start right
 # after an escaped newline or tab, as in transcripts' JSON strings, but never right after a bare backslash.
 ASSIGNMENT_REGEX = re.compile(r"(?:(?<=\\[nrt])|(?<![A-Za-z0-9_\\]))(?P<name>[A-Za-z_][A-Za-z0-9_]{0,130})[\"']?\s*[=:]\s*[\"']?(?P<value>[A-Za-z0-9_\-./+=]{16,})")
-SECRET_WORD = re.compile(r"KEY|TOKEN|SECRET|PASS|CREDENTIAL|CLIENT_ID", re.IGNORECASE)
+SECRET_WORD = re.compile(r"KEY|TOKEN|SECRET|PASS|CREDENTIAL|CLIENT_ID|BEARER", re.IGNORECASE)
+# A value a name points at without = or :, as a command-line flag (--api-key VALUE) or an HTTP header (Bearer VALUE).
+FLAG_REGEX = re.compile(r"(?<![\w-])--(?P<name>[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*)(?:=|\s+)[\"']?(?P<value>[A-Za-z0-9_\-./+=]{16,})")
+BEARER_REGEX = re.compile(r"(?i:\bbearer)\s+(?P<value>[A-Za-z0-9_\-./+=]{16,})")
 PLACEHOLDER_WORDS = ("example", "your", "placeholder", "changeme", "xxxx", "redacted", "dummy", "insert", "replace", "envh-proxy", "envh-removed", "sk-proj-abc", "<", ">", "$", "%")
 NAME_ONLY_PROVIDERS = ("Serp", "FRED", "AskNews", "Hyperbrowser", "Metaculus", "Exa", "Deepgram", "Parallel", "Radiant", "ACLED", "Mistral", "Cohere", "Telegram", "Mailchimp", "Azure", "AWS secret access keys")
 
@@ -127,7 +130,7 @@ NAME_ONLY_PROVIDERS = ("Serp", "FRED", "AskNews", "Hyperbrowser", "Metaculus", "
 # PASSWORD) or names a service and ends in KEY or TOKEN; otherwise it is low (cache_key, prompt_tokens, monkeypatch).
 CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
 NAME_SEPARATOR = re.compile(r"[^A-Za-z0-9]+")
-CREDENTIAL_WORDS = {"secret", "password", "passwd", "pass", "credentials", "credential", "apikey", "secretkey", "accesstoken", "authtoken", "privatekey"}
+CREDENTIAL_WORDS = {"secret", "password", "passwd", "pass", "credentials", "credential", "apikey", "secretkey", "accesstoken", "authtoken", "privatekey", "bearer"}
 QUALIFIED_WORDS = {"key", "token"}
 KEY_QUALIFIERS = {
     "api", "secret", "private", "access", "auth", "oauth", "bearer", "refresh", "session", "bot", "client", "management", "service", "admin",
@@ -202,26 +205,46 @@ DATABASE_LOGIN = re.compile(r"[^:/]+://([^:/@]*):([^@]*)@([^:/?]+)")
 DEFAULT_PASSWORDS = {"postgres", "password", "pass", "passwd", "pw", "pwd", "root", "admin", "secret", "example", "changeme", "test", "dev", "user", "mysql", "redis", "guest", "1234", "12345", "123456"}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal", "db", "database", "postgres", "postgresql", "mysql", "redis", "mongo", "mongodb"}
 
-# Folders of installed code, caches and app data that hold no keys of yours but can hold millions of files. A name with
-# a slash matches only that path below the folder being scanned (usually your home folder).
+# The scan skips only what can't hold your keys or is cleared on its own, and says what it skipped. These folders are
+# skipped wherever they are, by exact name: installed third-party code, compiled bytecode, the caches browsers and
+# Electron apps clear as they go, and browser and mail profiles, whose saved passwords and logins only the app can clear.
 SKIP_DIR_NAMES = {
-    "node_modules", ".venv", "venv", "env", "site-packages", "__pycache__", ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    ".pyenv", ".conda", "miniconda3", "anaconda3", "miniforge3", "mambaforge", ".local/lib", ".local/share/uv", ".local/share/pipx",
-    ".local/share/virtualenvs", ".local/share/virtualenv", ".local/share/heroku", ".npm", ".yarn", ".pnpm-store", ".bun", ".nvm", ".cargo",
-    ".rustup", ".gradle", ".m2", ".julia", ".gem", "go/pkg", ".terraform", ".next", ".vscode/extensions", ".vscode-insiders/extensions",
-    ".cursor/extensions", ".antigravity/extensions", ".vscode-server", ".cursor-server", ".claude/plugins", ".cache", "Cache", "Code Cache", "GPUCache", "DawnCache",
-    "CacheStorage", ".local/share/flatpak", ".var/app", ".local/share/containers", ".local/share/Steam", ".steam", ".wine", "snap",
-    ".mozilla", "google-chrome", "chromium", "BraveSoftware", "Microsoft Edge", ".thunderbird", "Trash/expunged", f"{FOLDER_NAME}/{SCANS}",
+    "node_modules", "site-packages", "dist-packages", "__pycache__", ".ruff_cache", ".pnpm-store",
+    "Cache", "Code Cache", "GPUCache", "DawnCache", "CacheStorage",
+    ".mozilla", "google-chrome", "chromium", "BraveSoftware", "Microsoft Edge", ".thunderbird",
 }
+BROWSER_PROFILES = {".mozilla", "google-chrome", "chromium", "BraveSoftware", "Microsoft Edge", ".thunderbird"}
+# Skipped by how their path ends, "*" standing for any one folder: a tool's downloads and installs, kept next to the
+# login and config files the scan does read (.cargo/credentials.toml, .m2/settings.xml, .local/share/uv/credentials),
+# plus games and app runtimes too big to read that hold none of your keys.
+SKIP_PATHS = (
+    ".cache/pip", ".cache/uv", ".cache/pypoetry", ".cache/pre-commit", ".cache/virtualenv", ".cache/ms-playwright", ".cache/ms-playwright-go",
+    ".cache/puppeteer", ".cache/mozilla", ".cache/google-chrome", ".cache/chromium", ".cache/yarn", ".cache/pnpm", ".cache/go-build",
+    ".cache/bazel", ".cache/node-gyp", ".cache/huggingface/hub", ".cache/torch", ".cache/thumbnails",
+    ".npm/_cacache", ".npm/_npx", ".yarn/cache", ".yarn/unplugged", ".yarn/berry", ".bun/install/cache", ".nvm/versions", ".nvm/.cache",
+    ".pyenv/versions", ".local/share/uv/python", ".local/share/heroku/client", ".cargo/registry", ".cargo/git", ".rustup/toolchains",
+    ".gradle/caches", ".gradle/wrapper", ".gradle/native", ".gradle/jdks", ".gradle/daemon", ".m2/repository", ".gem/ruby", ".gem/specs",
+    ".julia/packages", ".julia/artifacts", ".julia/compiled", ".julia/registries", ".julia/conda", "go/pkg/mod", ".terraform/providers",
+    ".next/cache", ".next/dev", ".vscode/extensions", ".vscode-insiders/extensions", ".cursor/extensions", ".antigravity/extensions",
+    ".vscode-server/bin", ".vscode-server/cli", ".vscode-server/extensions", ".cursor-server/bin", ".cursor-server/cli", ".cursor-server/extensions",
+    ".var/app/*/cache", ".local/share/flatpak", ".steam", ".local/share/Steam", ".wine/drive_c/windows", f"{FOLDER_NAME}/{SCANS}",
+)
+SKIP_PATHS_BY_LAST = {last: [pattern for pattern in SKIP_PATHS if pattern.rsplit("/", 1)[-1] == last] for last in {pattern.rsplit("/", 1)[-1] for pattern in SKIP_PATHS}}
+# A Python or conda environment's installed parts. The rest of it is read: its bin and etc folders hold the activate
+# scripts, where people export keys.
+ENVIRONMENT_MARKERS = ("pyvenv.cfg", "conda-meta")
+ENVIRONMENT_PARTS = {"lib", "lib64", "Lib", "share", "include", "Include", "pkgs"}
+# A git folder's objects and large files, which are compressed or binary. Its config, hooks and logs are read.
+GIT_PARTS = {"objects", "lfs"}
 SKIPPED_SUMMARY = (
-    "Skipped: installed packages and environments (.venv, node_modules, conda, uv's Pythons and more), caches (.cache, app",
-    "caches, folders tagged with CACHEDIR.TAG), build output (.next), editor extensions and plugins, Flatpak apps' data,",
-    "browser and mail profiles, Steam, Wine and snaps. The full list: envh scan --help",
+    "Skipped: installed packages (node_modules, site-packages, a Python environment's lib), tools' download caches (pip, uv,",
+    "npm, cargo, gradle and more; their login files are read), browser caches, editor extensions, Steam and Flatpak runtimes,",
+    "and folders tagged with CACHEDIR.TAG. Each skipped folder is counted under Not read; the full list: envh scan --help",
+    "Browser and mail profiles (Firefox, Chrome, Thunderbird and others) are skipped too: clear saved passwords and logins",
+    "from inside each app.",
 )
 CACHE_TAG = "CACHEDIR.TAG"
 CACHE_TAG_SIGNATURE = b"Signature: 8a477f597d28d172789f06886806bc55"
-KNOWN_KEY_FILES = (".cache/huggingface/token", ".cache/huggingface/stored_tokens")
-GIT_INTERESTING = {"config", "COMMIT_EDITMSG", "FETCH_HEAD"}
 ALWAYS_LOOK = (
     ".bash_history", ".zsh_history", ".python_history", ".node_repl_history", ".psql_history", ".mysql_history",
     ".netrc", ".npmrc", ".pypirc", ".gitconfig", ".git-credentials", ".profile", ".bashrc", ".zshrc", ".zshenv",
@@ -229,9 +252,13 @@ ALWAYS_LOOK = (
 NOT_SCANNED_NOTE = (
     "Not scanned: git object history (use `git log -p -S<prefix>` in a repo), binary databases such as browser profiles and VS Code",
     "state (both can hold keys), encrypted stores such as the Claude desktop app's local environment, mounted drives outside the",
-    "paths given, and anything over the size limit. Shell history and Claude Code transcripts under ~/.claude are included.",
+    "paths given, and files over the size limit other than transcripts and logs, which are read in parts at any size (each file",
+    "skipped for its size or as binary is listed under Not read). Shell history and Claude Code transcripts under ~/.claude are included.",
 )
 DEFAULT_MAX_BYTES = 25 * 1024 * 1024
+# The largest file the explorer shows or rewrites: both read it whole.
+WHOLE_FILE_MAX_BYTES = 256 * 1024 * 1024
+READ_IN_PARTS = ("agent transcripts", "logs")
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 BAR_WIDTH = 20
 REDRAW_SECONDS = 0.1
@@ -334,6 +361,19 @@ def classify_name(name: str) -> tuple[str, str]:
     credential = last in CREDENTIAL_WORDS or (last in QUALIFIED_WORDS and (before in KEY_QUALIFIERS or service is not None))
     credential = credential and not (len(words) > 1 and words[0] in ACTION_WORDS)
     return ("medium" if credential else "low"), (service or "unknown")
+
+
+def named_values(line: str) -> Iterator[tuple[str, int, str]]:
+    """(name, column, value) for each value a key-like name points at: a command-line flag, a Bearer header, then an
+    assignment, so where two find the same value the fuller name comes first."""
+    for match in FLAG_REGEX.finditer(line):
+        if SECRET_WORD.search(match.group("name")):
+            yield f"--{match.group('name')}", match.start("value"), match.group("value")
+    for match in BEARER_REGEX.finditer(line):
+        yield "Bearer", match.start("value"), match.group("value")
+    for match in ASSIGNMENT_REGEX.finditer(line):
+        if SECRET_WORD.search(match.group("name")):
+            yield match.group("name"), match.start("value"), match.group("value")
 
 
 def standalone(text: str, start: int, end: int) -> bool:
@@ -447,18 +487,15 @@ def scan_text(path: Path, text: str, vault: KeyEnds | None = None) -> Iterator[H
             harmless = (kind == "database-url" and default_login(value)) or (kind == "jwt" and demo_token(value))
             confidence = "fake" if looks_fake(value, fixed) or harmless else "high"
             found.append(Hit(path, index + 1, start, confidence, kind, "", shown_value(value, fixed), value_id(value), len(value), fixed))
-        for match in ASSIGNMENT_REGEX.finditer(line):
-            name = match.group("name")
-            if SECRET_WORD.search(name, 1) is None:
-                continue
-            value = match.group("value").rstrip(".,;")
+        for name, column, value in named_values(line):
+            value = value.rstrip(".,;")
             if looks_placeholder(value) or (NAME_LIKE_VALUE.fullmatch(value) and not UUID.fullmatch(value)):
                 continue
-            if any(start <= match.start("value") < end for start, end, _, _ in spans):
+            if any(start <= column < end for start, end, _, _ in spans) or any(hit.column == column for hit in found):
                 continue
             confidence, service = classify_name(name)
             confidence = "fake" if looks_fake(value) else confidence
-            found.append(Hit(path, index + 1, match.start("value"), confidence, service, name, peek(value), value_id(value), len(value)))
+            found.append(Hit(path, index + 1, column, confidence, service, name, peek(value), value_id(value), len(value)))
         yield from found
         covered = {(hit.column, hit.length) for hit in found}
         for start, end in copies_by_line.get(index, []):
@@ -513,9 +550,38 @@ def tagged_as_cache(directory: Path) -> bool:
         return False
 
 
-def find_files(roots: list[Path], max_bytes: int, unreadable: list[Path], found: Callable[[int], None] | None = None) -> list[tuple[Path, int]]:
-    """Every file to scan, with its size. Links are not followed, and the skipped folders are not entered."""
+@dataclass
+class NotRead:
+    """What a scan found but did not read: files over its size limit, files that look binary, folders it skipped (by
+    rule, with a few of each), and links to folders outside the paths scanned."""
+
+    limit: int
+    too_large: list[tuple[Path, int]] = field(default_factory=list)
+    binary: list[Path] = field(default_factory=list)
+    folders: dict[str, list[Path]] = field(default_factory=dict)
+    links: list[tuple[Path, Path]] = field(default_factory=list)
+
+
+def skip_rule(folder: Path, in_environment: bool, in_git: bool) -> str | None:
+    """Why the scan skips this folder, or None when it reads it."""
+    name = folder.name
+    if name in SKIP_DIR_NAMES:
+        return name
+    if in_environment and name in ENVIRONMENT_PARTS:
+        return f"a Python environment's {name}"
+    if in_git and name in GIT_PARTS:
+        return f".git/{name}"
+    pattern = next((pattern for pattern in SKIP_PATHS_BY_LAST.get(name, ()) if PurePosixPath(folder).match(pattern)), None)
+    if pattern is not None:
+        return pattern
+    return CACHE_TAG if tagged_as_cache(folder) else None
+
+
+def find_files(roots: list[Path], max_bytes: int, unreadable: list[Path], found: Callable[[int], None] | None = None, not_read: NotRead | None = None) -> list[tuple[Path, int]]:
+    """Every file to scan, with its size. Links are not followed, and the skipped folders are not entered. A transcript
+    or log over max_bytes is kept, to be read in parts; any other file over it goes to not_read."""
     files: list[tuple[Path, int]] = []
+    roots_resolved = [root.resolve() for root in roots]
 
     def add(path: Path, always: bool = False) -> None:
         try:
@@ -524,25 +590,31 @@ def find_files(roots: list[Path], max_bytes: int, unreadable: list[Path], found:
             size = path.stat().st_size
         except OSError:
             return
-        if size <= max_bytes or always:
+        if size <= max_bytes or always or place_of(str(path)) in READ_IN_PARTS:
             files.append((path, size))
+        elif not_read is not None:
+            not_read.too_large.append((path, size))
 
     for root in roots:
         if root.is_file():
             files.append((root, root.stat().st_size))
             continue
-        for known in KNOWN_KEY_FILES:
-            add(root / known)
         for current, directories, names in os.walk(root, followlinks=False, onerror=lambda error: unreadable.append(Path(error.filename))):
             current_path = Path(current)
+            in_environment = any((current_path / marker).exists() for marker in ENVIRONMENT_MARKERS)
+            in_git = ".git" in current_path.parts
             kept: list[str] = []
             for directory in directories:
                 full = current_path / directory
-                if directory in SKIP_DIR_NAMES or str(full.relative_to(root)) in SKIP_DIR_NAMES or full.is_symlink() or tagged_as_cache(full):
+                if full.is_symlink():
+                    target = full.resolve()
+                    if not_read is not None and not any(target.is_relative_to(scanned) for scanned in roots_resolved):
+                        not_read.links.append((full, target))
                     continue
-                if directory == ".git":
-                    for name in GIT_INTERESTING:
-                        add(full / name)
+                rule = skip_rule(full, in_environment, in_git)
+                if rule is not None:
+                    if not_read is not None:
+                        not_read.folders.setdefault(rule, []).append(full)
                     continue
                 kept.append(directory)
             directories[:] = sorted(kept)
@@ -553,7 +625,39 @@ def find_files(roots: list[Path], max_bytes: int, unreadable: list[Path], found:
     return files
 
 
-def scan_files(files: list[tuple[Path, int]], unreadable: list[Path], progress: Progress | None = None, vault: KeyEnds | None = None) -> tuple[list[Hit], int]:
+def text_parts(path: Path, part_bytes: int) -> Iterator[tuple[int, str]]:
+    """The file's text in parts of about part_bytes, each ending at a line break, with the number of lines before it.
+    A line break is one byte that is never inside a character, so no character is split. Raises OSError when the file
+    cannot be read."""
+    lines_before = 0
+    rest = b""
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(part_bytes)
+            data = rest + block
+            if not block:
+                if data:
+                    yield lines_before, data.decode("utf-8", errors="replace")
+                return
+            cut = data.rfind(b"\n")
+            if cut < 0:
+                rest = data
+                continue
+            part, rest = data[:cut + 1], data[cut + 1:]
+            yield lines_before, part.decode("utf-8", errors="replace")
+            lines_before += part.count(b"\n")
+
+
+def looks_binary(path: Path) -> bool:
+    with path.open("rb") as handle:
+        return b"\0" in handle.read(8192)
+
+
+def scan_files(
+    files: list[tuple[Path, int]], unreadable: list[Path], progress: Progress | None = None, vault: KeyEnds | None = None, not_read: NotRead | None = None
+) -> tuple[list[Hit], int]:
+    """Scan each file. One over the size limit is read in parts, so a transcript or log of any size fits in memory."""
+    limit = not_read.limit if not_read is not None else DEFAULT_MAX_BYTES
     hits: list[Hit] = []
     scanned = 0
     done = 0
@@ -561,13 +665,26 @@ def scan_files(files: list[tuple[Path, int]], unreadable: list[Path], progress: 
     for path, size in files:
         if progress is not None:
             progress.scanning(done, total, path.parent)
-        done += size
         try:
-            text = read_if_text(path)
+            if size > limit and not looks_binary(path):
+                read = 0
+                for lines_before, text in text_parts(path, limit):
+                    hits.extend(replace(hit, line=hit.line + lines_before) for hit in scan_text(path, text, vault))
+                    read += len(text)
+                    if progress is not None:
+                        progress.scanning(done + min(read, size), total, path.parent)
+                scanned += 1
+                done += size
+                continue
+            text = None if size > limit else read_if_text(path)
         except OSError:
             unreadable.append(path)
+            done += size
             continue
+        done += size
         if text is None:
+            if not_read is not None:
+                not_read.binary.append(path)
             continue
         scanned += 1
         hits.extend(scan_text(path, text, vault))
@@ -650,7 +767,12 @@ class Progress:
 
 
 def skipped_folders_help() -> str:
-    return f"Skipped folders: {', '.join(sorted(SKIP_DIR_NAMES, key=str.lower))}, and any folder tagged with {CACHE_TAG}."
+    names = ", ".join(sorted(SKIP_DIR_NAMES, key=str.lower))
+    paths = ", ".join(SKIP_PATHS)
+    return (
+        f"Skipped folders, by name: {names}. By how their path ends: {paths}. In a Python or conda environment: "
+        f"{', '.join(sorted(ENVIRONMENT_PARTS))}. In a .git folder: {', '.join(sorted(GIT_PARTS))}. And any folder tagged with {CACHE_TAG}."
+    )
 
 
 def copies_label(count: int) -> str:
@@ -736,7 +858,44 @@ def values_section(hits: list[Hit], say: Callable[[str], None], with_paths: bool
                 say(f"    {shown_path(path)}")
 
 
-def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, roots: list[Path], finished: datetime, say: Callable[[str], None] = print) -> None:
+def not_read_section(not_read: NotRead, say: Callable[[str], None]) -> None:
+    """Everything the scan skipped, so nothing is left out without saying so."""
+    say(f"Keys in these were not looked for. Read a large file with --max-size, or scan a folder by naming it: envh scan <folder>.")
+    say(f"\nFiles over the {not_read.limit // (1024 * 1024)} MB size limit ({len(not_read.too_large):,}); transcripts and logs are read in parts at any size:")
+    for file, size in sorted(not_read.too_large, key=lambda item: -item[1]):
+        say(f"  {size / 1e6:>10,.0f} MB  {shown_path(file)}")
+    by_type = Counter(file.suffix.lower() or "no extension" for file in not_read.binary)
+    say(f"\nFiles that look binary ({len(not_read.binary):,}), by type: " + ", ".join(f"{suffix} {count:,}" for suffix, count in by_type.most_common()))
+    for file in sorted(not_read.binary):
+        say(f"  {shown_path(file)}")
+    say(f"\nFolders skipped ({sum(map(len, not_read.folders.values())):,}), by rule:")
+    for rule, folders in sorted(not_read.folders.items(), key=lambda item: -len(item[1])):
+        say(f"  {rule:<36} {len(folders):>6,}  e.g. " + ", ".join(shown_path(folder) for folder in folders[:NAMES_SHOWN]))
+    say(f"\nLinks to folders outside the paths scanned, not followed ({len(not_read.links):,}):")
+    for link, target in not_read.links:
+        say(f"  {shown_path(link)} -> {target}")
+
+
+def not_read_line(not_read: NotRead) -> str | None:
+    """The summary's line on what the scan didn't read, and on browser profiles, whose logins only the app can clear."""
+    folders = sum(map(len, not_read.folders.values()))
+    parts = [
+        f"{plural(len(not_read.too_large), 'file')} over {not_read.limit // (1024 * 1024)} MB" if not_read.too_large else "",
+        f"{len(not_read.binary):,} that look{'s' if len(not_read.binary) == 1 else ''} binary" if not_read.binary else "",
+        plural(folders, "skipped folder") if folders else "",
+    ]
+    listed = ", ".join(part for part in parts if part)
+    browsers = any(rule in BROWSER_PROFILES for rule in not_read.folders)
+    if not listed:
+        return None
+    line = f"Not read: {listed}; report.txt lists each under Not read."
+    return line + (" Browser and mail profiles were skipped: clear saved passwords and logins from inside each app." if browsers else "")
+
+
+def report(
+    hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, roots: list[Path], finished: datetime, say: Callable[[str], None] = print,
+    not_read: NotRead | None = None,
+) -> None:
     tiers = group_by(hits, lambda hit: hit.confidence)
     say("envh scan report")
     say(f"Scanned {', '.join(str(root) for root in roots)}, finished {finished:%Y-%m-%d %H:%M}")
@@ -748,7 +907,7 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
     say("(fewer for shorter values, as in the envh console), its length and an id. The same id means the same value, and the")
     say('first 6 characters of an id match the id the envh console shows for a stored key. Search this file for "id <id>" to')
     say("find every line a value is on, or browse it all with envh explore.")
-    say("Sections: Summary, Likely keys, Possible keys, Unlikely keys, Placeholders, Every hit by file, Notes.")
+    say("Sections: Summary, Likely keys, Possible keys, Unlikely keys, Placeholders, Every hit by file, Notes" + (", Not read." if not_read is not None else "."))
     say("\n== Summary ==")
     summary_section(hits, say)
     say("\n== Likely keys: values in a provider's key format or your vault, with every file each is in ==")
@@ -768,12 +927,18 @@ def report(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float
             say(f"  line {hit.line:<6} {TIER_NAMES[hit.confidence]:<11} {label:<44} {hit.describe()}")
     say("\n== Notes ==")
     notes(unreadable, say)
+    if not_read is not None:
+        say("\n== Not read ==")
+        not_read_section(not_read, say)
     say("\nIn short (details at the top): " + headline(hits, scanned, elapsed))
     for line in confidence_lines(hits):
         say("  " + line)
 
 
-def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, report_dir: Path, say: Callable[[str], None] = print, searched: tuple[str, ...] = ()) -> None:
+def summary(
+    hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, report_dir: Path, say: Callable[[str], None] = print, searched: tuple[str, ...] = (),
+    not_read: NotRead | None = None,
+) -> None:
     """The terminal's short version of the report: a fixed number of lines however many keys were found."""
     say(headline(hits, scanned, elapsed))
     if hits:
@@ -783,23 +948,31 @@ def summary(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: floa
         say("  " + line)
     if unreadable:
         say(f"  · {len(unreadable):,} " + ("file or folder" if len(unreadable) == 1 else "files or folders") + " could not be read (permissions).")
+    skipped = not_read_line(not_read) if not_read is not None else None
+    if skipped:
+        say("  · " + skipped)
     say("  · What the scan skips and cannot see is under Notes at the end of report.txt.")
     say("  · Browse them, with the lines around each key: envh explore")
     say_where_saved(report_dir, False, say)
 
 
-def results_json(hits: list[Hit], scanned: int, unreadable: list[Path]) -> dict[str, object]:
-    return {"scanned": scanned, "hits": [hit.to_json() for hit in hits], "unreadable": [str(path) for path in unreadable]}
+def results_json(hits: list[Hit], scanned: int, unreadable: list[Path], not_read: NotRead | None = None) -> dict[str, object]:
+    results: dict[str, object] = {"scanned": scanned, "hits": [hit.to_json() for hit in hits], "unreadable": [str(path) for path in unreadable]}
+    if not_read is not None:
+        results["not_read"] = {"too_large": len(not_read.too_large), "binary": len(not_read.binary), "folders": sum(map(len, not_read.folders.values())), "links": len(not_read.links)}
+    return results
 
 
-def save_results(hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, roots: list[Path], parent: Path, finished: datetime) -> Path:
+def save_results(
+    hits: list[Hit], scanned: int, unreadable: list[Path], elapsed: float, roots: list[Path], parent: Path, finished: datetime, not_read: NotRead | None = None
+) -> Path:
     """Write report.txt, files.txt and hits.json to a new dated folder in parent. They hold no values."""
     report_lines: list[str] = []
-    report(hits, scanned, unreadable, elapsed, roots, finished, report_lines.append)
+    report(hits, scanned, unreadable, elapsed, roots, finished, report_lines.append, not_read)
     contents = {
         "report.txt": "\n".join(report_lines) + "\n",
         "files.txt": "".join(f"{path}\n" for path in sorted({hit.path for hit in hits})),
-        "hits.json": json.dumps(results_json(hits, scanned, unreadable), indent=2) + "\n",
+        "hits.json": json.dumps(results_json(hits, scanned, unreadable, not_read), indent=2) + "\n",
     }
     report_dir = new_dated_folder(parent, finished.strftime("%Y%m%d-%H%M%S"))
     for name, text in contents.items():
@@ -848,9 +1021,10 @@ def main(args: argparse.Namespace, vault_search: Callable[[], AbstractContextMan
         progress = Progress(sys.stderr) if sys.stderr.isatty() else None
         started = time.monotonic()
         unreadable: list[Path] = []
+        not_read = NotRead(args.max_size * 1024 * 1024)
         try:
-            files = find_files(roots, args.max_size * 1024 * 1024, unreadable, progress.finding if progress is not None else None)
-            hits, scanned = scan_files(files, unreadable, progress, vault.keys if vault is not None else None)
+            files = find_files(roots, not_read.limit, unreadable, progress.finding if progress is not None else None, not_read)
+            hits, scanned = scan_files(files, unreadable, progress, vault.keys if vault is not None else None, not_read)
         finally:
             if progress is not None:
                 progress.clear()
@@ -859,18 +1033,18 @@ def main(args: argparse.Namespace, vault_search: Callable[[], AbstractContextMan
     elapsed = time.monotonic() - started
     finished = datetime.now()
     try:
-        report_dir = save_results(hits, scanned, unreadable, elapsed, roots, parent, finished)
+        report_dir = save_results(hits, scanned, unreadable, elapsed, roots, parent, finished, not_read)
     except OSError as error:
         print(f"envh scan: could not save the results in {parent}: {error}", file=sys.stderr)
         if not args.json:
-            report(hits, scanned, unreadable, elapsed, roots, finished)
+            report(hits, scanned, unreadable, elapsed, roots, finished, not_read=not_read)
             return (1 if hits else 0), None
     else:
         if matches is not None:
             save_vault_matches(report_dir, matches)
         if not args.json:
-            summary(hits, scanned, unreadable, elapsed, report_dir, searched=searched)
+            summary(hits, scanned, unreadable, elapsed, report_dir, searched=searched, not_read=not_read)
             return (1 if hits else 0), report_dir
         print(f"Results saved in {shown_path(report_dir)}", file=sys.stderr)
-    print(json.dumps(results_json(hits, scanned, unreadable), indent=2))
+    print(json.dumps(results_json(hits, scanned, unreadable, not_read), indent=2))
     return (1 if hits else 0), None

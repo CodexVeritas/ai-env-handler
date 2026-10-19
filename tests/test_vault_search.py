@@ -17,7 +17,7 @@ FRED = random_text("stored fred", 32, HEX)
 def scan_args(tmp_path: Path) -> argparse.Namespace:
     home = tmp_path / "home"
     home.mkdir()
-    (home / "notes.md").write_text(f"my fred key: {FRED}\nFRED_API_KEY={FRED}\n")
+    (home / "notes.md").write_text(f"my fred one: {FRED}\nFRED_API_KEY={FRED}\n")
     return argparse.Namespace(paths=[str(home)], json=False, max_size=25, out=str(tmp_path / "scans"))
 
 

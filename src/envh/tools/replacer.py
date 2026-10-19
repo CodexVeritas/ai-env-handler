@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from envh.common import value_id
-from envh.tools.scanner import place_of, scan_text
+from envh.tools.scanner import WHOLE_FILE_MAX_BYTES, place_of, scan_text
 
 IN_USE_SECONDS = 600
 LEFT_FOR_HAND = {"private-key": "only its first line matches"}
@@ -89,6 +89,8 @@ def replace_in_file(path: Path, fingerprints: set[str], now: float, spots: list[
             return FileResult(0, "a link")
         if now - before.st_mtime < IN_USE_SECONDS:
             return FileResult(0, "changed in the last 10 minutes; it may be in use")
+        if before.st_size > WHOLE_FILE_MAX_BYTES:
+            return FileResult(0, f"over {WHOLE_FILE_MAX_BYTES // (1024 * 1024)} MB, too large to rewrite here; replace the key by hand")
         data = path.read_bytes()
     except OSError as error:
         return FileResult(0, f"can't read it: {error.strerror or error}")

@@ -232,19 +232,22 @@ These hold no values, so unlike the import backups they are safe to keep. Later 
 
 **Start with Yours.** Once a scan is checked against your vault, by its search or by the explorer, the explorer opens on **Yours**: the exact copies of your vault's keys, whatever list they are in otherwise. Start there. They are certainly keys, and certainly yours, so they are the safest copies to replace and the ones that matter most. Its top row, **All your keys**, replaces every one of them with one `x`. The other lists hold values that may or may not be keys, and are worth going through after. The answer is saved beside the scan as `vault.json`, names and ids only. The console asks because the answer confirms a guessed value: an agent could check guesses at a short password this way, so approve only a scan you ran.
 
-To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of installed code and caches that hold none of your keys but can hold millions of files:
-- **Installed packages and environments:** `.venv`, `venv`, `node_modules`, `site-packages`, conda, uv's Pythons, pipx, `.cargo`, `go/pkg` and the like.
-- **Caches:** `.cache`, app caches such as `Cache` and `GPUCache`, and any folder tagged with `CACHEDIR.TAG`. Hugging Face's token file in `.cache` is still read.
-- **Build output:** Next.js's `.next`.
-- **Other bulky data:** editor extensions and Claude Code plugins, Flatpak apps' own data (`~/.var/app`), browser and mail profiles, Steam, Wine and snaps.
+It skips only what can't hold your keys or is cleared on its own, and `report.txt` lists everything it left out under **Not read**: each file over the size limit, each file that looks binary, each skipped folder by rule, and each link to a folder outside the paths scanned. The summary gives the counts.
+- **Large files:** files over 25 MB (`--max-size`) are left out, except transcripts and logs, which are read in parts at any size. The explorer shows and replaces files up to 256 MB.
+- **Installed code:** `node_modules`, `site-packages`, a Python or conda environment's `lib`, `share` and `include` (its `bin` and `etc` are read, since activate scripts can export keys), and editor extensions.
+- **Tools' download caches,** such as `.cache/pip`, `.cache/uv`, `.npm/_cacache`, `.cargo/registry`, `.m2/repository` and `.gradle/caches`. The login and config files next to them are read: `.cargo/credentials.toml`, `.m2/settings.xml`, `.gem/credentials`, `.local/share/uv/credentials`, `.terraform/terraform.tfstate` and the like.
+- **Caches apps clear as they go:** `Cache`, `Code Cache`, `GPUCache` and the like, a Flatpak app's `cache` folder, Next.js's `.next/cache` and `.next/dev`, and folders tagged with `CACHEDIR.TAG`.
+- **Inside `.git`:** only `objects` and `lfs`, which are compressed. Its config, hooks and logs are read.
+- **Too big, and none of your keys:** Steam's games, Flatpak's runtimes and Wine's Windows folder.
+- **Browser and mail profiles** (Firefox, Chrome, Chromium, Brave, Edge, Thunderbird). Their saved passwords and logins are encrypted and can only be cleared from inside each app, so the summary reminds you to do that.
 
-`envh scan --help` lists every skipped folder, and the report repeats the summary. It looks inside `.git/config` but not git history.
+`envh scan --help` lists every skip rule.
 
 What it can and cannot identify:
 
 - **By value, anywhere:** OpenAI, OpenRouter, Anthropic, xAI, DeepSeek (and other `sk-` keys of 32 hex characters), Perplexity, Google (API keys, OAuth client secrets and access tokens, base64 service-account files), Groq, Together, Fireworks, Cerebras, Hugging Face, Replicate, ElevenLabs, E2B, Tavily, Firecrawl, LangSmith, Pinecone, Supabase, GitHub, GitLab, Slack (tokens and webhooks), Discord webhooks, Twilio, SendGrid, Stripe (keys and webhook secrets), Shopify, Square, AWS (access keys, Bedrock keys), Cloudflare origin CA keys, DigitalOcean, Heroku, Fly.io, PlanetScale, Databricks, Doppler, HashiCorp Vault, Grafana, Sentry (tokens and DSNs), New Relic, PostHog, Linear, Atlassian, Airtable, Notion, Postman, npm, PyPI, 1Password, age, Resend, Browserbase, JWTs, private keys, database URLs with passwords. Where gitleaks has a rule for a provider, the format follows it.
-- **Only in a named assignment** (`FRED_API_KEY=...`, `serp_api_key: "..."`): SerpAPI, FRED, AskNews, Hyperbrowser, Metaculus, Exa, Deepgram, Parallel, Mistral, Cohere, Telegram, Mailchimp, Azure, AWS secret access keys and other keys that are plain hex or random strings. A bare copy of one of these in a transcript has no distinctive shape and is not reported; search for it yourself with a few characters you remember, for example `grep -rl 'first8chars' ~/.claude`.
-- **Not scanned:** git object history (`git log -p -S<prefix>` inside a repo), binary databases such as browser profiles and VS Code state, encrypted stores such as the Claude desktop app's local environment, and mounted drives outside the paths given.
+- **Only next to a key-like name** (`FRED_API_KEY=...`, `serp_api_key: "..."`, `PASSWORD=...`, `--api-key ...`, `Authorization: Bearer ...`): SerpAPI, FRED, AskNews, Hyperbrowser, Metaculus, Exa, Deepgram, Parallel, Mistral, Cohere, Telegram, Mailchimp, Azure, AWS secret access keys and other keys that are plain hex or random strings. A bare copy of one of these in a transcript has no distinctive shape, so it is found only when it is in your vault and the scan searches for your vault's keys (see **Copies of your own keys** below).
+- **Not scanned:** git object history (`git log -p -S<prefix>` inside a repo), binary databases such as VS Code and Cursor state, encrypted stores such as the Claude desktop app's local environment, and anything outside the paths given (by default your home folder; scan `/tmp` or another drive by naming it).
 
 The scan stays separate from the import wizard on purpose: the wizard moves values out of files you chose, the scan is a read-only audit of everything else. The wizard prints a reminder to run it.
 

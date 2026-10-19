@@ -29,7 +29,7 @@ from envh.client.transport import ClientError, Connection, waiting_notice
 from envh.common import peek, printable
 from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, Spot, in_git_repo, replace_all, replaced_pairs, still_there
 from envh.tools.saved_files import SCANS, VAULT_FILE, save_vault_matches, saved_files_root, shown_path
-from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, copies_label, place_of, plural, read_if_text, scan_text, shown_folder
+from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, WHOLE_FILE_MAX_BYTES, Hit, copies_label, place_of, plural, read_if_text, scan_text, shown_folder
 
 # Yours, the copies of keys in your vault, comes first: they are certainly keys, so they are the safest to replace.
 TIERS = ("yours", "high", "medium", "low", "fake", "all")
@@ -329,8 +329,8 @@ def read_context(path: str, fingerprint: str, recorded: list[Found] | None = Non
     like the rest. As in the scan, a rescan hit overlapping such a copy is dropped, since the copy is exact."""
     file = Path(path)
     try:
-        if file.stat().st_size > DEFAULT_MAX_BYTES:
-            return [], "This file is over 25 MB now, too large to show."
+        if file.stat().st_size > WHOLE_FILE_MAX_BYTES:
+            return [], f"This file is over {WHOLE_FILE_MAX_BYTES // (1024 * 1024)} MB, too large to show here."
         text = read_if_text(file)
     except OSError as error:
         return [], f"Can't read this file: {error.strerror or error}."
@@ -619,6 +619,18 @@ class Explorer:
             node = children[0].node
 
     def open_file(self, row: Row) -> None:
+        """Show the file's lines around the key. A large one is read after the screen says so, since it takes a while."""
+        try:
+            size = os.stat(row.node[4]).st_size
+        except OSError:
+            size = 0
+        if size > DEFAULT_MAX_BYTES:
+            self.message = f"Reading {shown_path(Path(row.node[4]))} ({size / 1e6:,.0f} MB)…"
+            self.work = lambda: self.show_file(row)
+            return
+        self.show_file(row)
+
+    def show_file(self, row: Row) -> None:
         _, kind, confidence, fingerprint, path = row.node
         value = self.index().first[fingerprint]
         lines, problem = read_context(path, fingerprint, [hit for hit in self.hits if hit.path == path])
