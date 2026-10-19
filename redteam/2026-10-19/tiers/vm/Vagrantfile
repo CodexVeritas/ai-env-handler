@@ -1,0 +1,16 @@
+# Tier 2 — VM with a guest kernel we control, so the console-hardening GATES can be set and tested
+# for real (a container cannot: those sysctls are non-namespaced). Run on a VM host (libvirt/
+# VirtualBox) or a KVM-capable CI runner, NOT inside the cloud container.
+#
+#   vagrant up && vagrant ssh -c 'sudo bash /vagrant/redteam/2026-10-19/tiers/vm/gate_tests.sh'
+#
+# The box ships a recent kernel (>= 6.2) that exposes dev.tty.legacy_tiocsti; gate_tests.sh flips
+# the sysctls and asserts envh's real startup checks pass/fail as the README promises.
+
+Vagrant.configure("2") do |config|
+  config.vm.box = ENV.fetch("ARENA_VM_BOX", "generic/ubuntu2404")  # >=6.2 kernel; swap for a matrix
+  config.vm.synced_folder "../../../..", "/vagrant", type: "rsync"
+  config.vm.provider "libvirt" do |v| v.memory = 2048; v.cpus = 2 end
+  config.vm.provider "virtualbox" do |v| v.memory = 2048; v.cpus = 2 end
+  config.vm.provision "shell", path: "provision.sh", privileged: true
+end
