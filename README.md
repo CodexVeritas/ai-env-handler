@@ -70,7 +70,7 @@ The keys go straight into that command's environment, never into your shell or a
 
 - **Agents and scripts reading keys from disk.** The vault, the approval rules and the log belong to the `envh` user, and the kernel enforces that.
 - **Using a key without your OK.** Every request waits for your vault passphrase on the console, unless you marked the key `auto`.
-- **Faking an approval.** Nothing running as you can type into the console's terminal, and every prompt shows your console phrase, so a fake prompt stands out.
+- **Typing into the console through its terminal.** Nothing running as you can inject keystrokes there, and every prompt shows your console phrase, so a fake prompt elsewhere stands out.
 - **A stolen or copied disk.** The vault is encrypted with your passphrase.
 - **Most leftover copies.** The scan finds keys left in text files across your home folder.
 
@@ -116,7 +116,7 @@ sudo envh-console
 **2. Run things that need keys.** Once the wizard connects your agents, they do this for you.
 
 ```bash
-envh list                                                                   # keys and presets, names only
+envh list                                                                   # keys and presets, never values
 envh run --preset my-app --reason "nightly sync" -- uv run python sync.py   # one command, one approval
 envh session start my-app --minutes 60 --reason "debug the sync"            # several commands, one approval
 envh run --session <id> --reason "retry" -- uv run python sync.py
