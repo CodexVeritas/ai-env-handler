@@ -14,6 +14,15 @@ from envh.core.words import ADJECTIVES, NOUNS
 DETACHED_GRACE = timedelta(minutes=10)
 HISTORY_RETENTION = timedelta(hours=1)
 MAX_PENDING_PER_USER = 20
+# A live session holds one of a small set of adjective-noun ids. Without a cap, a listed user can open
+# sessions until the id space (len(ADJECTIVES) x len(NOUNS)) is exhausted, after which _new_session_id's
+# retry loop spins forever and wedges the single-threaded broker. Cap live sessions well below that
+# space, per user and overall.
+MAX_LIVE_SESSIONS_PER_USER = 64
+MAX_LIVE_SESSIONS = 256
+# Backstop for id generation: after this many collisions, fall back to a wide random id so generation
+# can never spin indefinitely even if the word-pair space fills.
+SESSION_ID_RETRIES = 1000
 RESUME_CODE_BYTES = 8
 RequestKind = Literal["session", "run", "import", "preset", "match", "search"]
 Outcome = Literal["approved", "denied", "withdrawn"]
@@ -196,14 +205,26 @@ class StateTable:
         return len(stale_requests) + len(stale_sessions) + len(stale_runs)
 
     def _new_session_id(self) -> str:
-        while True:
+        for _ in range(SESSION_ID_RETRIES):
             candidate = f"{random_secrets.choice(ADJECTIVES)}-{random_secrets.choice(NOUNS)}"
+            if candidate not in self.sessions:
+                return candidate
+        # The word-pair space is near-full (the live-session caps should keep this unreachable). Fall
+        # back to a wide random id so generation terminates instead of spinning the event loop forever.
+        while True:
+            candidate = f"{random_secrets.choice(ADJECTIVES)}-{random_secrets.choice(NOUNS)}-{random_secrets.token_hex(3)}"
             if candidate not in self.sessions:
                 return candidate
 
     def create_session(self, request: Request, auto_granted: bool = False) -> Session:
         if request.granted is None:
             raise StateError("session request has no granted duration")
+        live = self.live_sessions()
+        if len(live) >= MAX_LIVE_SESSIONS:
+            raise StateError(f"too many live sessions ({MAX_LIVE_SESSIONS}); end some before starting more")
+        uid = request.provenance.uid
+        if sum(1 for session in live if session.provenance.uid == uid) >= MAX_LIVE_SESSIONS_PER_USER:
+            raise StateError(f"uid {uid} already has {MAX_LIVE_SESSIONS_PER_USER} live sessions; end some before starting more")
         now = self.now()
         session = Session(
             id=self._new_session_id(),

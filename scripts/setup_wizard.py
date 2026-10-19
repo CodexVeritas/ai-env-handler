@@ -42,7 +42,6 @@ HISTORY_EXCLUDE_SETTING = "workbench.localHistory.exclude"
 ENV_FILES_GLOB = "**/.env*"
 HISTORY_EXCLUDE_LINE = f"{json.dumps(HISTORY_EXCLUDE_SETTING)}: {json.dumps({ENV_FILES_GLOB: True})},"
 HOOK_FILE_NAME = "envh_ask.py"
-CURSOR_HOOK_MATCHER = "envh"
 INSTALL_PREFIX = Path("/opt/envh")
 INSTALL_RECORD = INSTALL_PREFIX / "installed-from"
 ENVH_BIN = Path("/usr/local/bin/envh")
@@ -577,7 +576,9 @@ def cursor_hook_commands(config: dict[str, Any]) -> list[str]:
 
 
 def with_cursor_hook(config: Any, hook_command: str) -> dict[str, Any]:
-    entry = {"command": hook_command, "timeout": 10, "matcher": CURSOR_HOOK_MATCHER}
+    # No command-text matcher: the hook must run on every beforeShellExecution so it also sees
+    # commands where bash reconstructs the name (e""nvh, $'\x65nvh') with no literal "envh" substring.
+    entry = {"command": hook_command, "timeout": 10}
     return {"version": 1, **with_hook_entry(config, "beforeShellExecution", entry, "hooks.json")}
 
 

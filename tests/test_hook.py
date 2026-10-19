@@ -12,7 +12,7 @@ from tests.conftest import Harness, make_auto
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "claude" / "hooks" / "envh_ask.py"
-CURSOR_MATCHER = json.loads((ROOT / "cursor" / "hooks.snippet.json").read_text())["hooks"]["beforeShellExecution"][0]["matcher"]
+CURSOR_HOOK = json.loads((ROOT / "cursor" / "hooks.snippet.json").read_text())["hooks"]["beforeShellExecution"][0]
 NO_BROKER = "/nonexistent/envh/ctl.sock"
 
 
@@ -186,7 +186,6 @@ def test_cursor_hook_decisions_and_matcher(command: str, expected: str | None) -
         assert output is not None, command
         assert output["permission"] == expected
         assert output["user_message"] == output["agent_message"] != ""
-        assert re.search(CURSOR_MATCHER, command), f"the Cursor matcher would skip {command!r}"
 
 
 def test_hook_falls_back_to_the_word_match_when_nested_too_deeply_to_parse() -> None:
@@ -199,6 +198,31 @@ def test_hook_falls_back_to_the_word_match_when_nested_too_deeply_to_parse() -> 
 
 def test_hook_ignores_other_tools() -> None:
     assert run_hook("envh session start p --minutes 5", tool="Read") is None
+
+
+# --- 2026-10-19 red-team regressions (hook-bypass findings, MEDIUM; the hook is not the boundary) ---
+
+def test_ansi_c_quoted_command_name_is_decoded_so_envh_is_not_hidden() -> None:
+    # bash resolves $'\x65nvh' to the command name "envh"; the hook must decode the $'...' escapes too,
+    # or an envh passphrase request hides from its attention.
+    output = run_hook("$'\\x65nvh' preset propose draft.yaml --reason x")
+    assert output is not None and output["permissionDecision"] == "ask"
+
+
+def test_added_exec_wrappers_and_runners_do_not_hide_envh() -> None:
+    for command in (
+        "ionice -c3 envh preset propose d.yaml",
+        "taskset -c 0 envh preset propose d.yaml",
+        "rye run envh preset propose d.yaml",
+    ):
+        output = run_hook(command)
+        assert output is not None and output["permissionDecision"] == "ask", command
+
+
+def test_cursor_hook_has_no_command_text_matcher_and_acts_on_a_reconstructed_name() -> None:
+    assert "matcher" not in CURSOR_HOOK, "a command-text matcher skips reconstructed envh names; the hook must run on every beforeShellExecution"
+    output = run_cursor_hook('e""nvh preset propose draft.yaml')
+    assert output is not None and output["permission"] == "ask"
 
 
 async def hook_against_broker(socket_path: Path, payload: dict) -> dict | None:

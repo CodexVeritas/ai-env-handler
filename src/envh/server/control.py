@@ -19,6 +19,15 @@ MAX_LINE = 1024 * 1024
 MAX_SOCKET_PATH = 100
 MAX_REASON = 1000
 MAX_LOGGED_COMMAND = 4000
+# A run request can map many variables via --with; cap how many so one request cannot blow up the
+# audit log (the vars list is logged on run_start/run_end) or the delivered env. A real run maps a few.
+MAX_WITH_ITEMS = 256
+# exit_code / lingering_terminated come from the client's run_done note and are attacker-controlled on
+# the raw socket, so they are clamped to a bounded int before being written to the never-trimmed audit log.
+RUN_INT_BOUND = 1 << 31
+# A requested session length beyond this is pointless (the per-key/preset cap and the 24h hard cap bound
+# the granted time anyway); clamping keeps an absurd or non-finite 'minutes' from raising on timedelta.
+MAX_MINUTES = 24 * 60
 # A client that has passed the uid check but sends no request is dropped after this long, so idle
 # connections cannot be held open to exhaust the broker's file descriptors.
 FIRST_LINE_TIMEOUT_SECONDS = 30
@@ -36,6 +45,17 @@ def logged_command(text: str) -> str:
     if len(text) <= MAX_LOGGED_COMMAND:
         return text
     return f"{text[:MAX_LOGGED_COMMAND]}… ({len(text) - MAX_LOGGED_COMMAND} more characters)"
+
+
+def _run_int(value: Any) -> int | None:
+    """A run_done exit_code / lingering_terminated as a bounded int, or None when the client sent no
+    usable value. Bounding it stops a client from writing a huge number (megabytes of digits) into the
+    audit log through these fields."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(-RUN_INT_BOUND, min(number, RUN_INT_BOUND))
 
 
 class ControlServer:
@@ -133,7 +153,9 @@ class Connection:
             return
         try:
             message = json.loads(line)
-        except json.JSONDecodeError as error:
+        except ValueError as error:
+            # ValueError (not just JSONDecodeError): a huge integer literal trips CPython's
+            # int-string-conversion limit with a plain ValueError, which must not escape as a 500.
             raise RequestError(f"malformed request: {error}") from error
         if not isinstance(message, dict) or not isinstance(message.get("op"), str):
             raise RequestError("malformed request: expected an object with an 'op' field")
@@ -146,7 +168,7 @@ class Connection:
         names = message.get("presets") or []
         if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
             raise RequestError("presets must be a list of preset names")
-        items = [str(item) for item in message.get("with") or []]
+        items = self._with_items(message)
         if names:
             return self.broker.mapping_from_presets(names, items)
         return self.broker.mapping_from_with(items), []
@@ -163,6 +185,24 @@ class Connection:
         if isinstance(reason, str) and len(reason) > MAX_REASON:
             raise RequestError(f"reason is too long ({len(reason)} characters); keep it under {MAX_REASON}")
         return reason
+
+    def _with_items(self, message: dict[str, Any]) -> list[str]:
+        items = message.get("with") or []
+        if not isinstance(items, list):
+            raise RequestError("'with' must be a list of VAR or VAR=SECRET items")
+        if len(items) > MAX_WITH_ITEMS:
+            raise RequestError(f"too many --with items ({len(items)}); at most {MAX_WITH_ITEMS}")
+        return [str(item) for item in items]
+
+    def _minutes(self, message: dict[str, Any]) -> int:
+        raw = message.get("minutes")
+        if raw is None:
+            return 0
+        try:
+            value = int(raw)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise RequestError("minutes must be a whole number") from error
+        return max(0, min(value, MAX_MINUTES))
 
     async def _decided_or_withdrawn(self, request: Request) -> bool:
         """Wait for the decision; if the client goes away first, withdraw the request and return False."""
@@ -206,7 +246,7 @@ class Connection:
         request = self.broker.request_session(
             mapping=mapping,
             presets=presets,
-            minutes=int(message.get("minutes") or 0),
+            minutes=self._minutes(message),
             reason=self._reason(message),
             command=self._command(message),
             provenance=self.provenance,
@@ -242,7 +282,7 @@ class Connection:
         command = self._command(message)
         session_id = message.get("session")
         if session_id:
-            session, mapping = self.broker.resolve_run_in_session(str(session_id), list(message.get("with") or []), self.provenance.uid)
+            session, mapping = self.broker.resolve_run_in_session(str(session_id), self._with_items(message), self.provenance.uid)
             self.broker.audit.event("run_auto_approved", session=session.id, vars=sorted(mapping), pid=self.provenance.pid, reason=reason or "(no reason given)")
             await self._start_run(mapping, session.id, reason, command)
             return
@@ -271,11 +311,11 @@ class Connection:
                     break
                 try:
                     note = json.loads(line)
-                except json.JSONDecodeError:
+                except ValueError:
                     continue
                 if isinstance(note, dict) and note.get("op") == "run_done":
-                    exit_code = note.get("exit_code")
-                    lingering_terminated = note.get("lingering_terminated")
+                    exit_code = _run_int(note.get("exit_code"))
+                    lingering_terminated = _run_int(note.get("lingering_terminated"))
                     break
         finally:
             self.broker.state.end_run(run)
@@ -336,7 +376,7 @@ class Connection:
             return
         try:
             follow_up = json.loads(line)
-        except json.JSONDecodeError as error:
+        except ValueError as error:
             raise RequestError(f"malformed request: {error}") from error
         if not isinstance(follow_up, dict) or follow_up.get("op") != "match":
             raise RequestError("a search is followed only by its match")
