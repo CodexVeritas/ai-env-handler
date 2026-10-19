@@ -29,17 +29,19 @@ async def test_one_approval_finds_copies_of_stored_keys_and_marks_them_in_the_sa
     control: Path, harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     harness.broker.vault.set("NEWS_BOT_FRED_API_KEY", FRED)
+    harness.broker.vault.set("FRED_API_KEY", FRED)
     monkeypatch.setattr("builtins.input", lambda prompt="": "")
     scan = asyncio.ensure_future(asyncio.to_thread(main, scan_args(tmp_path), lambda: vault_search(control)))
     await approve_next(harness)
     exit_code, folder = await scan
     assert exit_code == 1 and folder is not None
     assert saved_hits(folder) == [(1, "fred", "high"), (2, "fred", "high")]
-    assert json.loads((folder / VAULT_FILE).read_text())["matches"] == {value_id(FRED): ["NEWS_BOT_FRED_API_KEY"]}
+    assert json.loads((folder / VAULT_FILE).read_text())["matches"] == {value_id(FRED): ["FRED_API_KEY", "NEWS_BOT_FRED_API_KEY"]}
     assert not any(FRED in (folder / name).read_text() for name in ("hits.json", "report.txt", VAULT_FILE))
     shown = capsys.readouterr().out
     assert "Searching for copies of 1 vault key too." in shown
-    assert "Searched for 1 vault key: 1 stored key found, 1 copy only by that search." in shown
+    assert "Searched for 1 vault key: 2 stored keys found, 1 copy only by that search." in shown
+    assert 'Start with your own keys: 2 copies of 1 key in 1 file. envh explore opens on them; x on "All your keys" replaces them all.' in shown
     assert [request.kind for request in harness.broker.state.requests.values()] == ["search"]
 
 
