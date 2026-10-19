@@ -44,6 +44,8 @@ Secrets marked `auto` in `envh list` need no approval: `envh run --with <VAR> --
 
 The console shows your `--reason` first. Write what a careful colleague would want to read: the task, the step, and anything unusual (new provider, large spend, writes to an external system). "testing" is not a reason.
 
+Write the reason as plain text, with no `$var`, `$(...)` or backticks. If bash would fill in part of the reason, the app asks the human to approve the command even when every secret is `auto`. For a literal dollar sign, write `\$` inside double quotes, or use single quotes.
+
 ## When something is refused
 
 - Denied, or exit code 4: the human said no. Stop. Report what you asked for and why, and wait for instructions. Do not retry with a different wording or a different variable.
