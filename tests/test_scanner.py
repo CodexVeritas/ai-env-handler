@@ -15,8 +15,8 @@ from envh.tools.saved_files import ask_where
 from tests.conftest import HEX, random_text
 import envh.tools.scanner as scanner_module
 from envh.tools.scanner import (
-    COMPILED_PATTERNS, FORMAT_PASSES, STANDALONE_KINDS, UNCONFIRMED_COPY, VALUE_PATTERNS, KeyEnds, Progress, VaultSearch, classify_name, confirmed_copies, ids_to_confirm,
-    looks_fake, looks_placeholder, main,
+    COMPILED_PATTERNS, FORMAT_PASSES, STANDALONE_KINDS, UNCONFIRMED_COPY, VALUE_PATTERNS, KeyEnds, NotRead, Progress, VaultSearch, classify_name, confirmed_copies,
+    find_files, ids_to_confirm, looks_fake, looks_placeholder, main, scan_files, text_parts,
     place_of, scan_paths, scan_text, shown_value, value_id, with_vault_copies,
 )
 
@@ -76,7 +76,7 @@ def test_skips_binaries_large_files_and_vendor_dirs_but_reads_git_config(tmp_pat
     (tmp_path / "binary.db").write_bytes(b"\x00\x01" + OPENAI.encode())
     (tmp_path / "node_modules").mkdir()
     (tmp_path / "node_modules" / "x.js").write_text(OPENAI)
-    (tmp_path / "big.log").write_text(OPENAI + "\n" + "x" * 2_000_000)
+    (tmp_path / "big.json").write_text(OPENAI + "\n" + "x" * 2_000_000)
     git = tmp_path / "repo" / ".git"
     git.mkdir(parents=True)
     (git / "config").write_text("[remote \"origin\"]\n\turl = https://user:" + "ghp_" + "a" * 36 + "@github.com/x/y.git\n")
@@ -223,17 +223,83 @@ def test_overlapping_formats_report_the_value_once() -> None:
     assert [hit.kind for hit in hits] == ["supabase"]
 
 
-def test_installed_packages_caches_and_tagged_folders_are_skipped(tmp_path: Path) -> None:
-    skipped = (".local/share/uv/python", "miniconda3/lib", ".vscode/extensions/tool", ".config/Slack/Cache", "project/target", ".var/app/org.mozilla.thunderbird_esr/cache", "project/web/.next/server")
+def test_installed_code_and_caches_are_skipped_but_the_login_files_beside_them_are_read(tmp_path: Path) -> None:
+    skipped = {
+        ".local/share/uv/python": ".local/share/uv/python", "miniconda3/lib": "a Python environment's lib", ".vscode/extensions": ".vscode/extensions",
+        ".config/Slack/Cache": "Cache", "project/target": "CACHEDIR.TAG", ".var/app/org.mozilla.thunderbird_esr/cache": ".var/app/*/cache",
+        "project/web/.next/cache": ".next/cache", ".cargo/registry": ".cargo/registry", "app/.venv/lib": "a Python environment's lib",
+        "repo/.git/objects": ".git/objects", ".mozilla": ".mozilla", "app/node_modules": "node_modules",
+    }
     for folder in skipped:
         (tmp_path / folder).mkdir(parents=True)
         (tmp_path / folder / "leak.txt").write_text(OPENAI)
     (tmp_path / "project" / "target" / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
-    (tmp_path / "project" / "notes.md").write_text(OPENAI)
-    (tmp_path / ".cache" / "huggingface").mkdir(parents=True)
-    (tmp_path / ".cache" / "huggingface" / "token").write_text(SAMPLES["huggingface"])
-    hits, _, _ = scan_paths([tmp_path], 1024 * 1024)
-    assert {str(hit.path.relative_to(tmp_path)) for hit in hits} == {"project/notes.md", ".cache/huggingface/token"}
+    (tmp_path / "miniconda3" / "conda-meta").mkdir()
+    (tmp_path / "app" / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    read = (
+        "project/notes.md", ".cache/huggingface/token", ".cargo/credentials.toml", ".local/share/uv/credentials/credentials.toml", "app/.venv/bin/activate",
+        "Desktop/env/.env.bot", "repo/.git/hooks/pre-push", "project/web/.next/server/page.js", ".var/app/com.slack.Slack/config/settings.json",
+        "miniconda3/etc/conda/activate.d/keys.sh", "app/.venv/share/jupyter/kernels/bot/kernel.json",
+    )
+    for file in read:
+        (tmp_path / file).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / file).write_text(OPENAI)
+    not_read = NotRead(1024 * 1024)
+    unreadable: list[Path] = []
+    hits, _ = scan_files(find_files([tmp_path], not_read.limit, unreadable, None, not_read), unreadable, None, None, not_read)
+    assert {str(hit.path.relative_to(tmp_path)) for hit in hits} == set(read)
+    assert {rule: sorted(str(folder.relative_to(tmp_path)) for folder in folders) for rule, folders in not_read.folders.items()} == {
+        rule: sorted(folder for folder, its_rule in skipped.items() if its_rule == rule) for rule in set(skipped.values())
+    }
+
+
+def test_names_that_start_with_the_key_word_flags_and_bearer_headers_point_at_keys() -> None:
+    text = "\n".join([
+        f"PASSWORD={FRED}",
+        f"token: {FRED[::-1]}",
+        f"curl -H 'Authorization: Bearer {FRED}' https://api.example.com",
+        f"tool --api-key {FRED} --verbose",
+        f"tool --api-key={FRED}",
+        "key = settings.openai_api_key_value",
+        "tool --api-key $FRED_API_KEY",
+    ])
+    hits = list(scan_text(Path("run.sh"), text + "\n"))
+    assert [(hit.line, hit.name, hit.confidence) for hit in hits] == [
+        (1, "PASSWORD", "medium"), (2, "token", "low"), (3, "Bearer", "medium"), (4, "--api-key", "medium"), (5, "--api-key", "medium"),
+    ]
+
+
+def test_text_parts_end_at_line_breaks_and_count_the_lines_before_each(tmp_path: Path) -> None:
+    log = tmp_path / "big.log"
+    log.write_bytes("one\ntwo é\nthree\nno line break at the end".encode())
+    parts = list(text_parts(log, 6))
+    assert "".join(text for _, text in parts) == log.read_text()
+    assert all(text.endswith("\n") for _, text in parts[:-1]) and [lines for lines, _ in parts] == [0, 1, 2, 3]
+
+
+def test_a_large_log_is_read_in_parts_and_everything_else_left_out_is_listed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    home = tmp_path / "home"
+    (home / "app" / "logs").mkdir(parents=True)
+    (home / "app" / "logs" / "server.log").write_text("x" * 100 + "\n" * 3 + ("filler line\n" * 200_000) + f"boot {OPENAI}\n")
+    (home / "app" / "dump.json").write_text(f"{OPENAI}\n" + "x" * 2_000_000)
+    (home / "app" / "image.png").write_bytes(b"\x89PNG\x00\x00" + OPENAI.encode())
+    (home / "app" / ".mozilla").mkdir()
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (home / "app" / "linked").symlink_to(outside)
+    (home / "app" / "loop").symlink_to(home / "app" / "loop")
+    monkeypatch.setenv("HOME", str(home))
+    exit_code, saved_in = main(argparse.Namespace(paths=[str(home)], json=False, max_size=1, out=str(tmp_path / "scans")))
+    hits = json.loads((saved_in / "hits.json").read_text())
+    assert exit_code == 1 and [(hit["path"].rsplit("/", 1)[-1], hit["line"]) for hit in hits["hits"]] == [("server.log", 200_004)]
+    assert hits["not_read"] == {"too_large": 1, "binary": 1, "folders": 1, "links": 1}
+    report = (saved_in / "report.txt").read_text()
+    not_read = report[report.index("== Not read =="):]
+    assert "~/app/dump.json" in not_read and "~/app/image.png" in not_read and ".png 1" in not_read
+    assert ".mozilla" in not_read and f"~/app/linked -> {outside}" in not_read
+    shown = capsys.readouterr().out
+    assert "Not read: 1 file over 1 MB, 1 that looks binary, 1 skipped folder; report.txt lists each under Not read." in shown
+    assert "Browser and mail profiles were skipped: clear saved passwords and logins from inside each app." in shown
 
 
 def test_progress_draws_a_bar_with_the_folder_and_clears_it() -> None:
@@ -390,9 +456,9 @@ def stored(*values: str) -> KeyEnds:
 def test_the_vault_search_finds_copies_the_rules_miss_and_keeps_those_the_broker_confirms() -> None:
     fred = random_text("vault fred", 32, HEX)
     text = "\n".join([
-        f"my fred key: {fred}",
-        f"curl -H 'X-Api-Key: {fred}' https://api.example.com",
-        f'{{"key": "{fred}"}}',
+        f"my fred one: {fred}",
+        f"curl -H 'X-Fred: {fred}' https://api.example.com",
+        f'{{"value": "{fred}"}}',
         f"FRED_API_KEY={fred}",
         f"{fred[:16]} {fred[16:]}",
     ])
@@ -413,7 +479,7 @@ def test_a_hit_overlapping_a_confirmed_copy_is_dropped_since_the_copy_is_exact()
 
 def test_when_the_broker_cant_be_asked_copies_found_only_by_the_search_are_dropped() -> None:
     key = random_text("unasked", 24)
-    hits = list(scan_text(Path("f"), f"key: {key}\nFRED_API_KEY={FRED}\n", stored(key)))
+    hits = list(scan_text(Path("f"), f"here: {key}\nFRED_API_KEY={FRED}\n", stored(key)))
     assert [hit.kind for hit in hits] == [UNCONFIRMED_COPY, "fred"]
     kept, matches, lines = confirmed_copies(hits, VaultSearch(stored(key), lambda ids: None))
     assert [hit.kind for hit in kept] == ["fred"] and matches is None and "Not checked against your vault (see above)." in str(lines)
@@ -421,7 +487,7 @@ def test_when_the_broker_cant_be_asked_copies_found_only_by_the_search_are_dropp
 
 def test_copies_found_only_by_the_search_are_checked_first_when_there_are_too_many(monkeypatch: pytest.MonkeyPatch) -> None:
     key = random_text("first", 24)
-    hits = list(scan_text(Path("f"), f"FRED_API_KEY={FRED}\n{OPENROUTER}\nkey: {key}\n", stored(key)))
+    hits = list(scan_text(Path("f"), f"FRED_API_KEY={FRED}\n{OPENROUTER}\nhere: {key}\n", stored(key)))
     monkeypatch.setattr(scanner_module, "MAX_MATCH_IDS", 2)
     assert ids_to_confirm(hits) == ([value_id(key), value_id(OPENROUTER)], 1)
 

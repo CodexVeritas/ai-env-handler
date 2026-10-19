@@ -3,7 +3,10 @@ import stat
 import time
 from pathlib import Path
 
+import pytest
+
 from envh.common import value_id
+import envh.tools.replacer as replacer_module
 from envh.tools.replacer import Spot, placeholder, replace_all, replace_in_file, replaced_pairs
 from envh.tools.scanner import scan_paths, scan_text
 from tests.conftest import HEX, random_text
@@ -84,17 +87,17 @@ def test_the_log_lists_what_was_replaced(tmp_path: Path) -> None:
 
 
 def test_a_copy_found_only_by_the_vault_search_is_replaced_where_the_scan_saw_it(tmp_path: Path) -> None:
-    file = old_file(tmp_path / "notes.md", f"my fred key: {FRED}\nagain {FRED} here\n".encode())
+    file = old_file(tmp_path / "notes.md", f"my fred one: {FRED}\nagain {FRED} here\n".encode())
     spots = [Spot(1, 13, len(FRED), value_id(FRED), "fred"), Spot(2, 6, len(FRED), value_id(FRED), "fred")]
     assert replace_in_file(file, {value_id(FRED)}, time.time())[:2] == (0, "the key isn't in it any more")
     assert replace_in_file(file, {value_id(FRED)}, time.time(), spots)[:2] == (2, "")
     removed = placeholder("fred", value_id(FRED))
-    assert file.read_text() == f"my fred key: {removed}\nagain {removed} here\n"
+    assert file.read_text() == f"my fred one: {removed}\nagain {removed} here\n"
     assert replace_in_file(file, {value_id(FRED)}, time.time(), spots)[:2] == (0, "the key isn't in it any more")
 
 
 def test_only_the_ids_actually_replaced_in_a_file_are_logged(tmp_path: Path) -> None:
-    file = old_file(tmp_path / "notes.md", f"FRED_API_KEY={FRED}\nmy other key: {OPENROUTER[9:]}\n".encode())
+    file = old_file(tmp_path / "notes.md", f"FRED_API_KEY={FRED}\nmy other one: {OPENROUTER[9:]}\n".encode())
     moved = Spot(2, 0, len(OPENROUTER) - 9, value_id(OPENROUTER[9:]), "unknown")
     outcome = replace_all({str(file): {value_id(FRED), value_id(OPENROUTER[9:])}}, tmp_path, {str(file): [moved]})
     assert outcome.ids == {str(file): frozenset({value_id(FRED)})}
@@ -108,3 +111,9 @@ def test_overlapping_copies_are_replaced_once_and_the_line_stays_whole(tmp_path:
     assert [hit.fingerprint for hit in scan_text(file, file.read_text())] == [value_id(longer)]
     count, _, _ = replace_in_file(file, {value_id(key), value_id(longer)}, time.time(), [Spot(1, 8, len(key), value_id(key), "unknown")])
     assert count == 1 and file.read_text() == f"API_KEY={placeholder('unknown', value_id(key))}/v2/extra\n"
+
+
+def test_a_file_too_large_to_rewrite_is_left_with_a_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    file = old_file(tmp_path / "server.log", f"boot {OPENROUTER}\n".encode() + b"filler\n" * 100)
+    monkeypatch.setattr(replacer_module, "WHOLE_FILE_MAX_BYTES", 100)
+    assert replace_in_file(file, {value_id(OPENROUTER)}, time.time())[:2] == (0, "over 0 MB, too large to rewrite here; replace the key by hand")

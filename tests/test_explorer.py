@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from envh.client.transport import ClientError
+import envh.tools.explorer as explorer_module
 from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, load_vault_matches, main, newest_scan, split_keys
 from envh.common import peek_ends, value_id
 from envh.tools.scanner import KeyEnds, scan_paths, scan_text, save_results, shown_value, with_vault_copies
@@ -237,18 +238,27 @@ def test_g_groups_by_place(tmp_path: Path) -> None:
     assert sorted(row.label.split()[0] for row in explorer.rows() if row.node[0] == "value") == ["anthropic", "openrouter"]
 
 
-def test_keys_in_the_vault_are_named_and_v_filters_them(tmp_path: Path) -> None:
+def test_keys_in_the_vault_open_first_under_yours_and_v_filters_the_other_lists(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {"a/.env": f"{OPENROUTER}\n", "b/notes.md": f"{ANTHROPIC}\n"})
     hits = load_scan(folder)
     stored = next(hit.fingerprint for hit in hits if hit.kind == "openrouter")
     (folder / "vault.json").write_text(json.dumps({"matches": {stored: ["TEAM_OPENROUTER_KEY"]}}))
     explorer = Explorer(hits, folder, vault=load_vault_matches(folder))
+    rows = screen(explorer)
+    assert explorer.tier == "yours" and rows[1].index("Yours 1") < rows[1].index("Likely 2")
+    assert "Start here: exact copies of your vault's keys, the safest to replace." in rows[2]
+    assert [row.label for row in explorer.rows()] == ["All your keys", "openrouter"]
+    assert "Yours" not in screen(Explorer(hits, folder))[1]
     press(explorer, "v")
+    assert explorer.message.startswith("Yours shows only your keys already") and explorer.vault_filter == "all keys"
+    press(explorer, "tab", "v")
     assert [row.label for row in explorer.rows()] == ["openrouter"] and "in your vault (v)" in screen(explorer)[2]
     press(explorer, "right")
     assert any("in your vault as TEAM_OPENROUTER_KEY" in row.label for row in explorer.rows())
     press(explorer, "v")
     assert [row.label for row in explorer.rows()] == ["anthropic"]
+    press(explorer, "shift_tab")
+    assert explorer.tier == "yours" and explorer.vault_filter == "all keys" and len(explorer.rows()) == 2
     assert load_vault_matches(tmp_path) is None
 
 
@@ -264,7 +274,7 @@ def test_the_file_view_shows_and_hides_copies_only_the_vault_search_found(tmp_pa
     other = random_text("other stored", 24)
     notes = tmp_path / "project" / "notes.md"
     notes.parent.mkdir(parents=True)
-    notes.write_text(f"intro\nmy fred key: {stored}\nnext line has {other} too\n")
+    notes.write_text(f"intro\nmy fred one: {stored}\nnext line has {other} too\n")
     vault = {value_id(stored): ["MY_FRED_KEY"], value_id(other): ["MY_OTHER_TOKEN"]}
     found = list(scan_text(notes, notes.read_text(), KeyEnds([(*peek_ends(value), len(value)) for value in (stored, other)])))
     folder = save_results(with_vault_copies(found, vault), 1, [], 1.0, [notes.parent], tmp_path / "scans", datetime(2026, 10, 17, 20, 0, 0))
@@ -272,7 +282,7 @@ def test_the_file_view_shows_and_hides_copies_only_the_vault_search_found(tmp_pa
     explorer.selected = next(index for index, row in enumerate(explorer.rows()) if row.label == "fred")
     open_first_file(explorer)
     rows = "\n".join(screen(explorer))
-    assert "isn't in the file any more" not in rows and "my fred key:" in rows and "next line has" in rows
+    assert "isn't in the file any more" not in rows and "my fred one:" in rows and "next line has" in rows
     assert stored not in rows and other not in rows
 
 
@@ -289,6 +299,16 @@ def test_the_file_view_finds_a_vault_copy_inside_a_longer_value_the_rescan_repor
     open_first_file(explorer)
     rows = "\n".join(screen(explorer))
     assert "isn't in the file any more" not in rows and "API_KEY=" in rows and "/v2/extra" in rows and stored not in rows
+
+
+def test_a_large_file_opens_after_the_screen_says_it_is_reading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = saved_scan(tmp_path, {"logs/server.log": f"boot {OPENROUTER}\n" + "filler\n" * 1000})
+    monkeypatch.setattr(explorer_module, "DEFAULT_MAX_BYTES", 100)
+    explorer = Explorer(load_scan(folder), folder)
+    open_first_file(explorer)
+    assert explorer.file_view is None and explorer.message.startswith("Reading ") and "server.log" in explorer.message
+    explorer.work()
+    assert explorer.file_view is not None and not explorer.file_view.problem
 
 
 def test_x_replaces_every_copy_under_a_row_after_y(tmp_path: Path) -> None:
@@ -308,6 +328,32 @@ def test_x_replaces_every_copy_under_a_row_after_y(tmp_path: Path) -> None:
     explorer.work()
     assert explorer.message.startswith("✓ Replaced") and label not in [row.label for row in explorer.rows()]
     assert (folder / "replaced.txt").exists() and OPENROUTER not in (folder / "replaced.txt").read_text()
+
+
+def test_x_on_all_your_keys_replaces_every_copy_of_them_and_nothing_else(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"a/.env": f"OPENROUTER_API_KEY={OPENROUTER}\nFRED_API_KEY={FRED}\n", "b/notes.md": f"{OPENROUTER} {ANTHROPIC}\n"})
+    for file in (tmp_path / "project").rglob("*"):
+        os.utime(file, (time.time() - 3600, time.time() - 3600))
+    hits = load_scan(folder)
+    vault = {hit.fingerprint: [f"MY_{hit.kind.upper()}_KEY"] for hit in hits if hit.kind in ("openrouter", "fred")}
+    explorer = Explorer(hits, folder, vault=vault)
+    first = explorer.rows()[0]
+    assert (first.label, first.detail) == ("All your keys", "2 keys in 2 files") and "x replaces every copy of them" in screen(explorer)[3]
+    press(explorer, "enter")
+    assert explorer.message.startswith("x replaces every copy of your keys") and explorer.file_view is None
+    explorer.needle = "fred"
+    assert (explorer.rows()[0].label, explorer.rows()[0].detail) == ('All your keys matching "fred"', "1 key in 1 file")
+    explorer.needle = ""
+    press(explorer, "x")
+    rows = "\n".join(screen(explorer))
+    assert "All your keys: 3 copies of 2 keys in 2 files" in rows and "in your vault" not in rows.split("Each copy becomes")[1]
+    press(explorer, "y")
+    explorer.work()
+    project = tmp_path / "project"
+    assert OPENROUTER not in (project / "a" / ".env").read_text() and FRED not in (project / "a" / ".env").read_text()
+    assert OPENROUTER not in (project / "b" / "notes.md").read_text() and ANTHROPIC in (project / "b" / "notes.md").read_text()
+    assert explorer.tier_counts["yours"] == 0 and explorer.rows() == []
+    assert "Every copy of your keys is replaced. Tab shows the other lists." in screen(explorer)[3]
 
 
 def test_the_replace_summary_warns_about_keys_outside_the_vault_and_low_values_in_code(tmp_path: Path) -> None:
