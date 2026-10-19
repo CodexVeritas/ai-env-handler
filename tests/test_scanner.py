@@ -365,6 +365,19 @@ def test_code_that_reads_a_key_is_not_reported() -> None:
     assert [hit.name for hit in scan_text(Path("app.py"), text)] == ["FRED_API_KEY"]
 
 
+def test_a_prefix_and_a_long_random_run_is_a_key_not_a_name() -> None:
+    text = "\n".join([
+        f"HYPERBROWSER_API_KEY=hb_{random_text('hyperbrowser', 28, HEX)}",
+        f"SERVICE_TOKEN=HB_{random_text('upper', 28, HEX).upper()}",
+        "api_key = openai_api_key_from_settings_v2",
+        "OPENAI_KEY_VAR=OPENAI_API_KEY_20241018",
+        "token = authentication_configuration_provider",
+    ])
+    hits = list(scan_text(Path("app.py"), text))
+    assert [hit.name for hit in hits] == ["HYPERBROWSER_API_KEY", "SERVICE_TOKEN"]
+    assert (hits[0].confidence, hits[0].kind) == ("medium", "hyperbrowser")
+
+
 @pytest.mark.parametrize(("path", "place"), [
     ("/h/.config/Cursor/User/History/-1a2b/abcd", "editor history"),
     ("/h/.claude/projects/x/session.jsonl", "agent transcripts"),

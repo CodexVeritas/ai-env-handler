@@ -156,10 +156,13 @@ CONFIDENCE_ORDER = ("high", "medium", "low", "fake")
 # How each tier answers "is this a real key?", as people read it.
 TIER_NAMES = {"high": "likely", "medium": "possible", "low": "unlikely", "fake": "placeholder"}
 # A value that is just a name, such as self.settings.openai_api_key or OPENAI_API_KEY_2, is code reading a key, not a key.
+# Each word after the first is all letters or short, so a prefix and a long random run, such as hb_ and 28 hex
+# characters, is a key and not a name.
 UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 DEMO_WORDS = ("demo", "example", "sample", "dummy", "fake", "placeholder")
 NAME_LIKE_VALUE = re.compile(
-    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+|[a-z]+(?:[_-][a-z0-9]+)+|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[a-z]+(?:[A-Z][a-z]+)+|(?:[A-Z][a-z]+){2,}"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+|[a-z]+(?:[_-](?:[a-z]+|[a-z0-9]{1,12}))+|[A-Z][A-Z0-9]*(?:_(?:[A-Z]+|[A-Z0-9]{1,12}))+"
+    r"|[a-z]+(?:[A-Z][a-z]+)+|(?:[A-Z][a-z]+){2,}"
 )
 # Placeholders in docs and tests: a counting run, a short unit repeated, or a word no real key holds. The format's
 # fixed prefix is left out of the check.
