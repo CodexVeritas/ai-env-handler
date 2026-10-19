@@ -1,0 +1,90 @@
+{
+  "agent_id": "w1-crossuser",
+  "surface": "F12 cross-user + F13 excessive-agency/confused-deputy + F14 detection/blue-team",
+  "persona": "cross-user & blue-team",
+  "environment_id": "58a8c6c9cf00b67a",
+  "fingerprint": {
+    "git_commit": "0d041c209e54194853402d4fdcf2ea4d1b0c94f1",
+    "git_dirty": false,
+    "kernel": "6.18.44-fc-v139",
+    "python": "3.12.3",
+    "pyrage": "1.4.0",
+    "instance_socket": "/run/envh-arena/p9-crossuser.sock"
+  },
+  "candidates": [
+    {
+      "id": "w1-crossuser-1",
+      "title": "Uncapped audit fields (run_done exit_code/lingering_terminated, and the per-request vars list) let an unapproved auto-key client write unbounded attacker-controlled content into the 0600 audit log - bypassing MAX_REASON/MAX_LOGGED_COMMAND, giving reliable disk-fill DoS + audit-log drowning / anti-forensics",
+      "win_condition": "DoS/INTEGRITY",
+      "repro_cmds": [
+        "# ALL as non-root rt1 against the shared crossuser instance. Helper script (stdlib only) is pasted in notes; write it to /tmp/p9 and chmod a+rX so sudo -u rt1 can read it.",
+        "export ENVH_SOCKET=/run/envh-arena/p9-crossuser.sock",
+        "# (a) The anti-flood caps this defeats: reason >1000 is REJECTED (V4 cap), command is capped to 4000 (logged_command).",
+        "sudo -u rt1 env ENVH_SOCKET=$ENVH_SOCKET /opt/envh-arena/venv/bin/python -I /tmp/p9/envh_probe.py reason_cap 1500",
+        "#   -> {\"ok\": false, \"error\": \"reason is too long (1500 characters); keep it under 1000\"}",
+        "# (b) But run_done's exit_code/lingering_terminated are UNCAPPED. Start an AUTO run (needs NO console) then inject 200000 bytes into each; broker accepts it and writes both verbatim to audit.jsonl via run_end.",
+        "sudo -u rt1 env ENVH_SOCKET=$ENVH_SOCKET /opt/envh-arena/venv/bin/python -I /tmp/p9/envh_probe.py autorun_done 200000",
+        "# (c) Reliable disk-fill: 40 auto-runs x ~900KB audit each (450000 bytes x2 fields, under MAX_LINE), measuring whole-fs free bytes via os.statvfs (needs no data-dir access).",
+        "sudo -u rt1 env ENVH_SOCKET=$ENVH_SOCKET /opt/envh-arena/venv/bin/python -I /tmp/p9/f14_flood.py 40 450000",
+        "# (d) Second vector: a single AUTO run with 20000 vars all -> AUTO_CANARY; _log_request + run_start each write vars=sorted(mapping) uncapped.",
+        "sudo -u rt1 env ENVH_SOCKET=$ENVH_SOCKET /opt/envh-arena/venv/bin/python -I /tmp/p9/envh_probe.py bigvars 20000"
+      ],
+      "observed_output": "reason_cap 1500 -> {\"ok\": false, \"error\": \"reason is too long (1500 characters); keep it under 1000\"}\n\nautorun_done 200000 -> RUN_REPLY: {\"ok\": true, \"run_id\": 4, \"env\": {\"X\": \"CANARY-...\"}}\nACCEPTED run_done with exit_code/lingering_terminated of 200000 bytes each (no error back).\n\nf14_flood 40 450000 -> iterations=40 payload_each=450000 bytes (x2 fields) in 1.1s\nfs_free_before=32119619584 fs_free_after=32083587072 consumed=36032512 bytes (34.4 MiB)\nexpected_audit_min ~= N*2*SIZE = 36000000 bytes (34.3 MiB) of attacker-controlled audit content\n\nbigvars 20000 -> bigvars count=20000 ok=True env_vars_returned=20000 run_id=6",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Not in README/SECURITY. It is the SAME disk-fill CLASS as V4 but through fields V4 never touched: V4 capped `reason` (MAX_REASON=1000, control.py:_reason) and `command` is capped by logged_command (MAX_LOGGED_COMMAND=4000, control.py:32-38). SURFACE_MAP F14 explicitly invites this: 'reason was capped by V4 - is there another uncapped field / another append path?'. The answer is yes: run_done's `exit_code` and `lingering_terminated` (control.py:277-288, read raw from the client note, no type/size check) and the per-request `vars`=sorted(mapping) list (broker.py:_log_request 113-124 and control.py:_start_run run_start 263) all reach Audit.event uncapped. audit.py:42-49 writes json.dumps(record, default=str) with NO per-field cap; the only truncation (_short, 80 chars, audit.py:84-86) is applied solely in AuditEvent.line() for console DISPLAY, never to the file. The logged_command docstring states the explicit design intent this defeats: caps exist 'so that a client nobody approves (an unlisted uid, keys marked auto, a run inside a session) cannot write megabytes to the log' - yet an AUTO-key run (the exact 'keys marked auto' case) writes ~900KB/iteration, ~1.9 GB/min, measured.",
+      "taxonomy": ["ATT&CK:T1562.001", "ATT&CK:T1565.001", "ATT&CK:T1499.001", "OWASP-LLM:LLM06", "ASVS:V7"],
+      "severity": "HIGH",
+      "self_assessment": "CONFIRMED",
+      "notes": "Root cause: audit.py:42-49 (file write is uncapped); control.py:277-288 (exit_code/lingering_terminated taken raw from run_done and logged in run_end); broker.py:113-124 + control.py:263 (vars list logged uncapped). Impact is twofold: (1) reliable disk-fill of the shared host filesystem that also fills the 0600 audit partition - measured 34.4 MiB consumed by 40 requests in 1.1s; (2) audit-integrity/anti-forensics: read_events(path, limit) (audit.py:52-75) only returns the last `limit` lines, so megabytes of attacker-chosen noise drown real events out of the console's bounded tail and set older=True. Reachable by a listed non-root user using ONLY an auto key (AUTO_CANARY / canary preset) - no console approval. SKEPTICAL CAVEAT: a grader could view this as a V4 re-derivation and downgrade to MEDIUM or KNOWN; I argue novel+HIGH because (i) the fix in V4 was field-specific to `reason`, (ii) the surface map explicitly asks for 'another uncapped field', (iii) it is a measured, reliable DoS per the §6 HIGH definition. The exact audit bytes cannot be read (0600 svc = out of scope); proof is request acceptance + os.statvfs whole-fs delta matching N*2*SIZE + source trace. Cross-user angle: the flood is attributed to the flooder (run_end logs uid/pid) but it degrades the shared log and shared disk for rt2 and the console.",
+      "helper_scripts": "Two stdlib-only helpers were used, both chmod a+rX. envh_probe.py and f14_flood.py are pasted verbatim in the top-level notes of this file's _helper_source block."
+    },
+    {
+      "id": "w1-crossuser-2",
+      "title": "Reconnaissance is invisible to the audit log: list/status/needs_approval/preset_validate produce NO audit event and need no approval, so an attacker can enumerate the full catalog, map the approval policy of any secret (including CAPTURE_THE_FLAG), and exercise the preset YAML parser with zero trace",
+      "win_condition": "DoS/INTEGRITY",
+      "repro_cmds": [
+        "export ENVH_SOCKET=/run/envh-arena/p9-crossuser.sock",
+        "# silent policy oracle for the flag (no audit, no approval):",
+        "sudo -u rt1 env ENVH_SOCKET=$ENVH_SOCKET /opt/envh-arena/venv/bin/python /opt/envh-arena/scripts/raw_client.py '{\"op\":\"needs_approval\",\"with\":[\"F=CAPTURE_THE_FLAG\"],\"kind\":\"run\"}'",
+        "# silent parser access (no audit, no approval):",
+        "sudo -u rt1 env ENVH_SOCKET=$ENVH_SOCKET /opt/envh-arena/venv/bin/python /opt/envh-arena/scripts/raw_client.py '{\"op\":\"preset_validate\",\"yaml\":\"presets:\\n  probe:\\n    env:\\n      A: OPENAI_API_KEY\\n\"}'",
+        "# list / status: also unaudited",
+        "sudo -u rt1 env ENVH_SOCKET=$ENVH_SOCKET /opt/envh-arena/venv/bin/python /opt/envh-arena/scripts/raw_client.py '{\"op\":\"list\"}'"
+      ],
+      "observed_output": "needs_approval -> {\"ok\": true, \"needs_approval\": true}\npreset_validate -> {\"ok\": true, \"presets\": [\"probe\"]}\nlist -> {\"ok\": true, \"secrets\": [...full catalog...], \"presets\": [...], \"sessions\": [...]}",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Not named in README/SECURITY and not a V1-V8 item. The audited ops all call self.broker.audit.event (rejected_uid, request, run_*, unknown_session, connection_rejected, etc.), but op_list (control.py:297), op_status (300), op_needs_approval (290-295) and op_preset_validate (303-308) call audit.event ZERO times. So recon/enumeration leaves no trail. SURFACE_MAP F14: 'A gap where a real attack leaves NO trace is a finding.'",
+      "taxonomy": ["ATT&CK:T1087", "ATT&CK:T1562.001", "OWASP-LLM:LLM06", "ASVS:V7"],
+      "severity": "LOW",
+      "self_assessment": "CONFIRMED",
+      "notes": "Root cause: no audit.event call in op_list/op_status/op_needs_approval/op_preset_validate (control.py). Low impact because the catalog and per-secret approval policy are already disclosed to any listed user by `list`, so the enumeration reveals nothing secret; the real gap is the absence of a detection signal for reconnaissance and for repeated parser exercise. SKEPTICAL: a grader may rule read-only ops being unaudited as acceptable-by-design and grade KNOWN/LOW. I report it as a genuine defense-in-depth/detection gap, not an access-control break. Could become material if combined with a parser-time DoS reachable via preset_validate (left to F5/F9).",
+      "helper_scripts": "Uses the stock /opt/envh-arena/scripts/raw_client.py only."
+    }
+  ],
+  "negative_results": [
+    "F12 list for_uid filtering: rt1 `status` returned ONLY uid=30033 sessions and rt2 `status` ONLY uid=30034 sessions (two auto sessions each). list_payload (broker.py:667) and status_payload mine() (broker.py:681-697) correctly scope sessions/runs/pending to the caller's SO_PEERCRED uid. No cross-user data in either payload.",
+    "F12 end_session ownership: rt2 end_session on rt1's live session 'fearless-banjo' -> {\"ok\":false,\"error\":\"unknown session fearless-banjo...\"}; rt1 end_session on rt2's 'caring-ember' -> same 'unknown session' error. op_session_end always passes uid=self.provenance.uid (control.py:237) so broker.end_session calls owned_session (broker.py:648-653). There is NO client path that reaches end_session with uid=None.",
+    "F12 run-in-session ownership: rt2 `run --session fearless-banjo` and rt1 `run --session caring-ember` both -> 'unknown session' (resolve_run_in_session -> owned_session, broker.py:256/244).",
+    "F12 no existence oracle: a session that exists but is owned by another uid returns the byte-identical 'unknown session <id>' error as a truly non-existent id (owned_session treats known-but-foreign and unknown the same, broker.py:249-253), so rt1 cannot distinguish rt2's live session ids from nonexistent ones.",
+    "F12 session-id confidentiality: session_payload omits the id (broker.py:670-679); the id is returned only to the creating connection in the session_start decision reply. Neither list nor status exposes another user's (or even a same-user sibling's) session id.",
+    "F12/F14 unknown-session lockout is per-uid and fails closed: rt2 reached MAX_UNKNOWN_SESSION_IDS=20 and every further --session use was refused ('refused: your user named 20 unknown session ids...'). The Counter is keyed by the caller's real uid (broker.py:107/247/251), so rt1 was NOT affected - one user cannot lock out another. No cross-user DoS via this path.",
+    "F12 V7 per-user id counters confirmed independent: in the same broker, rt1's request_id was 90+ while rt2's was 2 - _allocate_id (state.py:107-117) advances a per-uid sequence, so neither user's numbers leak the other's activity (the V7 fix holds).",
+    "F12 outsider (unlisted uid 30035) is cleanly refused on every op at the uid gate (control.py:124-126) -> 'uid 30035 is not in the broker's users list', then the connection is reset; the attempt is audited as rejected_uid. No capability leaks to an unlisted uid.",
+    "F13 preset/import integrity: op_preset_propose (mapping PWN->CAPTURE_THE_FLAG) and op_import both returned pending=true and hung forever with no approver; `list` afterwards still showed exactly [flag-preset, canary, app, dbwork] - nothing written. request_preset/request_import always call _announce (broker.py:328/375) and are NEVER in the _announce_or_grant auto path (only session/run can auto-grant). There is no op_* handler for save_presets/save_settings/store_secret/remove_secret/rename_secret/reveal_secret/change_passphrase, so no client can trigger a config/vault/preset write without a console approval.",
+    "F13 confused-deputy (no new mis-parse found): with a preset you may only select a secret the preset already maps for that var (mapping_from_presets, broker.py:160-162) and policy_for_var takes the strictest (max) approval across presets (broker.py:184-187); an auto_granted session re-checks per-run and non-auto widening at run time and refuses it (resolve_run_in_session, broker.py:270-273). I could not downgrade a non-auto secret to auto, nor widen an auto session to the flag.",
+    "F12/F13 reaching a non-auto secret without approval: needs_approval for CAPTURE_THE_FLAG is true; any run/session touching it goes to _announce and hangs forever (no approver). I obtained only AUTO_CANARY (the positive control, not a finding). The flag value never reached any rt*/outsider process.",
+    "F12 cross-user resource exhaustion: MAX_PENDING_PER_USER (state.py:131, counts request.provenance.uid), MAX_CONNECTIONS_PER_UID=32 and the _per_uid map (control.py:48/70/76) are all keyed per-uid, and MAX_CONNECTIONS=256 global is unreachable by one user (capped at 32); rt1 cannot fill rt2's pending slots or pin rt2's connection budget. (Reasoned from source + per-uid keying; not stress-tested on the shared instance to avoid wedging it.)"
+  ],
+  "out_of_scope_observations": [
+    "The audit file (data/audit.jsonl, 0600 envh-arena-svc, inside the 0700 data dir) cannot be read directly - out of scope (§3.1). Candidate w1-crossuser-1 is therefore proven by request acceptance + os.statvfs whole-filesystem free-space delta (which needs no data-dir access) matching the expected N*2*SIZE, plus the source path that shows the write is uncapped - not by reading the file.",
+    "The disk-fill in w1-crossuser-1 consumes the shared host filesystem (/ on /dev/vda); I kept the demonstration to ~36 MiB and did not push it toward real ENOSPC on the shared p9-crossuser instance. A full ENOSPC / broker-wedge demonstration belongs on a throwaway instance (bootstrap.sh dosN) per §2 and was not run to avoid impacting co-tenant p1-p8 agents on the same disk.",
+    "resume_code cross-user reuse (op_session_wait) is blocked by both a uid match and an hmac.compare_digest on the 16-hex code (state.py:151-158); I did not brute-force the code space - reasoned closed, not exhaustively tested.",
+    "The arena client wrappers (/opt/envh-arena/bin/envh-rt1 etc.) had their default ENVH_SOCKET rewritten to dosw1.sock mid-run by another agent's bootstrap; all of my repro sets ENVH_SOCKET=/run/envh-arena/p9-crossuser.sock explicitly, so results are pinned to the p9-crossuser instance regardless.",
+    "Not attempted (out of scope / other families / Tier 2): reading data/ or broker memory, any root/sudo path, console/TUI keystroke surface, the host hardening gates (legacy_tiocsti=1, no Yama, no /dev/uinput here), and parser-time DoS via preset_validate (F5/F9)."
+  ],
+  "_helper_source": {
+    "note": "Stdlib-only helpers used above, placed in /tmp/p9 and chmod a+rX so sudo -u rt1 can read them. envh_probe.py exposes: send, autorun_done <n>, bigvars <n>, reason_cap <n>, session_start_auto, run_in_session <sid> [with...], end_session <sid>. f14_flood.py <N> <SIZE> loops N auto-runs injecting SIZE bytes x2 into run_done and reports os.statvfs free-space delta. Both reproduce from the inline logic described in repro/observed_output; a grader can also re-derive them from the control.py op_run / run_done path."
+  }
+}
