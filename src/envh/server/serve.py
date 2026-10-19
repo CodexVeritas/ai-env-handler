@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from envh.platform import socket_path as default_socket_path
+from envh.platform import listed_user_warnings, socket_path as default_socket_path
 from envh.core.audit import AUDIT_FILE, Audit
 from envh.core.broker import Broker
 from envh.core.config import ConfigError, load_config
@@ -20,7 +20,7 @@ from envh.server.console.app import ConsoleApp
 from envh.server.console.summaries import plural
 from envh.server.console.tui import Terminal
 from envh.server.control import ControlServer
-from envh.server.hardening import HardeningError, acquire_instance_lock, assert_no_tiocsti, assert_terminal_is_ours, harden_process
+from envh.server.hardening import HardeningError, acquire_instance_lock, assert_no_tiocsti, assert_not_in_shared_terminal, assert_terminal_is_ours, harden_process
 from envh.server.init_cmd import PHRASE_FILE, default_data_dir
 from envh.core.state import StateTable
 from envh.core.vault import VAULT_FILE, Vault, VaultError
@@ -115,6 +115,8 @@ async def run_broker(data_dir: Path, socket_path: Path) -> None:
     loop.add_signal_handler(signal.SIGWINCH, app.wake.set)
     audit.event("broker_start", pid=os.getpid(), socket=str(socket_path))
     activity.note("ok", f"Console ready · {plural(len(vault.names()), 'key')} · {plural(len(broker.config.presets), 'preset')}")
+    for warning in listed_user_warnings(config.users):
+        audit.event("unsafe_user", detail=warning)
 
     async def sweeper() -> None:
         while True:
@@ -150,6 +152,7 @@ def main(argv: list[str]) -> int:
     try:
         assert_no_tiocsti()
         assert_terminal_is_ours()
+        assert_not_in_shared_terminal()
         harden_process()
         lock_descriptor = acquire_instance_lock(data_dir)
     except HardeningError as error:

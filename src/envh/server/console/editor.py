@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,17 +20,32 @@ if TYPE_CHECKING:
     from envh.server.console.app import ConsoleApp
 
 
+def root_controlled_program(name: str) -> str | None:
+    """The program's full path, if it and every folder above it belong to root and only root can write them. The
+    editor runs as the envh user, next to the vault and the policy."""
+    found = shutil.which(name)
+    if found is None:
+        return None
+    path = Path(found).resolve()
+    for part in (path, *path.parents):
+        status = part.stat()
+        if status.st_uid != 0 or status.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return None
+    return str(path)
+
+
 def pick_editor() -> str | None:
     for candidate in (os.environ.get("VISUAL"), os.environ.get("EDITOR"), "nano", "vi"):
-        if candidate and shutil.which(candidate):
-            return candidate
+        program = root_controlled_program(candidate) if candidate else None
+        if program:
+            return program
     return None
 
 
 def start_edit(app: ConsoleApp, which: str) -> None:
     editor = pick_editor()
     if editor is None:
-        app.tell("No text editor found. Install nano, or set $EDITOR for the envh user.", "warn")
+        app.tell("No text editor owned by root found. Install nano, or set $EDITOR for the envh user.", "warn")
         return
     path = app.broker.data_dir / (CONFIG_FILE if which == "config" else PRESETS_FILE)
     details = [styled("What you save is checked, and shown for a last look, before it is used.")]

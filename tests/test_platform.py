@@ -263,3 +263,33 @@ def test_the_console_refuses_while_a_terminal_it_was_started_from_is_not_its_own
     finally:
         os.close(leader)
         os.close(follower)
+
+
+def test_logins_allowed_to_ask_are_warned_about_root_and_key_reading_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    groups = {"alice": ["alice", "sudo"], "bob": ["bob", "docker", "input"]}
+    monkeypatch.setattr(platform, "group_names_of", lambda username: groups[username])
+    root_granting, key_reading = platform.listed_user_warnings(["alice", "bob"])
+    assert root_granting.startswith("bob is in docker, which can become root") and "sudo gpasswd -d bob <group>" in root_granting
+    assert key_reading.startswith("bob is in input")
+
+
+def test_the_console_refuses_to_run_under_a_terminal_sharer_started_by_a_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    owners = {300: 1000, 400: 0}
+    monkeypatch.setattr(hardening, "process_owner", lambda pid: owners[pid])
+    monkeypatch.setattr(hardening, "ancestors", lambda pid: [(100, "sudo"), (200, "bash"), (400, "tmux: server")])
+    hardening.assert_not_in_shared_terminal()
+    monkeypatch.setattr(hardening, "ancestors", lambda pid: [(100, "sudo"), (200, "bash"), (300, "tmux: server")])
+    with pytest.raises(HardeningError, match=r"running inside tmux: server \(pid 300\)"):
+        hardening.assert_not_in_shared_terminal()
+
+    def unreadable(pid: int) -> list[tuple[int, str]]:
+        raise PermissionError("/proc/200/comm")
+
+    monkeypatch.setattr(hardening, "ancestors", unreadable)
+    with pytest.raises(HardeningError, match="can't check the programs the console was started from"):
+        hardening.assert_not_in_shared_terminal()
+
+
+def test_ancestors_are_named_nearest_first() -> None:
+    names = [name for _, name in platform.ancestors(os.getpid())]
+    assert names and names[0] == Path(f"/proc/{os.getppid()}/comm").read_text().strip()

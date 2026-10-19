@@ -120,6 +120,20 @@ def ancestor_terminals(pid: int) -> list[Path]:
     return [terminal_path(device) for device in devices]
 
 
+def ancestors(pid: int) -> list[tuple[int, str]]:
+    """The pid and name of each of the process's ancestors, nearest first."""
+    found: list[tuple[int, str]] = []
+    ancestor, _ = parent_and_terminal(pid)
+    while ancestor > 1:
+        found.append((ancestor, Path(f"/proc/{ancestor}/comm").read_text().strip()))
+        ancestor, _ = parent_and_terminal(ancestor)
+    return found
+
+
+def process_owner(pid: int) -> int:
+    return Path(f"/proc/{pid}").stat().st_uid
+
+
 def legacy_tiocsti_enabled() -> bool | None:
     path = Path("/proc/sys/dev/tty/legacy_tiocsti")
     if not path.exists():
@@ -152,6 +166,21 @@ def root_granting_groups_of(username: str) -> list[str]:
 
 def key_reading_groups_of(username: str) -> list[str]:
     return [name for name in group_names_of(username) if name in KEY_READING_GROUPS]
+
+
+def listed_user_warnings(users: Iterable[str]) -> list[str]:
+    """Warnings about logins allowed to ask for keys that can become root or read what is typed. Groups change after
+    the install checked the account that installed, and other logins are never checked there."""
+    warnings: list[str] = []
+    for user in users:
+        groups = group_names_of(user)
+        root_granting = [name for name in groups if name in ROOT_GRANTING_GROUPS]
+        key_reading = [name for name in groups if name in KEY_READING_GROUPS]
+        if root_granting:
+            warnings.append(f"{user} is in {', '.join(root_granting)}, which can become root, so anything {user} runs can read every key: `sudo gpasswd -d {user} <group>`")
+        if key_reading:
+            warnings.append(f"{user} is in {', '.join(key_reading)}, so anything {user} runs can read every key typed, the vault passphrase included")
+    return warnings
 
 
 def writable_by(username: str, paths: Iterable[Path]) -> list[Path]:

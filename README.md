@@ -148,7 +148,7 @@ The console is one full-screen terminal app, modeled on Claude Code's. The home 
 | `/logs` | what happened, by day, newest at the bottom, including earlier runs of the console; ↑↓, PgUp/PgDn, Home and End scroll. It reads the last 2000 lines of `/var/lib/envh/audit.jsonl`, which keeps every event in full and is never trimmed; the top of the list says when the file has older events. |
 | `/passphrase` | change the vault passphrase; the vault is encrypted again with it |
 | `/lock` | end the unlocked hour now; the next change asks for the passphrase again |
-| `/edit-config`, `/edit-presets` | open the file in `$VISUAL`, `$EDITOR`, nano or vi; what you save is checked and shown before it is used |
+| `/edit-config`, `/edit-presets` | open the file in `$VISUAL`, `$EDITOR`, nano or vi, whichever is found first owned by root and changeable only by root, since it runs as `envh`; what you save is checked and shown before it is used |
 | `/reload` | read `config.yaml` and `presets.yaml` again, after root changed them |
 | `/quit` | stop the console (so does Ctrl-C twice); live sessions end |
 
@@ -373,7 +373,7 @@ The console is only as safe as the screen you read it on and the keyboard you ty
 
 - **An X11 session** (`echo $XDG_SESSION_TYPE` prints `x11`). Every program running as you can read any window, record every key you type, and type into any window. It can record the vault passphrase, and your sudo password, as you enter them, and then type the passphrase into the console itself. With your sudo password it has root, and root beats envh.
 - **Write access to `/dev/uinput`.** It lets a program create a virtual keyboard that types into whatever has focus: X11, Wayland and text consoles alike. Some udev rules give it to the logged-in user, for example Steam's `60-steam-input.rules`; `getfacl /dev/uinput` then shows a `user:<you>` line. To remove it, override the rule with a file of the same name in `/etc/udev/rules.d` without the uinput line, then reboot. Typing blind, it does not know the passphrase; the pause after each wrong attempt keeps it from guessing.
-- **Running the console inside tmux or screen started as you.** Anything running as you can send keys to it.
+- **Running the console inside tmux or screen started as you.** Anything running as you can send keys to it. The console refuses to start inside tmux, screen, zellij, dtach or abduco unless root started it.
 - **Membership in the `input` group.** It lets a program read every key you type on any screen, the vault passphrase and your sudo password included. The install warns about it and about a writable `/dev/uinput`.
 
 What does not fix it:
@@ -406,7 +406,7 @@ What does:
 - **It does not change your sudo settings.** sudo keeps remembering your password for several minutes in the terminal you typed it in, and anything running there can use it. Run the wizard and `sudo envh-console` in windows no agent can type into; the wizard runs `sudo -k` when it is done.
 - **The vault is only as strong as the passphrase**, which also approves requests. Copies of `vault.age` or `audit.jsonl` outside `/var/lib/envh` must be treated as secrets. The audit log holds command lines and reasons, never values.
 - **The import wizard leaves a plaintext backup until you delete it.** It copies each original file to `~/envh-backups-and-scans/import-backups/<date-time>/` (or a folder you choose) before rewriting it in place, and prints that path. Until you remove the folder, the old values are exactly as exposed as they were in the original files.
-- **Requirements it will refuse without:** Linux 6.2+ with `legacy_tiocsti=0`, Yama ptrace scope 1 or more, sudo and doas with a password, sudo remembering a password per terminal and with a `secure_path`, your user outside root-granting groups (its primary group included) and unable to use a root container daemon's socket, and the folders root runs envh from writable only by root. These are checked when you install, for the account that installs; a group, sudo rule or second user added later is not checked until you run the wizard again.
+- **Requirements it will refuse without:** Linux 6.2+ with `legacy_tiocsti=0`, Yama ptrace scope 1 or more, sudo and doas with a password, sudo remembering a password per terminal and with a `secure_path`, your user outside root-granting groups (its primary group included) and unable to use a root container daemon's socket, and the folders root runs envh from writable only by root. These are checked when you install, for the account that installs; a sudo or doas rule added later is not checked until you run the wizard again. Groups are checked again for every listed user each time the console starts, and for a user added in `/settings` before you save; the console warns about them but does not refuse.
 - **Not provided:** rotating or revoking keys at the provider, per-request network allow-lists, rate limits, remote use, macOS or Windows support, protection against root or physical access while the broker is running. Several local users can be listed in `users:` and each gets their own sessions, but they share one vault, one policy and one console.
 
 ## Roadmap
