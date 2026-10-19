@@ -150,6 +150,10 @@ def root_granting_groups_of(username: str) -> list[str]:
     return [name for name in group_names_of(username) if name in ROOT_GRANTING_GROUPS]
 
 
+def key_reading_groups_of(username: str) -> list[str]:
+    return [name for name in group_names_of(username) if name in KEY_READING_GROUPS]
+
+
 def writable_by(username: str, paths: Iterable[Path]) -> list[Path]:
     """The paths that exist and that the account can write. The kernel decides, as that account, so groups, ACLs and
     modes all count; root asks it through a child process that has switched to the account."""
@@ -168,7 +172,7 @@ def writable_by(username: str, paths: Iterable[Path]) -> list[Path]:
 
 
 def sudo_listing(username: str) -> str:
-    result = subprocess.run(["sudo", "-n", "-l", "-U", username], capture_output=True, text=True)
+    result = subprocess.run(["sudo", "-n", "-l", "-U", username], capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"})
     if result.returncode != 0:
         raise PlatformError(f"`sudo -n -l -U {username}` failed: {result.stderr.strip() or f'exit code {result.returncode}'}")
     return result.stdout
@@ -207,9 +211,15 @@ def sudo_default_problems(username: str, defaults: list[str]) -> list[str]:
     return problems
 
 
-def doas_nopass_rules(config_text: str, username: str, groups: list[str]) -> list[str]:
-    """The `permit nopass` rules of a doas.conf that match the account by name or by one of its groups."""
-    identities = {username, *(f":{group}" for group in groups)}
+def doas_identities(username: str) -> set[str]:
+    """How a doas.conf rule can name the account: by login or uid, or by one of its groups, as `:name` or `:gid`."""
+    account = pwd.getpwnam(username)
+    gids = os.getgrouplist(username, account.pw_gid)
+    return {username, str(account.pw_uid), *(f":{name}" for name in group_names_of(username)), *(f":{gid}" for gid in gids)}
+
+
+def doas_nopass_rules(config_text: str, identities: set[str]) -> list[str]:
+    """The `permit nopass` rules of a doas.conf whose identity is one of the given ones."""
     rules: list[str] = []
     for line in config_text.splitlines():
         rule = line.split("#", 1)[0].strip()
@@ -254,7 +264,7 @@ def doas_problems(username: str) -> list[str]:
         return []
     except OSError as error:
         return [f"could not check {DOAS_CONFIG} for rules that skip the password: {error}"]
-    rules = doas_nopass_rules(config_text, username, group_names_of(username))
+    rules = doas_nopass_rules(config_text, doas_identities(username))
     if not rules:
         return []
     listed = "".join(f"\n  {rule}" for rule in rules)
@@ -315,7 +325,7 @@ def preflight_warnings(invoking_user: str | None) -> list[str]:
         warnings.append("X11 session: programs you run can read and type into the console window (README: 'Who else can see and type into the console')")
     if not invoking_user:
         return warnings
-    key_reading = [name for name in group_names_of(invoking_user) if name in KEY_READING_GROUPS]
+    key_reading = key_reading_groups_of(invoking_user)
     if key_reading:
         warnings.append(
             f"{invoking_user} is in group(s) {', '.join(key_reading)}: programs you run can read every key you type, the vault passphrase included (README: 'Who else can see and type into the console')"

@@ -64,6 +64,20 @@ def test_a_primary_group_counts_as_a_root_granting_group(monkeypatch: pytest.Mon
     assert platform.root_granting_groups_of("alice") == ["docker"]
 
 
+def test_the_sudo_listing_is_asked_for_untranslated(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(command: list[str], **options: object) -> SimpleNamespace:
+        seen.update(options)
+        return SimpleNamespace(returncode=0, stdout=PASSWORD_ONLY_LISTING, stderr="")
+
+    monkeypatch.setenv("LANG", "de_DE.UTF-8")
+    monkeypatch.setattr(platform.subprocess, "run", fake_run)
+    assert platform.sudo_listing("alice") == PASSWORD_ONLY_LISTING
+    environment = seen["env"]
+    assert isinstance(environment, dict) and environment["LC_ALL"] == "C"
+
+
 def test_sudo_defaults_are_read_across_wrapped_lines_and_stop_at_the_rules() -> None:
     listing = PASSWORD_ONLY_LISTING.replace("use_pty", "use_pty,\n    timestamp_type = global")
     assert sudo_defaults(listing) == ["env_reset", "mail_badpass", "secure_path=/usr/local/sbin\\:/usr/local/bin\\:/usr/sbin\\:/usr/bin", "use_pty", "timestamp_type=global"]
@@ -79,7 +93,7 @@ def test_sudo_tickets_shared_across_terminals_and_a_missing_secure_path_are_prob
     assert "sudo has no secure_path" in problem and "sudo /usr/local/sbin/envh-console" in problem
 
 
-def test_doas_rules_that_skip_the_password_are_found_by_user_or_group() -> None:
+def test_doas_rules_that_skip_the_password_are_found_by_user_or_group_name_or_id() -> None:
     config_text = "\n".join(
         [
             "# permit nopass alice",
@@ -87,17 +101,27 @@ def test_doas_rules_that_skip_the_password_are_found_by_user_or_group() -> None:
             "permit nopass keepenv :wheel",
             "permit nopass setenv { PATH=/usr/bin } alice cmd /usr/bin/true",
             "permit nopass bob",
+            "permit nopass 1000",
+            "permit nopass :27",
             "deny alice",
         ]
     )
-    assert doas_nopass_rules(config_text, "alice", ["alice", "users"]) == ["permit nopass setenv { PATH=/usr/bin } alice cmd /usr/bin/true"]
-    assert doas_nopass_rules(config_text, "alice", ["wheel"]) == ["permit nopass keepenv :wheel", "permit nopass setenv { PATH=/usr/bin } alice cmd /usr/bin/true"]
+    assert doas_nopass_rules(config_text, {"alice", ":alice", ":users"}) == ["permit nopass setenv { PATH=/usr/bin } alice cmd /usr/bin/true"]
+    assert doas_nopass_rules(config_text, {"alice", ":wheel"}) == ["permit nopass keepenv :wheel", "permit nopass setenv { PATH=/usr/bin } alice cmd /usr/bin/true"]
+    assert doas_nopass_rules(config_text, {"1000", ":27"}) == ["permit nopass 1000", "permit nopass :27"]
+
+
+def test_doas_identities_name_the_account_and_its_groups_by_name_and_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(platform.pwd, "getpwnam", lambda username: SimpleNamespace(pw_uid=1000, pw_gid=1000))
+    monkeypatch.setattr(platform.os, "getgrouplist", lambda username, primary_gid: [1000, 27])
+    monkeypatch.setattr(platform, "group_names_of", lambda username: ["alice", "sudo"])
+    assert platform.doas_identities("alice") == {"alice", "1000", ":alice", ":sudo", ":1000", ":27"}
 
 
 def test_doas_nopass_rules_are_problems(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config = tmp_path / "doas.conf"
     monkeypatch.setattr(platform, "DOAS_CONFIG", config)
-    monkeypatch.setattr(platform, "group_names_of", lambda username: ["alice"])
+    monkeypatch.setattr(platform, "doas_identities", lambda username: {"alice", ":alice"})
     assert platform.doas_problems("alice") == []
     config.write_text("permit nopass alice\n")
     [problem] = platform.doas_problems("alice")
