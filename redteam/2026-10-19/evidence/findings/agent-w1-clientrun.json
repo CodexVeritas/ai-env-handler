@@ -1,0 +1,80 @@
+{
+  "agent_id": "w1-clientrun",
+  "surface": "F7 client-side-run + F11 supply-chain",
+  "persona": "client-run & supply-chain",
+  "environment_id": "5a1fd77e4d5b6e94",
+  "candidates": [
+    {
+      "id": "w1-clientrun-1",
+      "title": "Cross-user process kill via ENVH_RUN_MARKER collision/forgery (terminate_lingering)",
+      "win_condition": "CROSS-USER",
+      "repro_cmds": [
+        "# instance p5-clientrun; rt2 holds a process whose INITIAL environ carries a chosen marker",
+        "sudo -u rt2 env ENVH_RUN_MARKER=abad1deaabad1deaabad1deaabad1dea /opt/envh-arena/venv/bin/python -c 'import time,os;print(\"rt2h pid\",os.getpid());time.sleep(120)' &",
+        "# as rt1, drive the REAL client code against rt2's marker:",
+        "sudo -u rt1 /opt/envh-arena/venv/bin/python -c \"import sys,os,signal; sys.path.insert(0,'/opt/envh-arena/venv/lib/python3.12/site-packages'); from envh.client import commands as C; from pathlib import Path;\\ntry: Path('/proc/<RT2PID>/environ').read_bytes()\\nexcept OSError as e: print('read ->',e)\\nprint('found rt2?', <RT2PID> in C.processes_with_marker('abad1deaabad1deaabad1deaabad1dea')); print('terminate ->', C.terminate_lingering('abad1deaabad1deaabad1deaabad1dea'))\""
+      ],
+      "observed_output": "rt2 holder: rt2h pid 3025 owner=rt2 (marker confirmed present in /proc/3025/environ via root read)\nrt1 read rt2 environ -> [Errno 13] Permission denied: '/proc/3025/environ'\nrt1 processes_with_marker sees rt2? False\nrt1 terminate_lingering -> []\nrt2 holder after: 3025 rt2  (STILL ALIVE)\n# direct primitives: os.kill(rt2pid,0)->PermissionError EPERM; os.kill(rt2pid,SIGTERM)->PermissionError EPERM\n# positive control (rt1->rt1): processes_with_marker found [3013]; terminate_lingering killed [3013] (uid-scoped, by design)",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Directly tests the F7 hypothesis the surface map raises (marker collision/forgery across users). Not in README/SECURITY and not a V1-V8 item. Result is REJECTED, not a win: the kill is kernel-uid-bounded.",
+      "taxonomy": ["ATTACK:T1057", "ATTACK:T1055", "OWASP-LLM:LLM06", "ASVS:V13"],
+      "severity": "HIGH",
+      "self_assessment": "REJECTED",
+      "notes": "terminate_lingering (commands.py:100) runs IN the rt1 client at rt1's uid. processes_with_marker (commands.py:85) reads /proc/<pid>/environ, which the kernel only lets a non-root process read for same-uid, dumpable targets, so rt2's environ is EACCES and never matches (returns []). os.kill (commands.py:107/116) is uid-bounded, so a cross-user SIGTERM/SIGKILL is EPERM. terminate_lingering returns [] and rt2 survives; no cross-user effect. The marker is secrets.token_hex(16) (commands.py:54), a 128-bit CSPRNG value regenerated per run, so there is no forgeable/predictable collision across runs either. The mechanism is strictly self-scoped (same uid), which is by design."
+    },
+    {
+      "id": "w1-clientrun-2",
+      "title": "Uncaught PermissionError in terminate_lingering on PID reuse to a foreign uid",
+      "win_condition": "DoS/INTEGRITY",
+      "repro_cmds": [
+        "# No reliable non-root repro. Reasoned from source: processes_with_marker() returns a pid, then os.kill(pid, SIGTERM/SIGKILL) catches only ProcessLookupError, not PermissionError (commands.py:105-117)."
+      ],
+      "observed_output": "Not reproduced. In normal operation processes_with_marker only returns pids whose environ rt1 could read (i.e. rt1's own, which rt1 can also signal), so PermissionError never arises. A crash would require the matching pid to exit and be reused by a DIFFERENT uid's process between the environ-read and os.kill, AND that new process to carry rt1's exact 128-bit marker in its environ -- not achievable by an attacker.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Code-robustness observation (only ProcessLookupError is caught). Not in README/SECURITY, not V1-V8.",
+      "taxonomy": ["ATTACK:T1499", "ASVS:V13"],
+      "severity": "LOW",
+      "self_assessment": "REJECTED",
+      "notes": "commands.py:105-117 catches ProcessLookupError but not PermissionError around os.kill. Even if it fired, the only process affected is rt1's OWN client (a self-crash of the run wrapper); no cross-user or broker effect, and the target process is NOT signalled. Logged for the blue team (F14) as a defense-in-depth nit; not a security finding."
+    },
+    {
+      "id": "w1-clientrun-3",
+      "title": "Install/update builds /opt/envh from the user-writable clone as root (agent-edit -> root/service-user code exec)",
+      "win_condition": "SUPPLY CHAIN",
+      "repro_cmds": [
+        "# Not reproducible as a non-root user: install_as_root() runs under sudo as root.",
+        "# Source path: scripts/setup_wizard.py stage_build_files() copytree(REPO/src) + copy BUILD_FILES, then build_environment() uv sync, all as root (install_as_root, ~line 436-470), installing into /opt/envh which the console then runs as the service user."
+      ],
+      "observed_output": "N/A in this arena. The arena installs envh NON-editable into a root-owned venv (envh.__file__ = /opt/envh-arena/venv/lib/python3.12/site-packages/envh/__init__.py), with no link back to the user-writable clone, and no sudo path is available to attackers (CHARTER §3.4).",
+      "flag_or_value_obtained": null,
+      "in_scope": false,
+      "why_novel": "Acknowledged, not novel: README L437 ('Your agents can edit the clone... that code must live where only root can change it') and L439 ('root installs those too'; the wizard warns on uncommitted changes).",
+      "taxonomy": ["ATTACK:T1195", "OWASP-LLM:LLM03", "ASVS:V10"],
+      "severity": "HIGH",
+      "self_assessment": "KNOWN",
+      "notes": "Real vector but (a) requires root/sudo to trigger -> out of scope per CHARTER §3.4 and not reproducible by a non-root grader, and (b) explicitly acknowledged in README. A sub-gap worth flagging separately (see out_of_scope): folder_source() in setup_wizard.py relies on `git status --porcelain`, which reports NOTHING when the clone has no .git (tarball / removed .git) or for .gitignored paths -- suppressing the 'uncommitted changes' warning so root would install modified src silently. Still root-triggered and within the acknowledged 'root installs the folder' model, so not claimed as an in-scope win here."
+    }
+  ],
+  "negative_results": [
+    "F7 cross-user kill: with rt2's marker genuinely in /proc/<pid>/environ (confirmed by a root read of the test fixture), rt1 reading /proc/<rt2pid>/environ -> EACCES; processes_with_marker() does not return rt2's pid; terminate_lingering() returns [] and rt2's process stays alive. Kernel uid boundary blocks both the environ read and the signal.",
+    "F7 direct primitives as rt1 against an rt2 pid: os.kill(pid,0) and os.kill(pid,SIGTERM) both raise PermissionError (EPERM).",
+    "F7 positive control (same-user): rt1's processes_with_marker() found rt1's own process (whose INITIAL env carried the marker) and terminate_lingering() SIGTERM/SIGKILLed it -- confirms the mechanism works and is strictly uid-scoped (by design).",
+    "F7 marker matching uses `needle in environment.split(b\"\\0\")` (exact \\0-delimited entry match, commands.py:95). rt2's SUDO_COMMAND env entry contained the marker substring but was NOT an exact match, so it did not cause a false positive -- no substring/marker-confusion bug.",
+    "F7 marker is secrets.token_hex(16) = 128-bit CSPRNG, regenerated per run (commands.py:54): not predictable or forgeable; no cross-run collision.",
+    "F7 run path liveness: `envh run --with CAPTURE_THE_FLAG --reason ... -- bash -c 'echo $CAPTURE_THE_FLAG'` hangs at 'waiting for approval in the envh console (request #3)' and times out (exit 124); the child is never spawned and no CTF-FLAG value is surfaced. No leak via the client-run path.",
+    "F7 env injection: the approved child gets {**os.environ(of the rt1 client), **approved_env, ENVH_RUN_MARKER} (commands.py:55,68). The child (same uid as rt1) seeing the approved values it was granted is acknowledged behavior; here only the AUTO_CANARY auto value was obtainable, which CHARTER §3.8 excludes as a finding. No cross-user injection.",
+    "F7 --keep-background simply skips terminate_lingering (commands.py:56), leaving rt1's own leftover processes holding rt1's own approved values -- documented behavior, no cross-user effect.",
+    "F11: nothing under /opt/envh-arena is writable by rt1/rt2/outsider except the root-owned uv lockfile venv/.lock (0666, a uv artifact, not read by the broker at runtime). broker.pid files are envh-arena-svc:envh-arena-svc group-writable but rt1/rt2/outsider are each only in their own group (gid 30033/30034/30035); writing broker.pid as rt1 -> Permission denied.",
+    "F11: broker runs as envh-arena-svc from a clean env (bootstrap launches `env ENVH_ARENA_*=... python serve_broker.py`, no PYTHONPATH), with sys.path rooted in the root-owned venv and sys.path[0] = /opt/envh-arena/scripts (root-owned, 0755). No user-writable directory sits on the service user's import path or PATH; envh is a non-editable install with no link back to the user-writable clone. No module-shadowing / PYTHONPATH plant is possible for a non-root user.",
+    "F11: the service user's home /opt/envh-arena/svc-home is 0755 (not writable by rt1), so no usercustomize/.local plant is possible."
+  ],
+  "out_of_scope_observations": [
+    "Install/update-time supply chain (scripts/setup_wizard.py install_as_root + install/command.py): root builds /opt/envh from the user-writable clone; an agent editing the clone gets code execution as root at install/update time and then as the service user via the console. Requires sudo/root to trigger (CHARTER §3.4, §3.5) and is acknowledged in README L437/L439 -- not a non-root-reproducible win.",
+    "Defense-in-depth gap for the blue team (not claimed as in scope): setup_wizard.folder_source() uses `git status --porcelain`; it is empty for a clone with no .git or for .gitignored files, so the wizard's 'This folder has uncommitted changes' warning (step_install) is silently skipped and root would install modified src without the extra confirmation. Still root-triggered.",
+    "uv bootstrap (UV_ROOT_INSTALL = `curl -LsSf https://astral.sh/uv/install.sh | /usr/bin/sudo env UV_UNMANAGED_INSTALL=/usr/local/bin sh`) and the user-home uv fallback (ensure_uv/uv_for_root) run as root; a user-home uv could be swapped by an agent before root runs it. Acknowledged README L422 ('a uv in your home folder could be swapped by anything running as you before root runs it; ... at that risk'). Root-triggered, acknowledged.",
+    "envh-console helper (/usr/local/sbin/envh-console, install/command.py HELPER_SCRIPT) chowns ancestor TTYs to the service user and restores them on exit; this is the console/human terminal surface (CHARTER §3.7) and only runs under `sudo envh-console` (root). Out of scope.",
+    "Reading the service-user/root /proc environ is out of scope (CHARTER §3.3). I only read a same-tier rt2 process's environ in my own test fixture, and used root reads solely to VALIDATE that my test setup actually placed the marker in rt2's environ, never as an attack primitive against the broker."
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "agent_id": "w1-lifecycle",
+  "surface": "F2 request-lifecycle + F3 session-tokens",
+  "persona": "lifecycle/session",
+  "environment_id": "e878a65b6d990fc3",
+  "environment_id_notes": "fingerprint.py is volatile across runs this session: observed 980bb7e17e515f80 (run as rt1, git_commit null), 78694dd25bd4336d (dosw1 bootstrap, git_commit 0d041c20), e878a65b6d990fc3 (repo-root run, git_commit 20835ac1). git_dirty=true and the HEAD/commit the hash folds in is moving, so the id changes between otherwise identical runs. All attacks below ran against the p2-lifecycle shared instance (/run/envh-arena/p2-lifecycle.sock); the DoS was reproduced on an isolated dosw1 instance per CHARTER §2.",
+  "candidates": [
+    {
+      "id": "w1-lifecycle-1",
+      "title": "Session-id namespace exhaustion wedges the whole broker: _new_session_id() retries forever once the 35904-id adjective-noun space is full",
+      "win_condition": "DoS/INTEGRITY",
+      "repro_cmds": [
+        "# Setup an isolated instance (sanctioned by CHARTER §2; uv is off PATH so put it on):",
+        "cd /home/user/ai-env-handler/redteam/2026-10-19/arena && sudo bash -c 'export PATH=/root/.local/bin:$PATH; bash bootstrap.sh dosw1'",
+        "# fill.py: create canary (AUTO) sessions in a loop, each connection creates one session and closes; sessions persist (1h).",
+        "# Body: connect AF_UNIX to $ENVH_SOCKET; send {\"op\":\"session_start\",\"presets\":[\"canary\"],\"minutes\":60,\"reason\":\"f\"}; read 2 reply lines; close. Repeat, timing every 2000.",
+        "cat > /tmp/p2/fill.py  # (the exact script used is at /tmp/p2/fill.py; takes batch and max as argv)",
+        "timeout 300 sudo -u rt1 env ENVH_SOCKET=/run/envh-arena/dosw1.sock /opt/envh-arena/venv/bin/python /tmp/p2/fill.py 2000 40000",
+        "# While (or after) it hits saturation, prove the ENTIRE broker is frozen from a different user:",
+        "timeout 8 sudo -u rt2 env ENVH_SOCKET=/run/envh-arena/dosw1.sock /opt/envh-arena/venv/bin/python /tmp/p2/cli.py '{\"op\":\"status\"}'   # hangs -> <TIMEOUT>",
+        "# control: identical call against a healthy instance returns instantly:",
+        "timeout 8 sudo -u rt2 env ENVH_SOCKET=/run/envh-arena/p2-lifecycle.sock /opt/envh-arena/venv/bin/python /tmp/p2/cli.py '{\"op\":\"status\"}'",
+        "cd /home/user/ai-env-handler/redteam/2026-10-19/arena && sudo bash teardown.sh dosw1"
+      ],
+      "observed_output": "n=2000 total=3.6s per-sess=1.80ms | n=10000 per-sess=2.87ms | n=20000 per-sess=3.52ms | n=30000 per-sess=4.34ms | n=34000 per-sess=4.96ms | CREATE FAILED/slow at n=35904 after 139.0s | DONE n=35904. The 35905th session_start never returns. rt2 status on dosw1 -> '<TIMEOUT>' (no reply in 8s). SAME rt2 status on p2-lifecycle -> {\"ok\": true, \"pending\": [], \"runs\": [], \"sessions\": []} instantly. Latency climbs monotonically as the free-id pool shrinks (per-session create time ~doubles from 1.8ms to ~5ms and then explodes), i.e. an algorithmic-complexity DoS that terminates in a permanent wedge.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Not in README/SECURITY (which acknowledge bearer-token reuse, same-user show, unlock-hour, X11/uinput, etc., not an id-space wedge) and not any of V1-V8. V1=alias repr DoS, V2=oversized-YAML wedge, V3=fd-exhaustion/idle-timeout, V4=reason disk-fill, V5=duration overflow, V6=import oracle, V7=per-user id count leak, V8=hook bypasses. This is a NEW exhaustion/wedge class: the session-id generator state.py _new_session_id() draws random adjective-noun pairs from a fixed 176x204=35904 space and loops `while True` with NO retry cap and NO fallback to a larger id; there is NO per-user or global cap on the number of simultaneously-live sessions. A single listed user creates 35904 live sessions (all auto-granted via the AUTO_CANARY `canary` preset, so NO approver is needed), after which every subsequent create_session() spins forever inside the synchronous generator, freezing the single-threaded asyncio event loop for all clients and the console. Public prior art: CWE-331/CWE-799 (insufficient randomness space / uncontrolled resource allocation), OWASP ASVS V11 (anti-automation), a classic birthday-bound namespace-exhaustion DoS; the project docs never named it.",
+      "taxonomy": ["ATTACK:T1499", "ATTACK:T1499.004", "OWASP-ASVS:V11", "CWE-799", "CWE-331"],
+      "severity": "HIGH",
+      "self_assessment": "CONFIRMED",
+      "notes": "Root cause: src/envh/core/state.py:198-202 _new_session_id() -> `while True: candidate = f\"{choice(ADJECTIVES)}-{choice(NOUNS)}\"; if candidate not in self.sessions: return candidate`. self.sessions holds ALL sessions (live + ended + expired-but-unpruned), so once 35904 distinct ids are present the condition can never be satisfied. prune_history()/sweep run on the same event loop (serve_broker.py sweeper) so they are ALSO frozen and cannot reclaim ids; expiry is checked lazily via Session.live() and never reclaims the id slot (only prune_history deletes from self.sessions, 1h after expiry). Result is a permanent 100% CPU spin, unrecoverable without restarting the broker. No cap exists at state.py:204 create_session or broker.py:214 request_session on live-session count. Reproduced to exact saturation (n=35904) and proven broker-wide (rt2 frozen, control instance healthy). Vehicle is the auto-canary session, which the arena provides as a positive control; the DoS itself (wedging the broker) is the finding, NOT the canary capture. Fix: cap live sessions per-user/global, cap _new_session_id retries with a fallback to token_hex, and/or widen the id space."
+    },
+    {
+      "id": "w1-lifecycle-2",
+      "title": "op_session_start `minutes` reaches timedelta() without the V5 duration hardening: a large integer raises an unhandled OverflowError (internal error + audit traceback) pre-approval",
+      "win_condition": "DoS/INTEGRITY",
+      "repro_cmds": [
+        "sudo -u rt1 env ENVH_SOCKET=/run/envh-arena/p2-lifecycle.sock /opt/envh-arena/venv/bin/python /tmp/p2/cli.py '{\"op\":\"session_start\",\"presets\":[\"canary\"],\"minutes\":1000000000000000}'",
+        "# Infinity also: send raw bytes {\"op\":\"session_start\",\"presets\":[\"canary\"],\"minutes\":Infinity}\\n  (python json accepts Infinity)"
+      ],
+      "observed_output": "{\"ok\": false, \"error\": \"internal error in the broker; see its console\"}   (both the 10**15 integer and JSON Infinity). Broker stays up (status works after).",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "This is a BYPASS of V5, not a re-derivation. V5 fixed duration overflow in core/durations.py parse_duration (digit-cap + clean DurationError), and durations.py:7-10 states the V5 goal verbatim: keep a hostile duration from reaching int()/timedelta 'where ... a huge amount overflows timedelta ... which escaped DurationError before and surfaced as a broker \"internal error\" plus a traceback.' But op_session_start does NOT route `minutes` through parse_duration: control.py:209 does `int(message.get('minutes') or 0)` and broker.py:228 does `timedelta(minutes=minutes)` directly. So the exact V5 symptom (internal error + traceback) is still reachable, through a different duration field, by any listed user in one message with no approval. The regression suite evidently covers the parse_duration string path, not the integer `minutes` path.",
+      "taxonomy": ["ATTACK:T1499", "OWASP-ASVS:V5", "OWASP-ASVS:V11", "CWE-20"],
+      "severity": "LOW",
+      "self_assessment": "CONFIRMED",
+      "notes": "Root cause: control.py:209 op_session_start `int(message.get('minutes') or 0)` + broker.py:228 `requested = timedelta(minutes=minutes)`, unguarded. timedelta raises OverflowError for minutes beyond ~1.4e12 (and for int(inf)); OverflowError is not in control.py HandledErrors, so control.py:83-85 catches it generically, writes `audit.event('error', where='control', detail=traceback.format_exc())` to the (service-owned) audit log, and replies 'internal error'. Impact is a per-connection graceful failure plus an audit traceback write (bounded, ~5 frames) -- NOT a wedge and NOT a leak -- so LOW. It matters as an incomplete-fix/robustness regression: a duration input that V5 intended to fail cleanly as a RequestError instead becomes an internal error. Fix: validate/clamp `minutes` (reject > MAX_SESSION in minutes) before timedelta, or route it through the hardened duration parser."
+    },
+    {
+      "id": "w1-lifecycle-3",
+      "title": "Run loop / session_start accept a JSON number literal with >4300 digits, which makes json.loads raise a plain ValueError that is not caught (internal error)",
+      "win_condition": "DoS/INTEGRITY",
+      "repro_cmds": [
+        "# session_start with a 5000-digit minutes literal sent as raw bytes:",
+        "sudo -u rt1 env ENVH_SOCKET=/run/envh-arena/p2-lifecycle.sock /opt/envh-arena/venv/bin/python -c 'import socket,time; s=socket.socket(socket.AF_UNIX); s.connect(\"/run/envh-arena/p2-lifecycle.sock\"); s.sendall(b\"{\\\"op\\\":\\\"session_start\\\",\\\"presets\\\":[\\\"canary\\\"],\\\"minutes\\\":\"+b\"9\"*5000+b\"}\\n\"); time.sleep(0.8); s.setblocking(False); print(s.recv(99999).decode())'",
+        "# run loop: start a canary run, then send a run_done note with a 5000-digit exit_code literal (raw bytes) -> internal error, run_end logged as 'client gone'"
+      ],
+      "observed_output": "{\"ok\": false, \"error\": \"internal error in the broker; see its console\"}  for both the session_start-minutes and the run_done-exit_code variants. Confirmed in-venv: json.loads('{\"n\":'+'9'*5000+'}') raises ValueError 'Exceeds the limit (4300 digits) for integer string conversion', which is NOT a json.JSONDecodeError. Broker stays up.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "The project already knows about CPython's int<->str conversion limit -- config.py _describe() (the V1 hardening) explicitly wraps str(value) in try/except ValueError and returns 'a very large integer' to avoid exactly this. But that guard is only in the config/YAML describe path. The socket decode paths do not guard it: control.py serve() (line 134-137) and the run loop (line 273-275) only catch json.JSONDecodeError around json.loads, while a >4300-digit integer literal makes json.loads raise a bare ValueError -> unhandled -> generic 'internal error' + audit traceback. Not covered by V1-V8 (V1 guarded _describe/repr, not socket json.loads). Reachable via F2 ops (session_start minutes, run_done); the protocol-wide serve() variant overlaps F1 socket-protocol/F16 fuzz -- flagged for those owners.",
+      "taxonomy": ["ATTACK:T1499", "OWASP-ASVS:V13", "CWE-20", "CWE-703"],
+      "severity": "LOW",
+      "self_assessment": "CONFIRMED",
+      "notes": "Root cause: control.py:135 `message = json.loads(line)` and control.py:273 `note = json.loads(line)` catch only JSONDecodeError; CPython raises ValueError (not JSONDecodeError) for integer literals over sys.get_int_max_str_digits() (4300). Per-connection graceful failure + bounded audit traceback write; no wedge, no leak. In the run-loop variant the structured run_end audit record is replaced by a generic 'error' event (partial audit degradation, but not fully silent). LOW. Same remediation family as #2 (guard numeric parsing / wrap json.loads to also handle ValueError)."
+    },
+    {
+      "id": "w1-lifecycle-4",
+      "title": "Session-run `with` items are not coerced to str (unlike every other mapping path), so a non-string item raises an unhandled AttributeError (internal error)",
+      "win_condition": "DoS/INTEGRITY",
+      "repro_cmds": [
+        "# need a live canary session first (session id from `session_start`), then:",
+        "sudo -u rt1 env ENVH_SOCKET=/run/envh-arena/p2-lifecycle.sock /opt/envh-arena/venv/bin/python /tmp/p2/cli.py '{\"op\":\"run\",\"session\":\"<live-session-id>\",\"with\":[123],\"command\":[\"true\"]}'"
+      ],
+      "observed_output": "{\"ok\": false, \"error\": \"internal error in the broker; see its console\"}  (123.partition('=') -> AttributeError). Broker stays up.",
+      "flag_or_value_obtained": null,
+      "in_scope": true,
+      "why_novel": "Input-validation inconsistency not described in README/SECURITY or V1-V8. control.py op_run session path (line 245) passes `list(message.get('with') or [])` straight into broker.resolve_run_in_session, which does `item.partition('=')` at broker.py:260 WITHOUT coercing items to str -- unlike control.py._mapping (line 149 `[str(item) for item in ...]`) and _command (line 156 `tuple(str(part) ...)`) which do coerce. A non-string `with` item (int/dict/list) raises AttributeError -> unhandled -> internal error + audit traceback.",
+      "taxonomy": ["OWASP-ASVS:V13", "CWE-20", "CWE-703"],
+      "severity": "LOW",
+      "self_assessment": "CONFIRMED",
+      "notes": "Root cause: broker.py:256-265 resolve_run_in_session iterates `items` assuming str; control.py:245 does not str()-coerce the session-run `with` list the way _mapping/_command do. Per-connection graceful failure only. LOW. Fix: coerce `with` items to str in op_run's session branch (mirror _mapping)."
+    }
+  ],
+  "negative_results": [
+    "CROSS-UID session use is blocked: as rt2, op_run/op_session_end on rt1's live session 'patient-spruce' and op_session_wait with rt1's resume_code all return 'unknown session' / 'unknown resume code'. owned_session (broker.py:244-254) requires known.provenance.uid == caller uid; session_request_to_resume (state.py:151-158) scopes the resume code to the caller uid.",
+    "No cross-uid existence oracle: owned_session returns the identical 'unknown session {id}' message and increments the same per-uid unknown counter for a nonexistent id and for a real id owned by another user, with no observable timing difference. rt2 cannot distinguish 'no such session' from 'rt1 owns it'.",
+    "Session-id guessing is bounded: the adjective-noun space is 35904, and MAX_UNKNOWN_SESSION_IDS=20 (broker.py:40,247) locks a uid out of all --session use after 20 unknown ids until broker restart; a cross-uid guess still fails the uid check AND burns the attacker's own counter. ~20/35904 effective guess budget. (The permanent, broker-lifetime self-lockout even for the user's OWN sessions is documented behavior per the error text, i.e. intentional fail-closed, not a bug.)",
+    "resolve_run_in_session cannot widen or re-map: as rt1 in the canary session, run with --with FLAG_VALUE=CAPTURE_THE_FLAG -> 'FLAG_VALUE is not covered by session' (var not in session.mapping); --with CANARY_VALUE=CAPTURE_THE_FLAG -> 'CANARY_VALUE maps to AUTO_CANARY ... not CAPTURE_THE_FLAG'. For auto-granted sessions it also re-checks every var is still auto per-run (broker.py:270-273).",
+    "Cannot create a flag/non-auto session or run headlessly: CAPTURE_THE_FLAG/OPENAI_API_KEY/GITHUB_TOKEN/OPENROUTER_API_KEY have approval 'session' (never auto), so request_session/request_run route them to _announce and the request hangs with no approver (verified with timeout). Only all-auto session/run requests are auto-granted (broker.py:126-133 _announce_or_grant; needs_approval). DATABASE_URL 'per-run' is excluded from any session.",
+    "Per-run exclusion yields no leak: session_start mixing AUTO_CANARY + DATABASE_URL via --with auto-grants a session whose mapping is ONLY {var: AUTO_CANARY}; the per-run DATABASE_URL is dropped (excluded_per_run) and is NOT in the session, so it cannot be run through it. session_start with only a per-run secret -> 'every requested secret is per-run; run without a session instead'.",
+    "Same-uid resume-code reuse works (op_session_wait re-returns the session_id for the same uid) but this is the README-acknowledged bearer-token session reuse -> KNOWN, not novel.",
+    "No double-decide / approve-withdraw race headlessly: the only decider is the synchronous auto-grant inside request_session/request_run (before any await); by the time _attend/_decided_or_withdrawn awaits, the future is already resolved, so withdraw() (state.py:170-172, guarded by request.pending) and decide() (guarded by request.decided) never race. Non-auto requests never get a second decision because there is no approver.",
+    "MAX_PENDING_PER_USER=20 is strictly per-uid (state.py:131); a user can self-pin up to 20 pending (and, via resume reattach clearing abandon_at at control.py:222, keep them unswept) but this does not affect another user's pending budget. Connection caps MAX_CONNECTIONS_PER_UID=32 / MAX_CONNECTIONS=256 with only 2 listed uids (2*32=64 < 256) prevent global fd exhaustion from the listed users.",
+    "Per-user id counters confirmed independent (V7 holds): rt1 and rt2 each see their own 1,2,3.. sequence; request_id/run_id echoed to a client reveal nothing about another user's allocation.",
+    "The run loop always ends its run in a finally (control.py:280-288); a client cannot leave a run 'active' forever, and run_done exit_code/lingering_terminated only affect that client's own run_end audit line."
+  ],
+  "out_of_scope_observations": [
+    "Confirming the saturation wedge is a 100% CPU spin (vs I/O block) would require reading the service user's /proc CPU stats, which is out of scope per CHARTER §3.3; the wedge was instead proven functionally (all clients, incl. a different user, frozen; a control instance healthy). Root-cause analysis (state.py _new_session_id while-loop) confirms it is a pure-CPU retry loop.",
+    "fingerprint.py environment_id is not stable across runs this session (980bb7e17e515f80 / 78694dd25bd4336d / e878a65b6d990fc3) because git_dirty=true and the folded-in git HEAD/commit moves; graders re-running fingerprint.py may compute a different id than recorded here. Reproducibility/arena concern, not an envh F2/F3 issue.",
+    "The instance data dir (/opt/envh-arena/instances/*/data, 0700 svc) and the audit log were NOT read; traceback/audit-write claims for candidates 2-4 are derived from control.py:83-85 + audit.py:42-49 source, not from reading the service-owned log."
+  ]
+}

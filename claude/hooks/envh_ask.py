@@ -44,8 +44,15 @@ WRAPPERS = {
     "time": {"-f", "--format", "-o", "--output"},
     "timeout": {"-s", "--signal", "-k", "--kill-after"},
     "xargs": {"-a", "--arg-file", "-d", "--delimiter", "-E", "-I", "-L", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars"},
+    # Scheduling/exec wrappers that run their trailing argument as a command. The list is curated and
+    # cannot be exhaustive (wrappers with a positional argument before the command, e.g. chrt PRIO or
+    # setarch ARCH, are not peeled); the hook is attention only, and a disguised command still prompts
+    # on the envh console, so a missed wrapper is not a boundary bypass.
+    "ionice": {"-c", "--class", "-n", "--classdata", "-p", "--pid"},
+    "taskset": {"-c", "--cpu-list", "-p", "--pid"},
+    "nocache": set(),
 }
-RUNNERS = {"uv", "poetry"}
+RUNNERS = {"uv", "poetry", "pipenv", "pdm", "rye"}
 # Options of the runners that take a VALUE, so their value is not mistaken for the command name
 # (e.g. `uv run --with rich envh ...` must not read `rich` as the command). Best-effort for the
 # common value-taking flags; unknown flags are still treated as valueless, as before.
@@ -90,6 +97,38 @@ OPERATORS = ("<<<", "<<-", "&>>", ";;&", "&&", "||", ";;", ";&", "|&", ">>", ">|
 SEPARATORS = {";", "&", "&&", "||", "|", "|&", ";;", ";&", ";;&", "(", ")", "\n"}
 METACHARACTERS = set(" \t\n;&|<>()")
 REDIRECT_FD = re.compile(r"\d+|\{\w+\}")
+ANSI_C_SIMPLE = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+
+
+def ansi_c_escape(text: str, pos: int) -> tuple[str, int]:
+    """Decode one bash $'...' escape at text[pos] (a backslash). Returns (decoded text, chars consumed).
+
+    bash decodes $'\\x65' to 'e', so the hook must decode too: otherwise $'\\x65nvh' reads as the command
+    name 'x65nvh' and an envh request hides from the hook's attention."""
+    if pos + 1 >= len(text):
+        return "\\", 1
+    marker = text[pos + 1]
+    simple = ANSI_C_SIMPLE.get(marker)
+    if simple is not None:
+        return simple, 2
+    if marker == "x":
+        digits = re.match(r"[0-9A-Fa-f]{1,2}", text[pos + 2 : pos + 4])
+        return (chr(int(digits.group(), 16)), 2 + len(digits.group())) if digits else ("x", 2)
+    if marker in "01234567":
+        digits = re.match(r"[0-7]{1,3}", text[pos + 1 : pos + 4]).group()
+        return chr(int(digits, 8) & 0xFF), 1 + len(digits)
+    if marker in "uU":
+        width = 4 if marker == "u" else 8
+        digits = re.match(r"[0-9A-Fa-f]{1,%d}" % width, text[pos + 2 : pos + 2 + width])
+        if digits is None:
+            return marker, 2
+        try:
+            return chr(int(digits.group(), 16)), 2 + len(digits.group())
+        except (ValueError, OverflowError):
+            return "", 2 + len(digits.group())
+    if marker == "c" and pos + 2 < len(text):
+        return chr(ord(text[pos + 2].upper()) ^ 0x40), 3
+    return marker, 2  # unknown escape: keep the character (attention only, so erring toward the plain text is fine)
 
 
 def run_in_session(arguments: list[str]) -> tuple[bool, bool]:
@@ -341,9 +380,12 @@ class Lexer:
         value = ""
         while self.pos < len(self.text) and self.peek() != "'":
             if self.peek() == "\\":
+                decoded, consumed = ansi_c_escape(self.text, self.pos)
+                value += decoded
+                self.pos += consumed
+            else:
+                value += self.peek()
                 self.pos += 1
-            value += self.peek()
-            self.pos += 1
         self.unclosed = self.unclosed or self.pos >= len(self.text)
         self.pos += 1
         return value

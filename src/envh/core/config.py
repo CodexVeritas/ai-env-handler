@@ -29,6 +29,28 @@ DEFAULT_MAX_SESSION = timedelta(hours=1)
 
 PRESETS_TEMPLATE = "presets: {}\n"
 
+# Presets are small. A client-supplied preset document that defines thousands of variable mappings
+# (directly, or by aliasing one shared env node into many presets) makes validation re-walk the same
+# entries per preset, O(presets x vars), which blocks the single-threaded broker. These bound the
+# total validation work before it runs; the 64 KiB byte cap in the broker bounds the non-aliased case.
+MAX_PRESETS = 1000
+MAX_TOTAL_ENV_ENTRIES = 10_000
+
+
+class _HardenedLoader(yaml.SafeLoader):
+    """A SafeLoader that refuses YAML merge keys ('<<').
+
+    PyYAML expands a merge key in the constructor (flatten_mapping) BEFORE any of envh's validation
+    runs, and a few hundred bytes of nested merges expand to width**depth entries, wedging the event
+    loop or OOM-killing the broker. envh presets and config never need merge keys, so a document that
+    uses one is rejected up front, before the expansion."""
+
+    def flatten_mapping(self, node: Any) -> Any:
+        for key_node, _ in getattr(node, "value", []):
+            if getattr(key_node, "tag", None) == "tag:yaml.org,2002:merge":
+                raise yaml.constructor.ConstructorError(None, None, "YAML merge keys ('<<') are not allowed", key_node.start_mark)
+        return super().flatten_mapping(node)
+
 
 class ConfigError(ValueError):
     pass
@@ -139,9 +161,11 @@ class Config:
 
 def _load_yaml(text: str, where: str) -> Any:
     try:
-        return yaml.safe_load(text)
+        return yaml.load(text, Loader=_HardenedLoader)
     except yaml.YAMLError as error:
         raise ConfigError(f"{where}: not valid YAML: {' '.join(str(error).split())}") from error
+    except RecursionError as error:
+        raise ConfigError(f"{where}: too deeply nested to parse") from error
 
 
 def _expect_mapping(value: Any, where: str) -> dict[str, Any]:
@@ -308,6 +332,17 @@ def parse_presets(text: str, known_secrets: set[str] | None) -> tuple[dict[str, 
     document = _expect_mapping(_load_yaml(text, PRESETS_FILE), PRESETS_FILE)
     _reject_unknown(document, ("presets",), PRESETS_FILE)
     raw_presets = _expect_mapping(document.get("presets"), f"{PRESETS_FILE}: presets")
+    if len(raw_presets) > MAX_PRESETS:
+        raise ConfigError(f"{PRESETS_FILE}: too many presets ({len(raw_presets)}); at most {MAX_PRESETS}")
+    # Count the total variable mappings cheaply (len() is O(1) even for a shared/aliased env node) and
+    # refuse before the per-preset regex validation, so an aliased document cannot amplify that work.
+    total_entries = 0
+    for raw in raw_presets.values():
+        env = raw.get("env") if isinstance(raw, dict) else None
+        if isinstance(env, dict):
+            total_entries += len(env)
+            if total_entries > MAX_TOTAL_ENV_ENTRIES:
+                raise ConfigError(f"{PRESETS_FILE}: too many variable mappings across presets (over {MAX_TOTAL_ENV_ENTRIES}); presets are small, so this is refused before validating them")
     presets: dict[str, Preset] = {}
     for name, raw in raw_presets.items():
         presets[name] = parse_preset(name, raw, known_secrets)

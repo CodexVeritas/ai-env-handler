@@ -1,0 +1,66 @@
+# Tier 3 — red-team verification matrix.
+#
+# Two legs, because a container shares the runner's kernel (good for distro userspace + the uid
+# boundary) but cannot set the console-hardening sysctls (those need a VM with its own kernel).
+#
+#   container-leg : arena bootstrap + selfcheck across distro userspaces (fast; uid/protocol/fixes)
+#   vm-leg        : the hardening GATE tests inside a KVM VM across sysctl states
+#
+# Manual / scheduled, not on every push (it provisions VMs).
+name: redteam-matrix
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"   # weekly
+
+# Read-only token; neither leg needs write access, and the container leg copies the checkout into a
+# --privileged image, so the checkout token must not be persisted in .git/config.
+permissions:
+  contents: read
+
+jobs:
+  container-leg:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: ["ubuntu:24.04", "debian:12", "fedora:41", "archlinux:latest"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Arena bootstrap + selfcheck on ${{ matrix.distro }}
+        run: |
+          docker build -f redteam/2026-10-19/tiers/container/Dockerfile \
+            --build-arg DISTRO=${{ matrix.distro }} -t envh-arena-${{ strategy.job-index }} .
+          docker run --rm --privileged envh-arena-${{ strategy.job-index }}
+      - name: Record environment fingerprint
+        if: always()
+        run: echo "distro=${{ matrix.distro }} kernel(shared)=$(uname -r)"
+
+  vm-leg:
+    # The hardening GATE tests need a guest kernel we control, so they require a KVM-capable runner.
+    # Skipped by default (shown as "skipped", NOT a passing gate) so a green run never implies the
+    # gate tests ran. Enable only on a KVM/libvirt or nested-virt runner by setting the repo variable
+    # ENABLE_VM_GATE_TESTS=true; the step then actually provisions the VM and runs gate_tests.sh.
+    if: ${{ vars.ENABLE_VM_GATE_TESTS == 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        box: ["generic/ubuntu2404", "generic/debian12", "generic/fedora40"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Hardening gate tests in a VM (${{ matrix.box }})
+        run: |
+          set -euo pipefail
+          command -v vagrant >/dev/null || { echo "::error::vagrant/KVM not available on this runner; cannot run the VM gate tests"; exit 1; }
+          cd redteam/2026-10-19/tiers/vm
+          ARENA_VM_BOX="${{ matrix.box }}" vagrant up
+          vagrant ssh -c 'sudo bash /vagrant/redteam/2026-10-19/tiers/vm/provision.sh && sudo bash /vagrant/redteam/2026-10-19/tiers/vm/gate_tests.sh'
+          vagrant destroy -f
+        env:
+          ARENA_VM_BOX: ${{ matrix.box }}

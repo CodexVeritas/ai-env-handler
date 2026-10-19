@@ -1,12 +1,11 @@
 {
-  "_comment": "Merge into ~/.cursor/hooks.json (or a project's .cursor/hooks.json). The hook is claude/hooks/envh_ask.py; it reads both tools' formats. The matcher only skips commands the hook never acts on.",
+  "_comment": "Merge into ~/.cursor/hooks.json (or a project's .cursor/hooks.json). The hook is claude/hooks/envh_ask.py; it reads both tools' formats and decides for itself, printing nothing for commands it has no opinion on. Do NOT add a command-text 'matcher': a substring match for 'envh' skips commands where bash reconstructs the name (e\"\"nvh, $'\\x65nvh'), so the hook must run on every beforeShellExecution, as the Claude Code side runs on every Bash command.",
   "version": 1,
   "hooks": {
     "beforeShellExecution": [
       {
         "command": "python3 /ABSOLUTE/PATH/TO/envh_ask.py",
-        "timeout": 10,
-        "matcher": "envh"
+        "timeout": 10
       }
     ]
   }

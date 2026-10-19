@@ -77,6 +77,21 @@ def test_cursor_hook_entry_matches_the_documented_snippet() -> None:
     assert wizard.with_cursor_hook({}, CURSOR_HOOK_COMMAND) == snippet
 
 
+def test_cursor_rerun_migrates_a_stale_matcher_entry(tmp_path: Path) -> None:
+    other = {"command": "bash ~/.cursor/hooks/other.sh"}
+    stale = {"version": 1, "hooks": {"beforeShellExecution": [other, {"command": CURSOR_HOOK_COMMAND, "timeout": 10, "matcher": "envh"}]}}
+    config_path = tmp_path / "hooks.json"
+    config_path.write_text(json.dumps(stale) + "\n")
+    new_text = wizard.cursor_config_text(config_path, CURSOR_HOOK_COMMAND)
+    assert new_text is not None, "a stale command-text matcher entry must be migrated, not treated as already-installed"
+    migrated = json.loads(new_text)
+    envh_entries = [e for e in migrated["hooks"]["beforeShellExecution"] if wizard.HOOK_FILE_NAME in str(e.get("command", ""))]
+    assert len(envh_entries) == 1 and "matcher" not in envh_entries[0]
+    assert other in migrated["hooks"]["beforeShellExecution"]  # unrelated entries are preserved
+    config_path.write_text(new_text)  # idempotent: a rerun on the migrated config changes nothing
+    assert wizard.cursor_config_text(config_path, CURSOR_HOOK_COMMAND) is None
+
+
 def test_cursor_hook_is_appended_and_the_rest_of_hooks_json_is_kept() -> None:
     existing_hook = {"command": "./hooks/audit.sh"}
     config = {"version": 1, "hooks": {"beforeShellExecution": [existing_hook], "stop": [{"command": "./hooks/done.sh"}]}}
