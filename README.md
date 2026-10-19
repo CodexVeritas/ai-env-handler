@@ -373,7 +373,7 @@ The console is only as safe as the screen you read it on and the keyboard you ty
 
 - **An X11 session** (`echo $XDG_SESSION_TYPE` prints `x11`). Every program running as you can read any window, record every key you type, and type into any window. It can record the vault passphrase, and your sudo password, as you enter them, and then type the passphrase into the console itself. With your sudo password it has root, and root beats envh.
 - **Write access to `/dev/uinput`.** It lets a program create a virtual keyboard that types into whatever has focus: X11, Wayland and text consoles alike. Some udev rules give it to the logged-in user, for example Steam's `60-steam-input.rules`; `getfacl /dev/uinput` then shows a `user:<you>` line. To remove it, override the rule with a file of the same name in `/etc/udev/rules.d` without the uinput line, then reboot. Typing blind, it does not know the passphrase; the pause after each wrong attempt keeps it from guessing.
-- **Running the console inside tmux or screen started as you.** Anything running as you can send keys to it. The console refuses to start inside tmux, screen, zellij, dtach or abduco unless root started it.
+- **Running the console inside tmux or screen started as you.** Anything running as you can send keys to it. The console warns on its home screen when it runs inside tmux, screen, zellij, dtach or abduco that root did not start.
 - **Membership in the `input` group.** It lets a program read every key you type on any screen, the vault passphrase and your sudo password included. The install warns about it and about a writable `/dev/uinput`.
 
 What does not fix it:
