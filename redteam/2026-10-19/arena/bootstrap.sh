@@ -59,9 +59,13 @@ if [[ ! -x "$VENV/bin/python" ]]; then
 fi
 
 # --- copy the arena scripts next to the venv, world-readable --------------------------------
-mkdir -p "$SCRIPTS" "$BIN" "$RUN_DIR"
+# NB: only the SHARED, secret-free dirs (venv/scripts/bin) are made world-readable. We must NOT
+# recurse a+rX over $ARENA_ROOT, because that would expose instance data/ (the vaults), and with
+# several instances a concurrent bootstrap could world-read another instance's vault.
+mkdir -p "$SCRIPTS" "$BIN" "$RUN_DIR" "$ARENA_ROOT/instances"
 cp "$(dirname "${BASH_SOURCE[0]}")"/*.py "$SCRIPTS/"
-chmod -R a+rX "$ARENA_ROOT" 2>/dev/null || true
+chmod 755 "$ARENA_ROOT" "$ARENA_ROOT/instances" 2>/dev/null || true
+chmod -R a+rX "$VENV" "$SCRIPTS" "$BIN" 2>/dev/null || true
 chown "$SVC_USER":"$SVC_USER" "$RUN_DIR"; chmod 755 "$RUN_DIR"
 
 # --- wrapper CLIs: `envh-rt1 <args>` runs the real client as that user against this socket ---
