@@ -18,7 +18,7 @@ import sys
 import termios
 import time
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -27,11 +27,13 @@ from pathlib import Path
 
 from envh.client.transport import ClientError, Connection, waiting_notice
 from envh.common import peek, printable
+from envh.tools.replacer import IN_USE_SECONDS, LEFT_FOR_HAND, LOG_FILE, in_git_repo, replace_all, replaced_pairs
 from envh.tools.saved_files import SCANS, saved_files_root, shown_path
 from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, place_of, plural, read_if_text, scan_text, shown_folder
 
 TIERS = ("high", "medium", "low", "fake", "all")
 TIER_LABELS = {"high": "Likely", "medium": "Possible", "low": "Unlikely", "fake": "Placeholder", "all": "All"}
+TIER_PHRASES = {"high": "likely keys", "medium": "possible keys", "low": "unlikely keys", "fake": "placeholders", "all": "every list"}
 GROUPINGS = ("type", "place")
 VAULT_FILTERS = ("all keys", "in your vault", "not in your vault")
 VAULT_FILE = "vault.json"
@@ -98,6 +100,14 @@ class ContextLine:
 
 
 @dataclass
+class Confirm:
+    """A replacement waiting for y: what it covers and the summary shown for it."""
+
+    targets: dict[str, set[str]]
+    lines: list[tuple[str, str]]
+
+
+@dataclass
 class FileView:
     path: str
     value: Found
@@ -106,6 +116,10 @@ class FileView:
     problem: str = ""
     top: int = 0
     revealed_until: float | None = None
+
+
+def copies_label(count: int) -> str:
+    return f"{count:,} {'copy' if count == 1 else 'copies'}"
 
 
 def styled(code: str, text: str) -> str:
@@ -193,9 +207,14 @@ def load_scan(folder: Path) -> list[Found]:
     hits = data["hits"]
     if hits and "confidence" not in hits[0]:
         raise ClientError(f"{shown_path(folder)} was saved by an older envh scan; run envh scan again", 2)
+    try:
+        gone = replaced_pairs(folder)
+    except (OSError, ValueError) as error:
+        raise ClientError(str(error), 2) from error
     return [
         Found(hit["path"], hit["line"], hit["confidence"], hit["kind"], hit["name"], hit["shown"], hit["fingerprint"], hit["length"], place_of(hit["path"]))
         for hit in hits
+        if (hit["path"], hit["fingerprint"]) not in gone
     ]
 
 
@@ -235,7 +254,7 @@ def build_index(hits: list[Found], tier: str, needle: str, grouping: str = "type
         stored = " ".join(vault.get(hit.fingerprint, ())).lower()
         if needle and not any(needle in field_text for field_text in (hit.kind.lower(), hit.name.lower(), hit.path.lower(), hit.place, stored)):
             continue
-        tree[(hit.kind if grouping == "type" else hit.place, hit.confidence)][hit.fingerprint][hit.path].append(hit.line)
+        tree[(hit.kind if grouping == "type" else hit.place, hit.confidence if tier != "all" else "all")][hit.fingerprint][hit.path].append(hit.line)
         first.setdefault(hit.fingerprint, hit)
         if hit.name:
             names[hit.fingerprint].add(hit.name)
@@ -253,14 +272,14 @@ def lines_label(lines: list[int]) -> str:
     return ("line " if len(numbers) == 1 else "lines ") + shown + more
 
 
-def tree_rows(index: Index, expanded: set[tuple[str, ...]], show_tier: bool) -> list[Row]:
+def tree_rows(index: Index, expanded: set[tuple[str, ...]]) -> list[Row]:
     """The visible rows: every type, and below each expanded node its children. A key in more than GROUP_ABOVE files
     groups them by folder."""
     rows: list[Row] = []
     for (kind, confidence), values in sorted(index.tree.items(), key=lambda item: (-file_count(item[1]), item[0])):
         type_node = ("top", kind, confidence)
         detail = f"{plural(len(values), 'key')} in {plural(file_count(values), 'file')}"
-        rows.append(Row(type_node, None, 0, kind, (f"{TIER_NAMES[confidence]} · " if show_tier else "") + detail, True))
+        rows.append(Row(type_node, None, 0, kind, detail, True))
         if type_node not in expanded:
             continue
         for fingerprint, paths in sorted(values.items(), key=lambda item: (-len(item[1]), item[0])):
@@ -371,6 +390,8 @@ class Explorer:
         self.selected = 0
         self.top = 0
         self.file_view: FileView | None = None
+        self.confirm: Confirm | None = None
+        self.work: Callable[[], None] | None = None
         self.message = ""
         self.done = False
         self._index_key: tuple[str, str, str, str] | None = None
@@ -383,12 +404,14 @@ class Explorer:
         return self._index
 
     def rows(self) -> list[Row]:
-        return tree_rows(self.index(), self.expanded, self.tier == "all")
+        return tree_rows(self.index(), self.expanded)
 
     def handle(self, key: str, height: int) -> None:
         self.message = ""
         if key == "quit":
             self.done = True
+        elif self.confirm is not None:
+            self.handle_confirm(key)
         elif self.file_view is not None:
             self.handle_file_view(key, height)
         elif self.editing_filter:
@@ -421,6 +444,8 @@ class Explorer:
         elif key == "g":
             self.grouping = GROUPINGS[(GROUPINGS.index(self.grouping) + 1) % len(GROUPINGS)]
             self.selected, self.expanded = 0, set()
+        elif key == "x" and row is not None:
+            self.confirm = self.confirm_for(row)
         elif key == "v" and self.vault is None:
             self.message = "Not checked against your vault. Reopen envh explore with the console running and answer y."
         elif key == "v":
@@ -446,6 +471,97 @@ class Explorer:
         elif key == "left" and row.parent is not None:
             self.selected = next(index for index, candidate in enumerate(rows) if candidate.node == row.parent)
 
+    def targets_under(self, row: Row) -> dict[str, set[str]]:
+        """Every file and key under the row, within the current tier and filters."""
+        kind, label, confidence = row.node[:3]
+        values = self.index().tree[(label, confidence)]
+        targets: dict[str, set[str]] = defaultdict(set)
+        for fingerprint, paths in values.items():
+            if kind != "top" and fingerprint != row.node[3]:
+                continue
+            for path in paths:
+                if kind == "folder" and shown_folder(Path(path).parent) != row.node[4]:
+                    continue
+                if kind == "file" and path != row.node[4]:
+                    continue
+                targets[path].add(fingerprint)
+        return dict(targets)
+
+    def confirm_for(self, row: Row) -> Confirm:
+        targets = self.targets_under(row)
+        index = self.index()
+        values = index.tree[(row.node[1], row.node[2])]
+        copies = sum(len(values[fingerprint][path]) for path, fingerprints in targets.items() for fingerprint in fingerprints)
+        keys = {fingerprint for fingerprints in targets.values() for fingerprint in fingerprints}
+        places = Counter(place_of(path) for path in targets)
+        scope = row.label if row.node[0] != "file" else shown_path(Path(row.node[4]))
+        lines: list[tuple[str, str]] = [
+            (" Replace every copy of these keys with a placeholder?", "1"),
+            (f"   {scope}, {TIER_PHRASES[self.tier]}: {copies_label(copies)} of {plural(len(keys), 'key')} in {plural(len(targets), 'file')}", ""),
+        ]
+        if len(places) > 1:
+            lines.append(("   " + " · ".join(f"{place} {count:,}" for place, count in places.most_common()), "2"))
+        staying = self.other_lists_under(row)
+        if staying:
+            listed = ", ".join(f"{count:,} {TIER_NAMES[tier]}" for tier, count in staying)
+            lines.append((f" ! Only {TIER_PHRASES[self.tier]} are replaced. {copies_label(sum(count for _, count in staying))} in other lists stay here:", "33"))
+            lines.append((f"   {listed}.", "33"))
+            lines.append(("   To replace every list, press Esc, then Tab to All.", "33"))
+        lines += [
+            ("", ""),
+            (" Each copy becomes envh-removed-<type>-<id>, so you can see where a key was.", ""),
+            (" Files change in place, with no backup: a backup would be one more copy.", ""),
+        ]
+        in_git = sum(in_git_repo(Path(path)) for path in targets)
+        if in_git:
+            where = "is in a git repo" if in_git == 1 else "are in git repos"
+            lines.append((f" ! {plural(in_git, 'file')} {where}: a committed key stays in history, so rotate it.", "33"))
+        if self.vault is None:
+            lines.append((" · Not checked against your vault: a key replaced here may be your only copy.", "2"))
+        else:
+            outside = sum(1 for fingerprint in keys if fingerprint not in self.vault)
+            if outside:
+                lines.append((f" ! {plural(outside, 'key')} {'isn' if outside == 1 else 'aren'}'t in your vault; once replaced it's gone. Import any you need.", "33"))
+        if self.tier in ("low", "all") and any(place_of(path) in ("code and config", ".env files") for path in targets):
+            lines.append((" ! Unlikely keys are mostly not keys at all; replacing them can break code.", "33"))
+        sign_ins = places.get("credential files", 0)
+        if sign_ins:
+            lines.append((f" · {plural(sign_ins, 'credential file')} left alone: apps sign in with them. Rotate those keys.", "2"))
+        for kind, why in LEFT_FOR_HAND.items():
+            left = sum(1 for fingerprint in keys if index.first[fingerprint].kind == kind)
+            if left:
+                lines.append((f" · {plural(left, kind)} left alone: {why}; remove {'it' if left == 1 else 'them'} by hand.", "2"))
+        lines.append((f" · Files changed in the last {IN_USE_SECONDS // 60} minutes are skipped: a program may be writing.", "2"))
+        lines.extend([("", ""), (" Type y to replace them. Any other key cancels.", "1;33")])
+        return Confirm(targets, lines)
+
+    def other_lists_under(self, row: Row) -> list[tuple[str, int]]:
+        """Copies under the row's type or place that are in other lists than the one shown, which x leaves alone."""
+        if self.tier == "all" or row.node[0] != "top":
+            return []
+        label = row.node[1]
+        counts = Counter(hit.confidence for hit in self.hits if hit.confidence != self.tier and (hit.kind if self.grouping == "type" else hit.place) == label)
+        return [(tier, counts[tier]) for tier in TIERS if counts.get(tier)]
+
+    def handle_confirm(self, key: str) -> None:
+        confirm = self.confirm
+        assert confirm is not None
+        self.confirm = None
+        if key != "y":
+            self.message = "Nothing replaced."
+            return
+        self.message = f"Replacing keys in {plural(len(confirm.targets), 'file')}…"
+        self.work = lambda: self.replace(confirm.targets)
+
+    def replace(self, targets: dict[str, set[str]]) -> None:
+        outcome = replace_all(targets, self.folder)
+        self.hits = [hit for hit in self.hits if not (hit.path in outcome.replaced and hit.fingerprint in targets[hit.path])]
+        self.tier_counts = {tier: len({hit.fingerprint for hit in self.hits if tier == "all" or hit.confidence == tier}) for tier in TIERS}
+        self._index = None
+        reasons = Counter(outcome.skipped.values())
+        skipped = "; ".join(f"{count} skipped: {reason}" for reason, count in reasons.most_common())
+        self.message = f"✓ Replaced {copies_label(outcome.copies)} in {plural(len(outcome.replaced), 'file')}." + (f" {skipped}." if skipped else "") + f" Logged in {LOG_FILE}."
+
     def expand(self, node: tuple[str, ...]) -> None:
         """Expand the node, and its only child while it has just one, so a key in one file shows that file at once."""
         while True:
@@ -459,7 +575,7 @@ class Explorer:
         _, kind, confidence, fingerprint, path = row.node
         value = self.index().first[fingerprint]
         lines, problem = read_context(path, fingerprint)
-        type_label = value.kind if self.tier != "all" else f"{value.kind} ({TIER_NAMES[confidence]})"
+        type_label = value.kind if self.tier != "all" else f"{value.kind} ({TIER_NAMES[value.confidence]})"
         self.file_view = FileView(path, value, type_label, lines, problem)
         self.jump(1, self.file_view, from_top=True)
 
@@ -511,7 +627,17 @@ class Explorer:
 
     def render(self, width: int, height: int) -> list[str]:
         width = max(width - 1, 20)
+        if self.confirm is not None:
+            return self.render_confirm(width, height)
         return self.render_file_view(width, height) if self.file_view is not None else self.render_tree(width, height)
+
+    def render_confirm(self, width: int, height: int) -> list[str]:
+        assert self.confirm is not None
+        lines = self.header(width, [self.scan_label(), "replace"])
+        lines.extend(fit([(text, style)], width) for text, style in self.confirm.lines)
+        lines = (lines + [""] * height)[: height - 1]
+        lines.append(fit([(" y replace · any other key cancels", "2")], width))
+        return lines
 
     def header(self, width: int, crumbs: list[str]) -> list[str]:
         title = [(" envh explore", "1;36"), *[(f" › {crumb}", "1") for crumb in crumbs]]
@@ -560,7 +686,7 @@ class Explorer:
         if self.editing_filter:
             hint = "Type to filter by service, name, place or path · Enter keep · Esc clear"
         else:
-            hint = "↑↓ move · → open · ← close · Enter view · Tab next list · g group · v vault · / filter · q quit"
+            hint = "↑↓ →← move · Tab next list · g group · v vault · / filter · x replace · q quit"
         lines.append(fit([(f" {self.message}", "33")], width) if self.message else "")
         lines.append(fit([(f" {hint}", "2")], width))
         return lines
@@ -606,6 +732,10 @@ class Explorer:
                 size, shown = (width, height), []
                 terminal.write("\x1b[2J")
             shown = terminal.draw(self.render(width, height), shown, height)
+            if self.work is not None:
+                work, self.work = self.work, None
+                work()
+                continue
             text = terminal.read(REDRAW_SECONDS)
             for key in split_keys(text) if text else []:
                 self.handle(key, height)

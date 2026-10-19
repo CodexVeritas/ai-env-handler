@@ -119,7 +119,7 @@ WORD_CHARACTER = re.compile(r"[A-Za-z0-9_]")
 # after an escaped newline or tab, as in transcripts' JSON strings, but never right after a bare backslash.
 ASSIGNMENT_REGEX = re.compile(r"(?:(?<=\\[nrt])|(?<![A-Za-z0-9_\\]))(?P<name>[A-Za-z_][A-Za-z0-9_]{0,130})[\"']?\s*[=:]\s*[\"']?(?P<value>[A-Za-z0-9_\-./+=]{16,})")
 SECRET_WORD = re.compile(r"KEY|TOKEN|SECRET|PASS|CREDENTIAL|CLIENT_ID", re.IGNORECASE)
-PLACEHOLDER_WORDS = ("example", "your", "placeholder", "changeme", "xxxx", "redacted", "dummy", "insert", "replace", "envh-proxy", "sk-proj-abc", "<", ">", "$", "%")
+PLACEHOLDER_WORDS = ("example", "your", "placeholder", "changeme", "xxxx", "redacted", "dummy", "insert", "replace", "envh-proxy", "envh-removed", "sk-proj-abc", "<", ">", "$", "%")
 NAME_ONLY_PROVIDERS = ("Serp", "FRED", "AskNews", "Hyperbrowser", "Metaculus", "Exa", "Deepgram", "Parallel", "Radiant", "ACLED", "Mistral", "Cohere", "Telegram", "Mailchimp", "Azure", "AWS secret access keys")
 
 # A named assignment is medium confidence when its name ends like a credential (API_KEY, ACCESS_TOKEN, CLIENT_SECRET,

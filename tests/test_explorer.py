@@ -200,7 +200,7 @@ def test_the_real_view_on_a_terminal_shows_the_key_only_on_request(tmp_path: Pat
     try:
         wait_for("against your vault? [Y/n]")
         os.write(master, b"n\r")
-        wait_for("Enter view")
+        wait_for("x replace")
         for keys, then in ((b"\r", "1 key in 1 file"), (b"\x1b[B\x1b[C", "1 file"), (b"\x1b[B\r", "s show the key")):
             os.write(master, keys)
             wait_for(then)
@@ -212,7 +212,7 @@ def test_the_real_view_on_a_terminal_shows_the_key_only_on_request(tmp_path: Pat
         wait_for("The key is showing")
         assert any(OPENROUTER in row for row in last_screen(output.decode(errors="replace"), 24))
         os.write(master, b"\x1b")
-        wait_for("Enter view")
+        wait_for("x replace")
         os.write(master, b"q")
         assert process.wait(timeout=10) == 0
         while select.select([master], [], [], 0.2)[0]:
@@ -256,3 +256,64 @@ def test_v_without_a_vault_check_says_how_to_get_one(tmp_path: Path) -> None:
     explorer = Explorer(load_scan(folder), folder)
     press(explorer, "v")
     assert "Not checked against your vault" in screen(explorer)[-2] and "vault not checked" in screen(explorer)[2]
+
+
+def test_x_replaces_every_copy_under_a_row_after_y(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"a/.env": f"LOG_LEVEL=info\nOPENROUTER_API_KEY={OPENROUTER}\n", "b/notes.md": f"use {OPENROUTER} or {ANTHROPIC}\n"})
+    for file in (tmp_path / "project").rglob("*"):
+        os.utime(file, (time.time() - 3600, time.time() - 3600))
+    explorer = Explorer(load_scan(folder), folder)
+    choose(explorer, "top")
+    press(explorer, "x", "n")
+    assert explorer.message == "Nothing replaced." and OPENROUTER in (tmp_path / "project" / "a" / ".env").read_text()
+    press(explorer, "x")
+    rows = "\n".join(screen(explorer))
+    assert "anthropic, likely keys: 1 copy of 1 key in 1 file" in rows or "openrouter, likely keys: 2 copies of 1 key in 2 files" in rows
+    assert "Type y to replace them" in rows
+    label = explorer.rows()[explorer.selected].label
+    press(explorer, "y")
+    explorer.work()
+    assert explorer.message.startswith("✓ Replaced") and label not in [row.label for row in explorer.rows()]
+    assert (folder / "replaced.txt").exists() and OPENROUTER not in (folder / "replaced.txt").read_text()
+
+
+def test_the_replace_summary_warns_about_keys_outside_the_vault_and_low_values_in_code(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"a/.env": f"{OPENROUTER}\n{ANTHROPIC}\nGENERATION_KEY={FRED}\n"})
+    hits = load_scan(folder)
+    stored = next(hit.fingerprint for hit in hits if hit.kind == "openrouter")
+    explorer = Explorer(hits, folder, vault={stored: ["TEAM_OPENROUTER_KEY"]})
+    explorer.tier = "all"
+    explorer.expand(explorer.rows()[0].node)
+    choose(explorer, "file")
+    press(explorer, "x")
+    rows = "\n".join(screen(explorer))
+    assert "isn't in your vault; once replaced it's gone" in rows or "aren't in your vault" in rows
+    assert "Unlikely keys are mostly not keys at all" in rows
+    press(explorer, "n")
+    unchecked = Explorer(hits, folder)
+    choose(unchecked, "top")
+    press(unchecked, "x")
+    assert "Not checked against your vault" in "\n".join(screen(unchecked))
+
+
+def test_all_shows_each_place_once_and_x_there_replaces_every_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    history = {f"project/.config/Code/User/History/-{index}/snap": f"OPENROUTER_API_KEY={OPENROUTER}\nFRED_API_KEY={FRED}\n" for index in range(3)}
+    folder = saved_scan(tmp_path, history)
+    for file in (tmp_path / "project").rglob("*"):
+        os.utime(file, (time.time() - 3600, time.time() - 3600))
+    explorer = Explorer(load_scan(folder), folder)
+    press(explorer, "g")
+    choose(explorer, "top")
+    press(explorer, "x")
+    rows = "\n".join(screen(explorer, width=160))
+    assert "Only likely keys are replaced. 3 copies in other lists stay here:" in rows and "   3 possible." in rows and "Tab to All" in rows
+    press(explorer, "escape")
+    explorer.tier = "all"
+    assert [row.label for row in explorer.rows()] == ["editor history"]
+    choose(explorer, "top")
+    press(explorer, "x", "y")
+    explorer.work()
+    assert explorer.message.startswith("✓ Replaced 6 copies in 3 files")
+    assert all(OPENROUTER not in file.read_text() and FRED not in file.read_text() for file in (tmp_path / "project").rglob("snap"))
+    assert load_scan(folder) == [] and explorer.rows() == []
