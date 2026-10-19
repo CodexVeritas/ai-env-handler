@@ -1,22 +1,30 @@
 # envh
 
-Human-approved secrets for scripts and AI coding agents, on Linux.
+**Human-approved API keys for scripts and AI coding agents, on Linux.**
+
+Your API keys leave your `.env` files and move into an encrypted vault that neither you nor your agents can read directly. When a script or agent needs a key, it asks. You approve in a console window with your passphrase, and the key goes to that one command only. Every use is logged.
 
 https://github.com/user-attachments/assets/d9ada2fc-4999-4a00-a756-6ed6b49f5aa6
 
 A five-minute walkthrough of setup and daily use, recorded with fake keys. If it doesn't play, [download it](docs/demo.mp4).
 
-Your API keys stop living in `.env` files. They move into a vault owned by a separate Linux user, and every use of a key is approved by you on a console that runs as that separate user. You approve a **session** (a set of variables, for a number of minutes, with a reason); scripts and agents then run inside it. Everything is logged.
+> **Status:** early, and Linux only. Largely AI-written, then tested and red-teamed with AI; it has had no independent security review. It is defense in depth, not a guarantee: see [what it covers and what it doesn't](#what-it-covers-and-what-it-doesnt).
 
-## Status, and an honest disclaimer
+## Why
 
-This project was largely AI-written ("vibe-coded"), then tested locally and red-teamed with AI; the caveats that surfaced are documented below in [What envh does not do](#what-envh-does-not-do). It is **defense in depth, not a guarantee** — someone determined, with enough same-user access, can still get past it.
+A `.env` file can be read by everything that runs as you: every agent, every script, and every package those scripts import. One prompt injection or one bad dependency can take every key at once, and nothing tells you.
 
-It is still a real improvement over the usual alternative, a plaintext `.env` sitting in your project folder. Against that baseline, envh keeps keys out of files anything running as you can read at will; it **significantly** lowers the chance of prompt-injection exfiltration (a key is released only to a run or session you approved, unless you marked it `auto`, and every use is logged); it lowers the chance of a supply-chain dependency silently taking **every** key even more; and if something does slip through, it shrinks the blast radius to the few keys in one approved run or session rather than everything on disk.
+With envh:
 
-Think of it as a locked door on what was an open entryway: stronger protection exists (a hardware token, phone approval, running agents in a VM), but a locked door beats leaving your secrets out in the open.
+- **Keys aren't in your files anymore.** The vault belongs to a separate Linux user, so nothing running as you can read it.
+- **You approve every use**, in a console that agents can't type into, unless you mark a key `auto`.
+- **A leak is smaller.** A bad script gets only the keys of the one run you approved, not everything on disk.
+- **You can see what happened.** Every request, approval and run is logged.
+- **Leftover copies get cleaned up.** A scan finds keys left in shell history, agent transcripts, editor history and other repos, and replaces them in bulk.
 
-**1. You, or an agent, ask for a session** in an ordinary terminal:
+## How it works
+
+**1. You, or an agent, ask for keys** in an ordinary terminal:
 
 ```bash
 envh session start weekly-report --minutes 90 --reason "forecast digest: research step"
@@ -40,435 +48,126 @@ envh session start weekly-report --minutes 90 --reason "forecast digest: researc
 ╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
-**3. You type your vault passphrase on the console** (hidden) and press Enter; ↓ then Enter denies. Back in the terminal, the request returns:
+**3. You type your vault passphrase** and press Enter. The words in brackets are your console phrase: type the passphrase only where you see them. Back in the terminal:
 
 ```
 session brave-otter approved, expires 15:02:11
 ```
 
-**4. Scripts and agents run inside the session** without asking again until it expires. Each run is logged:
+**4. Scripts and agents run inside the session** without asking again until it expires:
 
 ```bash
 envh run --session brave-otter --reason "fetch" -- uv run python scripts/research.py
 ```
 
-**Only one command, or want to approve every request?** Skip the session. `envh run` without one asks the console for that single run:
+For a single command, skip the session: `envh run --preset weekly-report --reason "fetch" -- ...` asks for that one run.
 
-```bash
-envh run --preset weekly-report --reason "fetch" -- uv run python scripts/research.py
-```
+The keys go straight into that command's environment, never into your shell or a file, and are gone when it exits. [docs/security.md](docs/security.md) has the diagram and the details.
+
+## What it covers and what it doesn't
+
+**It covers:**
+
+- **Agents and scripts reading keys from disk.** The vault, the approval rules and the log belong to the `envh` user, and the kernel enforces that.
+- **Using a key without your OK.** Every request waits for your vault passphrase on the console, unless you marked the key `auto`.
+- **Faking an approval.** Nothing running as you can type into the console's terminal, and every prompt shows your console phrase, so a fake prompt stands out.
+- **A stolen or copied disk.** The vault is encrypted with your passphrase.
+- **Most leftover copies.** The scan finds keys left in text files across your home folder.
+
+**It doesn't cover:**
+
+- **What an approved command does with a key.** It gets the real value and can copy it anywhere. You approve a command line, not the code it runs, so review what you run.
+- **A program watching your screen and keyboard.** On an X11 desktop, or with a writable `/dev/uinput`, a program running as you can record your passphrase and approve on its own. See [Who else can see and type into the console](docs/security.md#who-else-can-see-and-type-into-the-console).
+- **Isolating agents.** They can still read your other files and use the network. That needs a container or VM.
+- **Root, or physical access while the console runs.**
+- **Every copy of a key.** The scan can't read databases (such as SQLite), other binary files or git history. Rotate any key that may have leaked.
+- **Rotating keys at the provider, sharing keys across a team, Mac or Windows.**
+
+The full list: [What envh does not do](docs/security.md#what-envh-does-not-do).
+
+## Requirements
+
+- **Linux 6.2 or newer.** Check with `uname -r`.
+- **sudo that asks for your password.**
+- **Ideally, not in the `docker` group.** Being in it is the same as having root without a password, so an agent could use it to read your keys. The wizard offers to take you out.
+- **Mac:** not yet, but it looks close. You can [port it in a fork](docs/porting.md). **Windows:** not planned.
 
 ## Install
 
-Open a terminal window of its own (not a terminal inside an AI tool) and run:
+Open a terminal window of its own (not a terminal inside Claude, Cursor or VS Code), then run:
 
 ```bash
 git clone https://github.com/CodexVeritas/ai-env-handler.git envh && cd envh
 python3 scripts/setup_wizard.py
 ```
 
-The wizard walks through eight short steps and asks before each change. The first offers to take you out of the `docker` group, which can become root without a password; the install's checks flag it otherwise. One of them keeps VS Code and Cursor from storing copies of `.env` files in their local history. The last one scans your home folder for stray copies of keys and then opens the explorer (`envh explore`) right there, so you can go through what it found and replace copies. Type `?` at any question to see what it changes, or pick "Every detail" at the start (or pass `--verbose`) to see it all along the way. Linux only.
+The wizard takes about 10 minutes, plus 15 for an optional scan. It asks before each change, and `?` at any question explains it. It installs envh, starts the console, moves a project's `.env` into the vault, connects Claude Code and Cursor, and scans for leftover keys.
 
-Later, run it again to upgrade (after `git pull`) or to import more projects.
+[docs/install.md](docs/install.md) lists what it changes and how to fix a failed system check. To upgrade later, `git pull` and run the wizard again.
 
-## How a request flows, and where the boundaries are
+## Daily use
 
-![How an envh request flows: a session approval and a run, with the two trust zones](docs/request-flow.svg)
-
-What each step means for you:
-
-- **Steps 1 and 9 are commands you (or an agent) type in an ordinary terminal.** The `envh` command is just a client; it holds no secrets and has no special rights.
-- **Steps 3 to 6 happen in a different window**: the console that `sudo envh-console` opened. It is where every approval happens, and it is the only place.
-- **Steps 8 and 12 are what the client does on your side.** It prints the session id; it never prints a value. Values go straight into the environment of the script you named, and nowhere else: not into your shell, not into a file.
-- **After step 13 the values are gone.** They lived only in the environment of the script and of processes it started. When the script exits, `envh run` terminates any of those processes still running (it tags the run and finds them by that tag), so nothing that received the values survives the run; the audit log records how many were stopped. Pass `--keep-background` if a run is meant to leave a daemon behind, and treat that daemon as holding the values. What envh cannot undo is a copy the script itself made, for example into a log file.
-
-The boundaries, in words:
-
-| Boundary | What enforces it | What it means |
-|---|---|---|
-| **Red box vs green box** | Linux user separation. The vault, policy files and audit log are owned by `envh` with mode 0600; the broker is a different user, non-dumpable, with no secrets in its environment. | You, your scripts, and any agent running as you cannot read a secret, a policy or the log, and cannot change what is allowed. |
-| **The socket** | A Unix socket in `/run/envh`, a directory only `envh` can write. The broker reads the connecting process's uid from the kernel (`SO_PEERCRED`, not spoofable) and only talks to logins listed under `users:` in `config.yaml`. | Anyone running as a listed user can *ask*. Asking never grants anything; it only puts a prompt on the console. Other local accounts are refused before they can see or request anything. |
-| **Per-user sessions** | Every session and pending request is tagged with the kernel-reported uid that created it. | A session can be used, waited on, listed or ended only by the user who opened it. Two listed users on one machine cannot use each other's sessions; only the console sees everything. |
-| **The console keyboard** | `TIOCSTI` disabled in the kernel, the terminal you type into chowned to `envh`, approval by your vault passphrase typed hidden, next to your console phrase. | No process running as you can inject keystrokes through the terminal itself. Something that can type but cannot see your screen or record your keys cannot approve without the passphrase. A fake prompt elsewhere cannot show your console phrase. Your display and input devices are a separate way in; see the next row. |
-| **Not a boundary** | | During step 12 the value is in a process running as you, like any environment variable. A session id is a bearer token for its lifetime; `envh list` leaves it out, but anything running as you may find it in a command line, an environment or a transcript. The reason and the pid shown in the prompt are claims by the requester. On an X11 desktop, a same-user process can record the passphrase as you type it and then type it into the console itself; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). |
-
-## What it protects, and what it does not
-
-**Kernel-enforced, against any process running as you (including every agent):**
-
-- The vault, the policy files and the audit log are owned by the service user `envh` with mode 0600. You cannot read them; neither can an agent.
-- The vault is encrypted at rest (age, passphrase mode) for the case of a stolen or copied disk.
-- The broker's memory is unreadable: a different user, marked non-dumpable, with no secrets in its environment.
-- Nothing can type into the console through its terminal. Linux 6.2+ disables the `TIOCSTI` ioctl (checked at start), and the terminal you type into is chowned to `envh` before the broker starts. Your display server and input devices are another way in; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console).
-- The code is root-owned under `/opt/envh`; the only client is `/usr/local/bin/envh`.
-
-**What a key use means:** the approved command receives the real value in its environment. It is visible to that process, to everything it imports, and to every other process running as you while it runs. A malicious dependency no longer gets every key on disk whenever it likes; it gets the values of the one approved run it is part of, and you see that run in the log.
-
-**While you are not at the console, nothing is approved or changed.** Approving a request always asks for your vault passphrase, typed hidden, and so does changing the passphrase. Other changes on the console (to keys, presets or settings) ask for it once, then only for a confirmation for the next hour; `/lock` ends that hour early. A wrong passphrase is logged and pauses the console for two seconds, so guessing by typing blind is slow and visible. With the console closed, the vault is encrypted with that passphrase, which is stored nowhere. The exceptions are a session you already approved, which keeps working until it expires, and keys you marked `auto`, which any run gets while the console is running.
-
-**One passphrase, on purpose.** The vault passphrase both unlocks the vault and approves requests, so approving is one thing to type. That costs some security, and you should know what: you type the passphrase often, so on X11 a program running as you has many chances to record it; and anyone who learns it can approve at your console and also decrypt any copy of `vault.age`, such as a backup. To make a fake prompt easy to spot, every approval prompt shows your console phrase: type the passphrase only where you see it. See [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console).
-
-See [What envh does not do](#what-envh-does-not-do) before relying on it.
-
-## Start the console
-
-Open a **separate terminal window** (not a terminal pane inside an AI tool) and run:
+**1. Start the console** once per login, in its own window, and leave it open:
 
 ```bash
 sudo envh-console
 ```
 
-Or click the "envh console" launcher. Enter your sudo password, check the console phrase, enter the vault passphrase. If a window asks for the passphrase without showing the console phrase, close it: something is impersonating envh. Leave this window open; it is where you approve requests. Closing it ends all sessions.
+**2. Run things that need keys.** Once the wizard connects your agents, they do this for you.
 
-The helper chowns your terminal to the service user while the console runs and restores it afterwards. sudo may run the console on a pseudo-terminal of its own and pass on what you type (its `use_pty` setting), so the helper locks both that one and your window's. The console refuses to start while either is still yours.
+```bash
+envh list                                                                   # keys and presets, names only
+envh run --preset my-app --reason "nightly sync" -- uv run python sync.py   # one command, one approval
+envh session start my-app --minutes 60 --reason "debug the sync"            # several commands, one approval
+envh run --session <id> --reason "retry" -- uv run python sync.py
+```
 
-**You don't have to watch the console.** When a request needs your passphrase, envh shows a desktop notification with its own chime, and the console rings its bell.
-- **It reminds you every 5 minutes while the request waits.** Each reminder updates the same notification ("has been waiting 5 minutes"), and the notification disappears once you approve or deny.
-- **The notification comes from the program that asked.** That program runs as you, in your desktop session, and reminds you only while it is still waiting. A request from a script with no desktop session (cron, SSH) only rings the bell.
-- **The chime is envh's own**, a short rising bell, so it isn't mistaken for another app. envh generates it and keeps it in your private runtime folder (`$XDG_RUNTIME_DIR`).
-- **Its text is fixed.** It never shows the requester's reason, so a request can't use it to show you instructions.
-- **To turn off the notifications, the chime and the bell, turn off Notifications under `/settings` on the console.** That sets `notify: false` in `config.yaml`.
+**3. Approve on the console** when it chimes: read the request, type your passphrase, press Enter.
 
-## The console
+More in [docs/usage.md](docs/usage.md) (sessions, presets, approval rules) and [docs/console.md](docs/console.md) (every console command).
 
-The console is one full-screen terminal app, modeled on Claude Code's. The home screen lists what happened (requests, approvals, runs, changes), newest at the bottom, with a command line under it. Long lines wrap, PgUp and PgDn scroll back through this run, and `/logs` goes back through earlier runs too.
+## Using it with AI agents
 
-- **Type `/` for commands.** A list appears as you type; ↑↓ pick one, Tab completes it, Enter runs it. **↑ on an empty command line brings back earlier commands.** `?` shows every shortcut.
-- **A request takes over the screen when it arrives**, with everything it would grant: who asked, the reason, the variables and keys, the duration, the command line and the process. Type your vault passphrase and press Enter to approve, or press ↓ (or Esc) and then Enter to deny. If something is being typed when it arrives, such as a key name, it waits until you finish (Enter or Esc); the status line says so. A request that is withdrawn while you type stays on screen and ignores what you type until Enter, so the rest of a passphrase never lands anywhere else.
-- **Letters typed on the home screen do nothing and are not shown.** Only `/` starts a command, so a passphrase typed when no request is on screen never appears there.
-- **A change asks for your vault passphrase once; for the next hour, changes ask only to be confirmed.** The header shows the time left, the console warns five minutes before it locks again, and `/lock` locks it at once. Approving a request and changing the passphrase always ask. A wrong passphrase is logged and stops typing for two seconds.
+- **Claude Code and Cursor:** the wizard connects them. Each gets a skill that teaches it to ask for keys through envh, and a hook that warns you in the app before a request reaches the console.
+- **Other agents** (Codex, Windsurf and others): paste the lines from [`claude/CLAUDE.snippet.md`](claude/CLAUDE.snippet.md) into their rules file.
 
-| Command | What it is for |
+Details: [docs/agents.md](docs/agents.md).
+
+## Documentation
+
+| Doc | What's in it |
 |---|---|
-| `/keys` | every key with the first and last few characters of its value (fewer for short values, at most a fifth, nothing under 12 characters), where it is used, how it is approved and its description. Enter opens a key: show its value, rename it, describe it, replace its value, give it its own approval rule, or remove it. F2 renames and Del removes from the list too. |
-| `/add` | store a new key; the value is typed or pasted hidden |
-| `/presets` | create, rename and remove presets, and change their variables: the key each reads, its approval, and the preset's longest session. Edits stay in a draft; Ctrl-S shows every change and asks for the passphrase once, and leaving with unsaved edits asks what to do with them. |
-| `/settings` | every option in `config.yaml` with its value and what it does: notifications, allowed users, the default approval and longest session, and rules for single keys. Saved like presets. |
-| `/sessions` | live sessions and the commands running with keys; Enter ends a session early |
-| `/logs` | what happened, by day, newest at the bottom, including earlier runs of the console; ↑↓, PgUp/PgDn, Home and End scroll. It reads the last 2000 lines of `/var/lib/envh/audit.jsonl`, which keeps every event in full and is never trimmed; the top of the list says when the file has older events. |
-| `/passphrase` | change the vault passphrase; the vault is encrypted again with it |
-| `/lock` | end the unlocked hour now; the next change asks for the passphrase again |
-| `/edit-config`, `/edit-presets` | open the file in `$VISUAL`, `$EDITOR`, nano or vi, whichever is found first owned by root and changeable only by root, since it runs as `envh`; what you save is checked and shown before it is used |
-| `/reload` | read `config.yaml` and `presets.yaml` again, after root changed them |
-| `/quit` | stop the console (so does Ctrl-C twice); live sessions end |
-
-**Showing a value.** Show puts the whole value on screen, where you can also select it with the mouse, and hides it again after 30 seconds or at Esc. The audit log records which key was shown; see [What envh does not do](#what-envh-does-not-do) for what it exposes.
-
-**Descriptions.** A key's description says what it is for ("Personal OpenAI account, news bot"). `envh list` shows it, so scripts and agents can pick the right key. Never put the key itself in it.
-
-**A rename follows the key** everywhere envh refers to it: the vault, its rule and description in `config.yaml`, presets, live sessions and waiting requests. Two things keep the old name: the `# VAR -> envh secret NAME` comments in `.env` files you imported, and any command or script that names the key itself (`--with VAR=OLD_NAME`). A new name is refused while `config.yaml` still has settings for it, or while a live session or waiting request still uses it, since either would quietly attach to the renamed key. Removing a key removes its rule and description too.
-
-## Move your `.env` files over
-
-```bash
-envh import --dry-run ~/code            # scan a directory (depth 3) and show the plan
-envh import ~/code                      # or give specific files: envh import ~/code/bot/.env
-```
-
-Import one project now and others whenever you like; an import never overwrites what is stored. Keys are named `<PROJECT>_<NAME>`, where the project is the folder that holds the `.env` (`news-bot/.env` gives `NEWS_BOT_OPENAI_API_KEY`). A key whose value is already in the vault is reused under its stored name instead of being stored twice. If a name is already taken by a different value, the new one gets a number (`NEWS_BOT_OPENAI_API_KEY_2`). The console shows the final names before you approve, and the presets and the rewritten `.env` comments use them. To rename a key, describe it or replace a stored value later, use `/keys` on the console (see [The console](#the-console)).
-
-The wizard walks through six steps and writes nothing until the last one:
-
-1. **Files.** Lists every `.env` and `.env.*` found (not `.env.example`); choose all or some.
-2. **Contents.** Parses active lines and commented-out assignments, and treats comment headers as **groups**. A comment holding a long token that is not a word, such as a key, is never taken for a header, so it is not printed or built into names; it stays in the file, and `envh scan` reports it. A file like this
-
-   ```
-   GITHUB_TOKEN=...
-   LOG_LEVEL=info
-
-   # Team Mode
-   OPENROUTER_API_KEY=...
-   ASKNEWS_API_KEY=...
-
-   # Personal Mode
-   # OPENROUTER_API_KEY=...
-   # ASKNEWS_API_KEY=...
-   ```
-
-   has a base group (`GITHUB_TOKEN`, `LOG_LEVEL`) and two mode groups. Each variable is classified as secret or config by its name and value; you can flip any.
-3. **Names.** Secrets get vault names that start with the project: `NEWS_BOT_GITHUB_TOKEN`, `NEWS_BOT_TEAM_OPENROUTER_API_KEY`, `NEWS_BOT_PERSONAL_OPENROUTER_API_KEY`, and so on. Identical values share one entry, across projects and with keys already in the vault. Rename anything.
-4. **Presets.** One preset per group, named `<repo>-<group>` (`news-bot-team`, `news-bot-personal`), each containing the base variables plus the group's. A repo without groups gets one preset named after it. Drop presets, then rename them, both by the names listed.
-5. **Plan.** Secrets to store (names and fingerprints only), presets in full, and per file the lines that change, shown as they will read: each secret line becomes `# VAR -> envh secret NAME (presets: ...)`. The old lines are not shown, since they hold the values. Headers and config lines stay as they are. Choose per file whether to rewrite it.
-6. **Apply.** The console shows the same summary and asks for your vault passphrase. Then each original file is backed up and the files are rewritten.
-
-**The backup.** Before rewriting, the wizard asks where to keep the backup; Enter accepts `~/envh-backups-and-scans/import-backups/`, a folder in your home that is easy to find again. Each original file is copied into a new dated folder there, at its full path: `/home/you/code/bot/.env` is backed up as `.../<date-time>/home/you/code/bot/.env`. The folder is mode 0700 and the wizard prints its exact path, with the command to delete it. The copies hold the old values in plaintext, readable by anything running as you, just as the original files were. So once the rewritten files work, delete the folder (`rm -r ~/envh-backups-and-scans/import-backups/<date-time>`). `envh scan ~` keeps reporting it until you do. A `README.txt` in `~/envh-backups-and-scans` says what each subfolder holds.
-
-To see a value later without the backup: `envh run --with VAR=SECRET --reason "recover" -- printenv VAR`, approved on the console.
-
-## Find leftover copies
-
-Keys end up in more places than `.env` files: shell history, Claude Code transcripts under `~/.claude/projects`, notebooks, scratch scripts, other repos, git remotes with embedded tokens, and the local history of VS Code and Cursor (`~/.config/Code/User/History`, `~/.config/Cursor/User/History`), which keeps a copy of a file each time you save it (the setup wizard turns that off for `.env` files, but copies saved before stay). After importing, find them:
-
-```bash
-envh scan                      # your home directory
-envh scan ~/code ~/Downloads   # specific places; add --json for machine-readable output
-envh scan --out ~/Desktop      # save the results somewhere else
-```
-
-For every hit it records the file, the line, what kind of key it looks like and how likely it is to be a real key, the length, an id, and the first and last few characters, as the console shows them (fewer for shorter values, none under 12 characters), never the value. The same id means the same value, and its first six characters match the id the console shows for a stored key, so you can tell which vault key a stray copy is. Exit code 1 means something was found. While it runs, a progress bar shows how much it has read and about how long is left.
-
-Each hit says how likely it is to be a real key:
-- **Likely key:** the value has a provider's distinctive format, such as `sk-or-v1-...` or `AIza...`, or it is one of your vault's keys, when the scan searched for them.
-- **Possible key:** the value is assigned to a key-like name, such as `EXA_API_KEY=...`, `client_secret: ...` or `DB_PASSWORD=...`. The service is taken from the name when it mentions one.
-- **Unlikely key:** the value is assigned to some other name holding KEY, TOKEN, SECRET or PASS, such as `cache_key` or `prompt_tokens`. Mostly not keys.
-- **Placeholder:** the value looks like a fake or default one from docs or tests: a counting run such as `123456789`, a short unit repeated, or a word such as `example` or `your` (the format's fixed prefix is left out of the check); or it is a database URL with a default or local login, such as `postgres://postgres:postgres@localhost`.
-
-A value that is just a name, such as `api_key = self.settings.openai_api_key` or `OPENAI_API_KEY: OPENAI_API_KEY_PROD`, is code reading a key, so it is not reported. A prefix followed by a long random run, such as `hb_` and 28 hex characters, is a key, not a name. Each hit also gets a place: where it is stored (editor history, trash, envh backups, docker, credential files that apps sign in with, agent transcripts, agent app data, worktree copies) or else what kind of file it is (logs, tests, docs and notes, `.env` files, data and output, code and config, other). Only your home's own `~/.claude`, `~/.cursor` and `~/.codex` count as agent folders; a project's `.claude/worktrees` is a worktree copy.
-
-A home-folder scan can find thousands of hits, so the terminal gets a short summary and the full results go to a new dated folder. At a terminal the scan first asks where; Enter accepts `~/envh-backups-and-scans/scans/` (`--out` chooses without asking):
-- `report.txt`: a summary at the top (counts by type and confidence, a table by place, where the keys are), then each distinct value with every file it is in, then every hit by file, then a short recap at the bottom.
-- `files.txt`: just the paths of the files with hits, one per line.
-- `hits.json`: the same data `--json` prints.
-
-These hold no values, so unlike the import backups they are safe to keep. Later scans skip them.
-
-**Browse them** with `envh explore` (the newest scan, or `envh explore <folder>`); a scan at a terminal also offers to open it when it finishes. Arrow through each type of key, each key, and the files it is in, grouped by folder when there are many. Enter on a file shows the lines around each copy, read from the file at that moment, with every key in them shown as its first and last few characters; `s` shows the full key until it hides itself after 30 seconds. Tab switches between the Yours, Likely, Possible, Unlikely and Placeholder lists and All, `g` groups by place instead of type (all the editor history copies together, say), and `/` filters by service, name, place or path. The view runs on the terminal's alternate screen, so nothing it shows stays in your scrollback, and it refuses to run without a terminal.
-
-**Replace them in bulk.** `x` on a row replaces copies with `envh-removed-<type>-<id>`. On a type of key, one key or All your keys, it replaces every copy of those keys, in any list and under any type. On a place such as editor history, it replaces every copy in that place, and on a folder or file, the copies there. Filters you have on still apply. A summary first says how many copies, keys and files by place, and which other keys of the same type stay (in Yours, ones that aren't in your vault, such as an old key). Only `y` goes ahead. The files are read again and rewritten in place, byte for byte apart from the keys, keeping their permissions, with no backup, since a backup would be one more copy. A file changed in the last 10 minutes is skipped, since a program such as an agent may still be writing it; so are links. Private keys are left for you, because only their first line is matched. Files in git repos get a warning: a committed key stays in the repo's history, so rotate it. What was replaced is logged beside the scan in `replaced.txt`, paths and ids only.
-
-**Copies of your own keys.** At a terminal, the scan first offers to search for copies of the keys in your vault, which finds them even where nothing marks them as keys, such as a bare paste in a transcript or `curl -H 'X-Api-Key: ...'`. You approve the search once on the console. The broker then shares each stored key's first and last few characters and its length, as the console shows them, never the key; keys under 20 characters are left out, since their ends would match too much. The scan looks for places that start and end that way at that length. When it is done, it asks the broker once, on the same connection, which of all the values it found are stored keys. Those count as Likely keys, the answer is saved beside the scan as `vault.json`, and a copy found only this way is replaced where the scan saw it, if the same value is still there. If you say no, or the console isn't running, the scan works as before.
-
-**Which ones are yours.** Before it opens a scan that didn't search your vault, `envh explore` offers to check which found keys are in your vault. The scan's ids (8 characters of each value's SHA-256) go to the broker, and once you approve the match request on the console, it answers with the names of the stored keys among them, never a value. Keys then show "in your vault as NAME", and `v` shows only those, or only the ones that aren't.
-
-**Start with Yours.** Once a scan is checked against your vault, by its search or by the explorer, the explorer opens on **Yours**: the exact copies of your vault's keys, whatever list they are in otherwise. Start there. They are certainly keys, and certainly yours, so they are the safest copies to replace and the ones that matter most. Its top row, **All your keys**, replaces every one of them with one `x`. The other lists hold values that may or may not be keys, and are worth going through after. The answer is saved beside the scan as `vault.json`, names and ids only. The console asks because the answer confirms a guessed value: an agent could check guesses at a short password this way, so approve only a scan you ran.
-
-It skips only what can't hold your keys or is cleared on its own, and `report.txt` lists everything it left out under **Not read**: each file over the size limit, each file that looks binary, each skipped folder by rule, and each link to a folder outside the paths scanned. The summary gives the counts.
-- **Large files:** files over 25 MB (`--max-size`) are left out, except transcripts and logs, which are read in parts at any size. The explorer shows and replaces files up to 256 MB.
-- **Installed code:** `node_modules`, `site-packages`, a Python or conda environment's `lib`, `share` and `include` (its `bin` and `etc` are read, since activate scripts can export keys), and editor extensions.
-- **Tools' download caches,** such as `.cache/pip`, `.cache/uv`, `.npm/_cacache`, `.cargo/registry`, `.m2/repository` and `.gradle/caches`. The login and config files next to them are read: `.cargo/credentials.toml`, `.m2/settings.xml`, `.gem/credentials`, `.local/share/uv/credentials`, `.terraform/terraform.tfstate` and the like.
-- **Caches apps clear as they go:** `Cache`, `Code Cache`, `GPUCache` and the like, a Flatpak app's `cache` folder, Next.js's `.next/cache` and `.next/dev`, and folders tagged with `CACHEDIR.TAG`.
-- **Inside `.git`:** only `objects` and `lfs`, which are compressed. Its config, hooks and logs are read.
-- **Too big, and none of your keys:** Steam's games, Flatpak's runtimes and Wine's Windows folder.
-- **Browser and mail profiles** (Firefox, Chrome, Chromium, Brave, Edge, Thunderbird). Their saved passwords and logins are encrypted and can only be cleared from inside each app, so the summary reminds you to do that.
-
-`envh scan --help` lists every skip rule.
-
-What it can and cannot identify:
-
-- **By value, anywhere:** OpenAI, OpenRouter, Anthropic, xAI, DeepSeek (and other `sk-` keys of 32 hex characters), Perplexity, Google (API keys, OAuth client secrets and access tokens, base64 service-account files), Groq, Together, Fireworks, Cerebras, Hugging Face, Replicate, ElevenLabs, E2B, Tavily, Firecrawl, LangSmith, Pinecone, Supabase, GitHub, GitLab, Slack (tokens and webhooks), Discord webhooks, Twilio, SendGrid, Stripe (keys and webhook secrets), Shopify, Square, AWS (access keys, Bedrock keys), Cloudflare origin CA keys, DigitalOcean, Heroku, Fly.io, PlanetScale, Databricks, Doppler, HashiCorp Vault, Grafana, Sentry (tokens and DSNs), New Relic, PostHog, Linear, Atlassian, Airtable, Notion, Postman, npm, PyPI, 1Password, age, Resend, Browserbase, JWTs, private keys, database URLs with passwords. Where gitleaks has a rule for a provider, the format follows it.
-- **Only next to a key-like name** (`FRED_API_KEY=...`, `serp_api_key: "..."`, `PASSWORD=...`, `--api-key ...`, `Authorization: Bearer ...`): SerpAPI, FRED, AskNews, Hyperbrowser, Metaculus, Exa, Deepgram, Parallel, Mistral, Cohere, Telegram, Mailchimp, Azure, AWS secret access keys and other keys that are plain hex or random strings. A bare copy of one of these in a transcript has no distinctive shape, so it is found only when it is in your vault and the scan searches for your vault's keys (see **Copies of your own keys** below).
-- **Not scanned:** git object history (`git log -p -S<prefix>` inside a repo), binary databases such as SQLite files and VS Code and Cursor state, encrypted stores such as the Claude desktop app's local environment, and anything outside the paths given (by default your home folder; scan `/tmp` or another drive by naming it).
-
-The scan stays separate from the import wizard on purpose: the wizard moves values out of files you chose, the scan is a read-only audit of everything else. The wizard prints a reminder to run it.
-
-## Daily use
-
-```bash
-envh list                                                        # secrets (names, policy, descriptions), presets, live sessions (not their ids)
-envh manage                                                      # how to add, change or remove secrets and presets
-
-# one command, one approval
-envh run --preset news-bot-personal --reason "backfill" -- uv run python scripts/backfill.py
-
-# several commands, one approval
-envh session start news-bot-personal --minutes 120 --reason "backfill articles"
-envh run --session <id> --reason "backfill" -- uv run python scripts/backfill.py
-envh session end <id>
-```
-
-- `envh run` without a session asks the console for that one run and waits for your answer, then runs the command. It is the way to approve every request, and the only way to use secrets marked `per-run`, which sessions never cover.
-- A key marked `auto` needs no approval. A run, or a session, whose keys are all `auto` starts at once, and the console only logs it. Set it on the console in the key's approval rule; `envh list` shows `auto` next to it. Take `auto` off a key and a session that opened without you stops covering it from its next run.
-- A session is approved once; every `envh run --session` inside it is approved instantly and logged. The session lasts the minutes you asked for, capped by each secret's `max_session` and by 24 hours.
-- `envh session start ... --quiet` prints only the id.
-- Name several presets to combine them: `envh session start news-bot forecasting-bot ...`, or `envh run --preset news-bot,forecasting-bot`. You get all their variables; per-run beats session and the shortest `max_session` wins. If two presets map the same variable to different secrets, the request is refused: leave one preset out, or pick with `--with VAR=SECRET` (listing the other variables you need too).
-- `--with` narrows a run to some of the session's variables, or maps variables ad hoc: `--with OPENAI_API_KEY,OPENROUTER_API_KEY=TEAM_OPENROUTER_KEY`.
-- `--reason` is optional but the console shows its absence loudly. Write what you would want to read before approving.
-- A running command is never killed when its session expires; expiry only stops new approvals. When the command itself exits, any process it left running is terminated so the values do not outlive the run (`--keep-background` to opt out).
-- One user can have 32 `envh` commands running or waiting at once; another is refused until one finishes. A `--reason` can be up to 1,000 characters, and the audit log keeps the first 4,000 characters of a command line.
-- `envh status` shows pending requests, active runs and live sessions as JSON. Neither it nor `envh list` shows session ids: `envh session start` prints yours, and the console's `/sessions` shows them all.
-- If `envh session start` stops waiting before you approve (an agent's tool call timed out), the request still waits for 10 minutes. `envh session wait <code>` picks it up again, with the code `envh session start` printed. A request id from `envh status` is not enough, so another program running as you can't collect the session.
-
-Exit codes: 3 broker not running, 4 denied, 5 request error (unknown preset, variable not in session), otherwise the command's own exit code.
-
-## Policy and presets
-
-Both policy files are owned by the `envh` user with mode 0600. Nothing running as you, agents included, can read or write them. The only ways they change:
-
-| File | Who can change it | How |
-|---|---|---|
-| `config.yaml` (defaults, per-key rules and descriptions) | you, on the console | `/settings`, or descriptions and rules from `/keys`; `/edit-config` opens it in an editor and checks the result. Saving from `/settings` rewrites the file in envh's layout, with a comment on each option, so comments you add by hand are not kept |
-| `presets.yaml` | you, on the console | `/presets` or `/edit-presets`, the import wizard, approving an agent's `envh preset propose` (shown as changes, approved with your passphrase), or a rename in `/keys` |
-| the vault | you, on the console | `/keys` and `/add`, the import wizard |
-
-`envh manage` lists the console commands for these changes and says whether the console is running.
-
-An agent can only *propose*: `envh preset validate draft.yaml` checks a draft without changing anything, `envh preset propose draft.yaml --reason "..."` puts the diff on your console. A proposal that maps a variable to a secret the agent should not have is just a diff you deny. Root can of course edit the files directly; the console's `/reload` picks that up, and a save from the console refuses to overwrite a `config.yaml` changed on disk since.
-
-`config.yaml`:
-
-```yaml
-# envh settings. Change them on the console with /settings; saving there rewrites this file.
-users: [alice]            # logins whose scripts and agents may ask for keys
-notify: true              # notification, chime and console bell while a request waits
-defaults:                 # for every key without its own setting below
-  approval: session       # session: one approval opens a session | per-run: ask on every run
-  max_session: 1h         # longest session that may include a key; hard cap 24h
-secrets:                  # per key: approval, max_session, description; the rest follows the defaults
-  DATABASE_URL: {approval: per-run, description: "Production database, read-only user"}
-  OPENAI_API_KEY: {max_session: 8h}
-  FRED_API_KEY: {approval: auto, description: "Free economic data, read-only"}
-```
-
-`approval: auto` means no approval: any run gets the key at once, and every use is still logged. Only a single key's rule can say it, not `defaults:` or a preset, so a new key always needs approval until you mark it.
-
-`/var/lib/envh/presets.yaml` is written only by the broker (import wizard, proposals, console):
-
-```yaml
-presets:
-  news-bot-team:
-    max_session: 3h
-    env:
-      GITHUB_TOKEN: GITHUB_TOKEN
-      OPENROUTER_API_KEY: TEAM_OPENROUTER_API_KEY
-  news-bot-personal:
-    env:
-      GITHUB_TOKEN: { secret: GITHUB_TOKEN, approval: per-run }
-      OPENROUTER_API_KEY: PERSONAL_OPENROUTER_API_KEY
-```
-
-The same variable can point at different secrets in different presets; that replaces commenting lines in and out. Unknown fields, bad durations, caps over 24h and secrets missing from the vault are rejected, never warned about.
-
-Everything on the console is described in [The console](#the-console).
-
-## Using it with Claude Code
-
-The wizard's "Connect Claude Code" step does this for you, and says so when a rerun finds the copies out of date. By hand, copy the pieces under `claude/`:
-
-- `claude/skills/envh/SKILL.md` → `~/.claude/skills/envh/SKILL.md` (or a project's `.claude/skills/envh/`). It teaches the agent to run one command directly and to start a session only for several, to always give a reason, what to do when refused, and a list of things it must never do.
-- `claude/hooks/envh_ask.py` plus the hooks block from `claude/settings.snippet.json` → your `settings.json`. The hook asks in the app only when a command will make the console ask for your vault passphrase: `envh session start`, `envh preset propose`, `envh import` (not `--dry-run`) and `envh run` without a session. For a run or session start, it first asks the broker whether those keys need approval at all, and stays quiet when they are all `auto`. It asks anyway when it can't be sure which keys or which broker: bash rewrites an option first (a `$(...)`, backticks or a `$`), or the command sets `ENVH_SOCKET`. So you are notified exactly when the console needs you. It reads the command the way a shell does: `envh` counts after `&&`, `;`, a pipe or a newline, inside `$(...)`, backticks, `bash -c` or `eval`, behind `timeout`, `nohup`, `env` or `uv run`, and with a path prefix. `envh` in an argument, a quoted string, a comment or a heredoc body, such as a commit message, a `grep` or a README being written, is a mention and never asks, unless it is in a `$(...)` or backticks that bash still runs there, as in double quotes or an unquoted heredoc. Only when the quoting can't be read at all does text that looks like one of those requests ask. Prefer rules only? The snippet has that variant too, with the caveat that plain rules match only the start of a command.
-
-  A hook sees only the command string. A script file, an interpreter one-liner (`python -c "subprocess.run(['envh', ...])"`) or a variable-built command can get around it, which is why nothing depends on it: a disguised session-less run still prompts on the envh console, and a disguised session start still needs your passphrase typed there. The hook is attention and a second chance to deny; the console is the boundary.
-- `claude/CLAUDE.snippet.md` → three lines for a project's `CLAUDE.md`. The wizard adds them to `~/.claude/CLAUDE.md` on the first connection only; updates replace the skill and hook and leave your `CLAUDE.md` as you edited it. When it lacks any of the current lines, the wizard shows them so you can add them yourself.
-
-Agents can draft presets: they write a YAML file, run `envh preset validate draft.yaml`, then `envh preset propose draft.yaml --reason "..."`; you see a diff on the console and decide. They cannot edit the files.
-
-## Using it with Cursor
-
-The wizard's "Connect Cursor" step does this for you, and says so when a rerun finds the copies out of date. Cursor uses the same skill and hook as Claude Code. By hand:
-
-- `claude/skills/envh/SKILL.md` → `~/.cursor/skills/envh/SKILL.md` (or a project's `.cursor/skills/envh/`).
-- `claude/hooks/envh_ask.py` → `~/.cursor/hooks/envh_ask.py`, plus the block from `cursor/hooks.snippet.json` → `~/.cursor/hooks.json`. The hook reads Cursor's `beforeShellExecution` format and makes the same decisions as in Claude Code. The matcher keeps Cursor from starting it for commands that don't mention `envh`.
-
-What differs from Claude Code:
-
-- **Cursor's ask is less reliable.** Cursor has been [reported](https://forum.cursor.com/t/beforeshellexecution-hook-permissions-allow-ask-ignored-allow-list-takes-precedence/144244) to skip a hook's ask for a command on its own allowlist. As with Claude Code, nothing depends on the hook: the console still asks.
-- **The hook never answers "allow".** In Cursor an allow can skip Cursor's own approval of a command. For commands it has no opinion on, such as `envh list`, it prints nothing; Cursor logs that as a hook failure, which does not block the command.
-- **No rules file.** Cursor keeps user rules in its settings, so there is no counterpart to the `CLAUDE.md` lines. The skill carries the same instructions.
-- **Cursor also reads Claude Code's setup.** With its "Third-Party Imports" setting on (the default), Cursor loads `~/.claude/skills` and the hooks in `~/.claude/settings.json` too. It does not act on an ask from a Claude Code hook, which is why Cursor gets its own hook entry. The two skill copies are identical.
-
-## Habits that keep this safe
-
-- **Never type `sudo` in a terminal an agent can reach**, such as the terminal pane of the Claude desktop app. sudo caches your credential for that terminal for several minutes, and the agent could run `sudo -n <anything>` there. Run privileged commands in a separate window, and consider `sudo -k` right after (the wizard does this for you).
-- Start the console in its own window. Never inside an agent's terminal pane.
-- Keep `NOPASSWD` out of sudoers (and `nopass` out of `doas.conf`), and stay out of the `docker` group and the others that grant root. The install checks these; rerun the wizard after you change groups or sudo settings.
-- Read the whole prompt before typing the passphrase: the reason, the variables, the duration, the command line.
-- Type the vault passphrase only where your console phrase is shown. If you typed it on an X11 desktop while something untrusted was running, change it with `/passphrase` from a text console.
-- Do not paste secrets into chats, commits, logs or command lines.
-- Treat `/var/lib/envh` as secret material if you ever copy or back it up. Back up `vault.age` only to encrypted media; recovering it needs only the standard `age` tool: `age -d vault.age`.
-- Approve only where nothing running as you can see or type. On X11, or with `/dev/uinput` writable by you, a desktop terminal window does not qualify; see the next section.
-
-## Who else can see and type into the console
-
-The console is only as safe as the screen you read it on and the keyboard you type into it. On an ordinary desktop, three things let a program running as you reach both. An agent that gets past the Claude Code or Cursor hook, or never meets it, can use them.
-
-- **An X11 session** (`echo $XDG_SESSION_TYPE` prints `x11`). Every program running as you can read any window, record every key you type, and type into any window. It can record the vault passphrase, and your sudo password, as you enter them, and then type the passphrase into the console itself. With your sudo password it has root, and root beats envh.
-- **Write access to `/dev/uinput`.** It lets a program create a virtual keyboard that types into whatever has focus: X11, Wayland and text consoles alike. Some udev rules give it to the logged-in user, for example Steam's `60-steam-input.rules`; `getfacl /dev/uinput` then shows a `user:<you>` line. To remove it, override the rule with a file of the same name in `/etc/udev/rules.d` without the uinput line, then reboot. Typing blind, it does not know the passphrase; the pause after each wrong attempt keeps it from guessing.
-- **Running the console inside tmux or screen started as you.** Anything running as you can send keys to it. The console warns, before you type the passphrase and again on its home screen, when it runs inside tmux, screen, zellij, dtach or abduco that root did not start.
-- **Membership in the `input` group.** It lets a program read every key you type on any screen, the vault passphrase and your sudo password included. The install warns about it and about a writable `/dev/uinput`.
-
-What does not fix it:
-
-- **The passphrase, on X11.** It stops anything that can type but cannot see or record, such as a virtual keyboard on Wayland or a text console. On X11, a program running as you can record it the first time you type it, and approve on its own after that. If that may have happened, change it with `/passphrase` from a text console.
-- **One-time codes** (backup codes, an authenticator app). A recorded code cannot be replayed. But a program that can draw over and type into your windows can show you a fake request, or change the request as you type, so your code approves its request.
-- **The Claude Code or Cursor hook.** It sees only the command text, so a few lines of Python that talk to the display get past it, and so does a script file. It also covers only the agent's shell commands, not MCP servers, other agents, or a package inside a script you run.
-
-What does:
-
-- **Approving where nothing running as you can see or type.** That can be a text console: press Ctrl-Alt-F3, log in, run `exec sudo envh-console`, after making sure `/dev/uinput` is not writable by you. Your desktop's lock screen does not cover text consoles. It can also be another device over SSH: key-only, not reachable from the internet, and not inside a tmux or screen you own. Closing that connection closes the console and ends all sessions.
-- **A Wayland session.** It stops programs reading and recording across windows, which protects your sudo password everywhere, but it does nothing about `/dev/uinput`.
-- **An OS sandbox around agent commands** (Claude Code's Bash sandbox, a dev container). It protects against agents only, and only if it actually blocks the display and `/dev/uinput`: inside it, `xset q` and `test -w /dev/uinput` should both fail.
-
-## What envh does not do
-
-- **For an hour after you type the passphrase for a change, changes are unlocked.** Anything that can type into the console window during that hour (see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console)) can rename, replace, show or remove keys and change presets and settings without knowing the passphrase. It still cannot approve a request or change the passphrase. `/lock` ends the hour early, and stopping the console ends it too.
-- **Showing a value puts the whole key where others can get it.** It is on screen for up to 30 seconds, and it passes through your terminal, so a terminal session recording would hold it. Selecting it with the mouse puts it on your selection or clipboard, where every program running as you, agents included, can read it. The audit log records which key was shown, not its value.
-- **A key marked `auto` is not protected by approval.** While the console runs, any process running as a listed user, agents included, gets it by asking. Use `auto` only for keys whose leak costs little.
-- **The console shows the ends of each key.** `/keys` shows the first and last few characters of every value (at most a fifth of it, and nothing of a value under 12 characters), so a key can be matched with a provider's dashboard. Anyone who can see the console's screen sees those characters too; the rest stays hidden.
-- **Approving a scan's search shares the ends of each key.** The scan, running as you, gets the first and last few characters and the length of every stored key of 20 characters or more, as the console shows them, and one answer to which found values are stored keys. Any program could send the same request, so approve only a scan you ran.
-- **It does not hide a value from the command that receives it.** Values are visible to that process, everything it imports, and every other process running as you for the duration of the run. envh cannot revoke a value once delivered, cannot undo a copy the command made (a log line, a file, a cache), and a session expiring does not stop a running command. It does end the run cleanly: processes the command left behind are terminated when it exits.
-- **It does not isolate an agent from your other repositories, your home directory, or the network.** That needs a container or VM around the agent; see the [Roadmap](#roadmap). On the host, your agent's own permission rules and classifier are the only control over what else it reads.
-- **A session id is a bearer capability within your own account.** Anything running as you that obtains it can use it until it expires. `envh list` and `envh status` leave ids out, and `envh session wait` needs the resume code only the asking program was shown, so agents working side by side don't pick up each other's sessions. That is a courtesy, not a boundary: a process running as you can still find an id in another process's command line or environment, or in an agent's transcript. What protects you is what you approve, so keep sessions short and specific. Other local accounts cannot use a session: the broker checks the kernel-reported uid of every connection against the session's owner.
-- **A session id is two words, so it is easy to guess.** It is short so that you can read it out and type it from memory. The uid check refuses another account whatever it guesses, and another user's session reads as unknown, so guessing does not even reveal which ids are live. For a process running as you, the broker logs every unknown id on the console and, after 20 from one user, refuses all of that user's sessions until the console restarts. With about 36,000 ids, 20 guesses at three live sessions find one about 1 time in 600.
-- **envh's boundary is the kernel user separation, not a check on what you run.** The vault and broker live under a separate Linux user you cannot read, and the broker trusts only the kernel-reported uid of whoever connects. Within that boundary, envh receives a command and returns the keys' values to the client process; it cannot tell a legitimate use from a bait-and-switch. A malicious program can show you one command and `--reason` on the console, collect the keys, then feed them to a different script — and envh will not catch it (the audit log, too, records the command the client reported, not a verified account of what ran). **Confirming that the command you approve is the real use of the keys is your job, not envh's.** The Claude Code / Cursor hooks help, by flagging in your agent's UI that a command is about to ask envh for keys — a heads-up and a chance to deny; but they run in your userspace as you, so an agent that has already altered that userspace (the hook itself, the `envh` client, your `PATH`, or the target script) can defeat the heads-up or change what runs.
-- **You approve a command line, not the code it runs.** A run prompt shows `python deploy.py` — not what `deploy.py` contains, what `python` resolves to on your `PATH`, or what it imports. The code is read at run time, as you, so it can differ from what you reviewed: changed by another process after you approve, resolved to a different binary via `PATH`, or never inspected in the first place. Within a session, later runs whose keys are already granted need not reach the console at all. The same read-then-write gap applies to `envh import`, which rewrites each file in place. envh's guarantee is that the approved keys went to this user for this command line, not that a specific reviewed program ran unchanged — so review the code you run, and keep the machine in a known-good state.
-- **The console is only as trusted as your display and terminal.** On X11, same-user processes can record the passphrase and type it into the console; see [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console). The desktop launcher can be shadowed by a file in `~/.local/share/applications`; the console phrase makes an impostor recognizable, it does not prevent one.
-- **It does not stop a persistent same-user attacker from phishing you later.** An agent that can edit your shell startup files or desktop configuration could capture the sudo password or vault passphrase at the next start. Claude Code's protected-path rules reduce this; only running agents in a container removes it.
-- **It does not change your sudo settings.** sudo keeps remembering your password for several minutes in the terminal you typed it in, and anything running there can use it. Run the wizard and `sudo envh-console` in windows no agent can type into; the wizard runs `sudo -k` when it is done.
-- **The vault is only as strong as the passphrase**, which also approves requests. Copies of `vault.age` or `audit.jsonl` outside `/var/lib/envh` must be treated as secrets. The audit log holds command lines and reasons, never values.
-- **The import wizard leaves a plaintext backup until you delete it.** It copies each original file to `~/envh-backups-and-scans/import-backups/<date-time>/` (or a folder you choose) before rewriting it in place, and prints that path. Until you remove the folder, the old values are exactly as exposed as they were in the original files.
-- **Requirements it will refuse without:** Linux 6.2+ with `legacy_tiocsti=0`, Yama ptrace scope 1 or more, sudo and doas with a password, sudo remembering a password per terminal and with a `secure_path`, your user outside root-granting groups (its primary group included) and unable to use a root container daemon's socket, and the folders root runs envh from writable only by root. These are checked when you install, for the account that installs; a sudo or doas rule added later is not checked until you run the wizard again. Groups are checked again for every listed user each time the console starts, and for a user added in `/settings` before you save; the console warns about them but does not refuse.
-- **Not provided:** rotating or revoking keys at the provider, per-request network allow-lists, rate limits, remote use, macOS or Windows support, protection against root or physical access while the broker is running. Several local users can be listed in `users:` and each gets their own sessions, but they share one vault, one policy and one console.
-
-## Roadmap
-
-- **Phone approval, like a Duo push.** The broker sends each request's details to your phone and you approve there; only a reply signed by a key that never leaves the phone counts. The screen you read and the button you press are then off the computer, which closes the attacks in [Who else can see and type into the console](#who-else-can-see-and-type-into-the-console) without a text console.
-- **An OS sandbox for agents.** Run each agent in a dev container or VM, or a checked configuration of Claude Code's Bash sandbox. The agent then cannot reach your display, `/dev/uinput`, your home directory, or more of the network than it needs, and envh's socket is its way to ask for keys. This also isolates agents from your other repositories, which envh does not do today.
+| [install.md](docs/install.md) | requirements, the wizard's steps, failed system checks, what the install changes, upgrading, uninstalling |
+| [usage.md](docs/usage.md) | runs, sessions, presets, approval rules, exit codes |
+| [console.md](docs/console.md) | starting the console, notifications, every command |
+| [import.md](docs/import.md) | moving `.env` files into the vault, and the backup it leaves |
+| [scan.md](docs/scan.md) | finding leftover copies, what the scan misses, replacing copies |
+| [agents.md](docs/agents.md) | Claude Code, Cursor and other agents |
+| [security.md](docs/security.md) | how it works, its boundaries, what it doesn't do, safe habits, roadmap |
+| [porting.md](docs/porting.md) | porting envh to macOS |
+| [development.md](docs/development.md) | tests, a development broker, the code layout |
+
+## FAQ
+
+**Do I have to watch the console?**
+No. A desktop notification and a chime tell you when a request is waiting, and remind you every 5 minutes.
+
+**What happens when the console isn't running?**
+Requests fail with exit code 3, and agents are told to ask you to start it. Keys marked `auto` need it running too.
+
+**What if I forget my vault passphrase?**
+There's no reset, because it's stored nowhere. Run `sudo envh uninstall --purge`, install again and add your keys again.
+
+**Can my agent see my keys?**
+Only the keys of a command you approved. That command gets the real values in its environment; while it runs, other programs running as you could read them too. When it exits they're gone, unless it copied them somewhere.
+
+**Where did my `.env` values go?**
+Into the vault. Each line in the file now names the vault key that replaced it. The original file is backed up under `~/envh-backups-and-scans/import-backups/` until you delete it, which you should do once your project works.
 
 ## Reporting a vulnerability
 
 Please report privately, not in a public issue. See [SECURITY.md](SECURITY.md).
 
-## What the install changes, upgrading, uninstalling
+## License
 
-The wizard's install step asks for sudo once, and runs `sudo -k` afterwards so the terminal forgets it. If root has no `uv` of its own, the wizard first offers to install one into `/usr/local/bin` with astral.sh's installer (a `uv` in your home folder could be swapped by anything running as you before root runs it); you can use your own instead, at that risk.
-
-As root, it copies the source files from your clone to a root-only folder and checks the system there. It stops where a process running as you could become root: it needs Linux 6.2 or newer with Yama; `sudo` that asks for a password (no `NOPASSWD` rules for you), keeps a password typed in one terminal to that terminal (no `!tty_tickets` or `timestamp_type=global`) and has a `secure_path`, so `sudo envh-console` can't run a copy from your `PATH`; no `doas` rule with `nopass` for you; your user outside root-granting groups (`docker`, `lxd`, `incus-admin`, `libvirt`, `microk8s`, `disk`), unable to use the socket of a daemon that runs containers as root (Docker, containerd, Podman, LXD, Incus) through an ACL or a mode, and unable to write `/usr/local`, `/usr/local/bin`, `/usr/local/sbin`, `/opt` or `/opt/envh`, where root runs envh from. It warns on X11, on membership in the `input` group and on a `/dev/uinput` you can write. Each problem says how to fix it; you can continue anyway after checking each one yourself. The wizard's first step offers to fix the most common one for you: if you say yes, it runs `sudo gpasswd -d <you> <group>` for each root-granting group you are in. Docker commands then need sudo, so agents can't run them; Docker Desktop and rootless Docker don't need the group. It takes effect when you log out and back in. `envh install` runs the same checks again, so running it directly also refuses on a problem unless you pass `--ignore-preflight` (which then says how many it ignored). Run it with `sudo` from your own account: from a plain root shell it cannot tell whose account to check, so it refuses.
-
-Then it builds `/opt/envh` from that copy: Python 3.12 in `/opt/envh/python`, envh in `/opt/envh/env`, and the commit it came from in `/opt/envh/installed-from`. It links `/usr/local/bin/envh` and runs `envh install` (`sudo envh install --dry-run` lists its changes), which:
-
-1. creates the service user `envh` with home `/var/lib/envh` (mode 0700);
-2. installs `/usr/local/sbin/envh-console`, the root helper that starts the broker;
-3. installs a desktop launcher named "envh console" if a desktop terminal is found;
-4. creates the vault and the policy in `/var/lib/envh`, owned by `envh`: it writes `users: [<your login>]` into the policy, you choose the **vault passphrase** (stored nowhere; you type it to start the console and to approve requests), and you get a **console phrase**.
-
-Nothing else on your system changes: no sudo, shell or desktop settings.
-
-The wizard refuses to run inside Claude Code, but it cannot tell when another AI tool shares its terminal. Run it in a terminal window of its own: while the install runs, a sudo password typed there is usable from that terminal.
-
-envh never runs from your clone. Your agents can edit the clone, and the console runs the code that holds your keys, so that code must live where only root can change it.
-
-**Upgrade:** `git pull` in your clone and run the wizard again. It asks before updating (`?` shows the installed commit next to the clone's), and asks again if the clone has uncommitted changes, since root installs those too. The vault, its passphrase and the policy are kept. Restart the console afterwards: the running broker keeps the old code until then. The Claude Code and Cursor steps then compare the skill and hook copies with the clone, and say if they are out of date. Copies you made by hand somewhere else, such as in a project, you update yourself.
-
-**Uninstall:** `sudo envh uninstall` keeps the vault; `sudo envh uninstall --purge` deletes it too.
-
-## Development
-
-```bash
-uv sync --all-groups
-uv run pytest -q                       # no root, no network, no environment variables needed
-uv run envh --help
-```
-
-The walkthrough at the top is a real recording of a development broker with fake keys. After the console changes, record it again and render it (needs ffmpeg, Google Chrome, and network access to load xterm.js from jsDelivr). `--small` writes a copy under GitHub's 10 MB limit for videos:
-
-```bash
-uv run python scripts/demo/record.py build/demo/recording.json
-uv run --with playwright python scripts/demo/render.py build/demo/recording.json --mp4 build/demo/envh-demo.mp4 --small docs/demo.mp4
-```
-
-Then drag `docs/demo.mp4` into a comment box on GitHub, without posting it, and put the link GitHub gives it at the top of this file in place of the old one.
-
-Run a development broker as yourself, without installing: `uv run envh init --data-dir /tmp/envh-dev`, then in a terminal `uv run envh serve --data-dir /tmp/envh-dev --socket /tmp/envh-dev/ctl.sock`, and point clients at it with `--socket /tmp/envh-dev/ctl.sock` or `ENVH_SOCKET=/tmp/envh-dev/ctl.sock`. This gives none of the user-separation guarantees; it is for working on envh itself.
-
-Layout, in review order. The directory tree states the trust boundaries and a test (`tests/test_boundaries.py`) keeps the imports inside them:
-
-| Package | Side of the boundary | Contents |
-|---|---|---|
-| `src/envh/core/` | trusted logic, no sockets or terminals | `config.py` policy files, `durations.py`, `vault.py` (age encryption), `state.py` (requests, sessions, runs), `broker.py` (decisions and their side effects), `audit.py` |
-| `src/envh/server/` | the trusted process, runs as user `envh` | `control.py` (Unix-socket protocol, peer uid), `console/` (the full-screen console: `app.py`, the request card, the keys, presets, settings and sessions screens, and `tui.py`, its standard-library terminal toolkit), `hardening.py`, `serve.py` (startup), `init_cmd.py` |
-| `src/envh/client/` | the untrusted side, runs as you or an agent, standard library only | `transport.py` (socket client), `commands.py` (`envh run`, `session`, `list`, …) |
-| `src/envh/tools/` | set-aside utilities, standard library only | `importer.py` (the `.env` wizard), `scanner.py` (`envh scan`), `explorer.py` (`envh explore`), `replacer.py` (its bulk replace), `vault_search.py` (the scan's search for your vault's keys), `saved_files.py` (the folder they save into); deleting the package removes three subcommands and nothing else |
-| `src/envh/install/` | root-only system setup | `command.py` (`envh install` / `uninstall`, the console helper and launcher) |
-| `src/envh/platform.py`, `common.py`, `cli.py` | shared | OS facts (uid, socket path, prctl, preflight), the value fingerprint, command dispatch |
-
-The security argument lives in `core/` and `server/`. In the console, `app.py` and `request_card.py` decide what a typed passphrase can do and what a request shows; the other screens change things only through the broker, after the passphrase. The rest cannot touch a secret except through the socket like any other client.
+MIT. See [LICENSE](LICENSE).
