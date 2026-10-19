@@ -25,13 +25,16 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from envh.client.transport import ClientError
+from envh.client.transport import ClientError, Connection, waiting_notice
 from envh.common import peek, printable
 from envh.tools.saved_files import SCANS, saved_files_root, shown_path
-from envh.tools.scanner import DEFAULT_MAX_BYTES, Hit, plural, read_if_text, scan_text, shown_folder
+from envh.tools.scanner import DEFAULT_MAX_BYTES, TIER_NAMES, Hit, place_of, plural, read_if_text, scan_text, shown_folder
 
-TIERS = ("high", "medium", "low", "all")
-TIER_LABELS = {"high": "High", "medium": "Medium", "low": "Low", "all": "All"}
+TIERS = ("high", "medium", "low", "fake", "all")
+TIER_LABELS = {"high": "Likely", "medium": "Possible", "low": "Unlikely", "fake": "Placeholder", "all": "All"}
+GROUPINGS = ("type", "place")
+VAULT_FILTERS = ("all keys", "in your vault", "not in your vault")
+VAULT_FILE = "vault.json"
 GROUP_ABOVE = 5
 LINES_SHOWN_PER_FILE = 3
 CONTEXT_LINES = 3
@@ -65,6 +68,7 @@ class Found:
     shown: str
     fingerprint: str
     length: int
+    place: str
 
     def describe(self) -> str:
         return f"{self.shown} ({self.length} chars, id {self.fingerprint})"
@@ -145,7 +149,7 @@ def glimpse(value: str, fixed: int) -> str:
     return value[:fixed] + (f"{rest[:8]}…{rest[-4:]}" if len(rest) >= LONG_REST else peek(rest))
 
 
-ROW_HINTS = {"type": "→ shows its keys", "value": "→ shows the files it is in", "group": "→ shows these files", "file": "Enter shows the lines around the key"}
+ROW_HINTS = {"top": "→ shows its keys", "value": "→ shows the files it is in", "folder": "→ shows these files", "file": "Enter shows the lines around the key"}
 
 
 def row_hint(row: Row, expanded: set[tuple[str, ...]]) -> str:
@@ -189,7 +193,10 @@ def load_scan(folder: Path) -> list[Found]:
     hits = data["hits"]
     if hits and "confidence" not in hits[0]:
         raise ClientError(f"{shown_path(folder)} was saved by an older envh scan; run envh scan again", 2)
-    return [Found(hit["path"], hit["line"], hit["confidence"], hit["kind"], hit["name"], hit["shown"], hit["fingerprint"], hit["length"]) for hit in hits]
+    return [
+        Found(hit["path"], hit["line"], hit["confidence"], hit["kind"], hit["name"], hit["shown"], hit["fingerprint"], hit["length"], place_of(hit["path"]))
+        for hit in hits
+    ]
 
 
 def newest_scan(root: Path) -> Path:
@@ -205,14 +212,17 @@ Tree = dict[TypeKey, dict[str, dict[str, list[int]]]]
 
 @dataclass
 class Index:
-    """The hits of one tier and filter, as type → value → file → line numbers, with each value's names."""
+    """The hits of one tier and filter, as type (or place) → value → file → line numbers, with each value's names."""
 
     tree: Tree
     first: dict[str, Found]
     names: dict[str, set[str]]
+    grouping: str = "type"
+    vault: dict[str, list[str]] = field(default_factory=dict)
 
 
-def build_index(hits: list[Found], tier: str, needle: str) -> Index:
+def build_index(hits: list[Found], tier: str, needle: str, grouping: str = "type", vault: dict[str, list[str]] | None = None, vault_filter: str = "all keys") -> Index:
+    vault = vault or {}
     tree: Tree = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     first: dict[str, Found] = {}
     names: dict[str, set[str]] = defaultdict(set)
@@ -220,13 +230,16 @@ def build_index(hits: list[Found], tier: str, needle: str) -> Index:
     for hit in hits:
         if tier != "all" and hit.confidence != tier:
             continue
-        if needle and needle not in hit.kind.lower() and needle not in hit.name.lower() and needle not in hit.path.lower():
+        if vault_filter != "all keys" and (hit.fingerprint in vault) != (vault_filter == "in your vault"):
             continue
-        tree[(hit.kind, hit.confidence)][hit.fingerprint][hit.path].append(hit.line)
+        stored = " ".join(vault.get(hit.fingerprint, ())).lower()
+        if needle and not any(needle in field_text for field_text in (hit.kind.lower(), hit.name.lower(), hit.path.lower(), hit.place, stored)):
+            continue
+        tree[(hit.kind if grouping == "type" else hit.place, hit.confidence)][hit.fingerprint][hit.path].append(hit.line)
         first.setdefault(hit.fingerprint, hit)
         if hit.name:
             names[hit.fingerprint].add(hit.name)
-    return Index(tree, first, names)
+    return Index(tree, first, names, grouping, vault)
 
 
 def file_count(values: dict[str, dict[str, list[int]]]) -> int:
@@ -245,15 +258,19 @@ def tree_rows(index: Index, expanded: set[tuple[str, ...]], show_tier: bool) -> 
     groups them by folder."""
     rows: list[Row] = []
     for (kind, confidence), values in sorted(index.tree.items(), key=lambda item: (-file_count(item[1]), item[0])):
-        type_node = ("type", kind, confidence)
+        type_node = ("top", kind, confidence)
         detail = f"{plural(len(values), 'key')} in {plural(file_count(values), 'file')}"
-        rows.append(Row(type_node, None, 0, kind, (f"{confidence} · " if show_tier else "") + detail, True))
+        rows.append(Row(type_node, None, 0, kind, (f"{TIER_NAMES[confidence]} · " if show_tier else "") + detail, True))
         if type_node not in expanded:
             continue
         for fingerprint, paths in sorted(values.items(), key=lambda item: (-len(item[1]), item[0])):
             value_node = ("value", kind, confidence, fingerprint)
             names = sorted(index.names.get(fingerprint, ()))
             label = index.first[fingerprint].describe() + ("  " + ", ".join(names[:2]) + (" …" if len(names) > 2 else "") if names else "")
+            if index.grouping == "place":
+                label = f"{index.first[fingerprint].kind}  {label}"
+            if fingerprint in index.vault:
+                label += f"  · in your vault as {', '.join(index.vault[fingerprint])}"
             rows.append(Row(value_node, type_node, 1, label, plural(len(paths), "file"), True))
             if value_node not in expanded:
                 continue
@@ -267,7 +284,7 @@ def tree_rows(index: Index, expanded: set[tuple[str, ...]], show_tier: bool) -> 
                 if len(members) == 1:
                     rows.append(file_row(kind, confidence, fingerprint, members[0], paths[members[0]], value_node, 2))
                     continue
-                group_node = ("group", kind, confidence, fingerprint, folder)
+                group_node = ("folder", kind, confidence, fingerprint, folder)
                 rows.append(Row(group_node, value_node, 2, folder, plural(len(members), "file"), True))
                 if group_node in expanded:
                     rows.extend(file_row(kind, confidence, fingerprint, path, paths[path], group_node, 3) for path in sorted(members))
@@ -339,13 +356,16 @@ def context_segments(line: ContextLine, revealed: bool, room: int) -> list[tuple
 class Explorer:
     """The state of the view and what each key does to it; render() returns the rows to draw."""
 
-    def __init__(self, hits: list[Found], folder: Path, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, hits: list[Found], folder: Path, clock: Callable[[], float] = time.monotonic, vault: dict[str, list[str]] | None = None) -> None:
         self.hits = hits
+        self.vault = vault
+        self.vault_filter = "all keys"
         self.folder = folder
         self.clock = clock
         self.tier_counts = {tier: len({hit.fingerprint for hit in hits if tier == "all" or hit.confidence == tier}) for tier in TIERS}
         self.tier = next((tier for tier in TIERS if self.tier_counts[tier]), "all")
         self.needle = ""
+        self.grouping = "type"
         self.editing_filter = False
         self.expanded: set[tuple[str, ...]] = set()
         self.selected = 0
@@ -353,12 +373,13 @@ class Explorer:
         self.file_view: FileView | None = None
         self.message = ""
         self.done = False
-        self._index_key: tuple[str, str] | None = None
+        self._index_key: tuple[str, str, str, str] | None = None
         self._index: Index | None = None
 
     def index(self) -> Index:
-        if self._index_key != (self.tier, self.needle) or self._index is None:
-            self._index_key, self._index = (self.tier, self.needle), build_index(self.hits, self.tier, self.needle)
+        key = (self.tier, self.needle, self.grouping, self.vault_filter)
+        if self._index_key != key or self._index is None:
+            self._index_key, self._index = key, build_index(self.hits, self.tier, self.needle, self.grouping, self.vault, self.vault_filter)
         return self._index
 
     def rows(self) -> list[Row]:
@@ -397,6 +418,14 @@ class Explorer:
             self.selected, self.expanded = 0, set()
         elif key == "/":
             self.editing_filter = True
+        elif key == "g":
+            self.grouping = GROUPINGS[(GROUPINGS.index(self.grouping) + 1) % len(GROUPINGS)]
+            self.selected, self.expanded = 0, set()
+        elif key == "v" and self.vault is None:
+            self.message = "Not checked against your vault. Reopen envh explore with the console running and answer y."
+        elif key == "v":
+            self.vault_filter = VAULT_FILTERS[(VAULT_FILTERS.index(self.vault_filter) + 1) % len(VAULT_FILTERS)]
+            self.selected, self.expanded = 0, set()
         elif key in ("q", "escape"):
             if key == "escape" and self.needle:
                 self.needle, self.selected = "", 0
@@ -430,7 +459,7 @@ class Explorer:
         _, kind, confidence, fingerprint, path = row.node
         value = self.index().first[fingerprint]
         lines, problem = read_context(path, fingerprint)
-        type_label = kind if self.tier != "all" else f"{kind} ({confidence})"
+        type_label = value.kind if self.tier != "all" else f"{value.kind} ({TIER_NAMES[confidence]})"
         self.file_view = FileView(path, value, type_label, lines, problem)
         self.jump(1, self.file_view, from_top=True)
 
@@ -486,14 +515,20 @@ class Explorer:
 
     def header(self, width: int, crumbs: list[str]) -> list[str]:
         title = [(" envh explore", "1;36"), *[(f" › {crumb}", "1") for crumb in crumbs]]
-        tabs: list[tuple[str, str]] = [(" ", "")]
+        tabs: list[tuple[str, str]] = [(" Real key? ", "2")]
         for tier in TIERS:
             label = f" {TIER_LABELS[tier]} {self.tier_counts[tier]:,} "
             tabs.append((label, "1;7" if tier == self.tier else "2"))
             tabs.append((" ", ""))
+        return [fit(title, width), fit(tabs, width), fit(self.state_line(), width)]
+
+    def state_line(self) -> list[tuple[str, str]]:
+        """How the list is grouped and filtered, under the tabs."""
+        state: list[tuple[str, str]] = [(f" Grouped by {self.grouping} (g)", "2")]
+        state.append((" · vault not checked" if self.vault is None else f" · {self.vault_filter} (v)", "2"))
         if self.editing_filter or self.needle:
-            tabs.append((f"  filter: {self.needle}" + ("▏" if self.editing_filter else ""), "36"))
-        return [fit(title, width), fit(tabs, width), ""]
+            state.append((f" · filter: {self.needle}" + ("▏" if self.editing_filter else ""), "36"))
+        return state
 
     def scan_label(self) -> str:
         try:
@@ -512,7 +547,7 @@ class Explorer:
             self.top = self.selected - visible + 1
         self.top = min(self.top, max(len(rows) - visible, 0))
         if not rows:
-            lines.append("  No keys here. Tab switches between High, Medium, Low and All; Esc clears the filter.")
+            lines.append("  No keys here. Tab switches between the Likely, Possible, Unlikely and Placeholder lists; Esc clears the filter.")
         for index in range(self.top, min(self.top + visible, len(rows))):
             row = rows[index]
             mark = ("▾ " if row.node in self.expanded else "▸ ") if row.expandable else "  "
@@ -523,9 +558,9 @@ class Explorer:
             lines.append(fit(segments, width))
         lines = (lines + [""] * height)[: height - 2]
         if self.editing_filter:
-            hint = "Type to filter by service, name or path · Enter keep · Esc clear"
+            hint = "Type to filter by service, name, place or path · Enter keep · Esc clear"
         else:
-            hint = "↑↓ move · → open · ← close · Enter view · Tab tier · / filter · q quit"
+            hint = "↑↓ move · → open · ← close · Enter view · Tab next list · g group · v vault · / filter · q quit"
         lines.append(fit([(f" {self.message}", "33")], width) if self.message else "")
         lines.append(fit([(f" {hint}", "2")], width))
         return lines
@@ -634,15 +669,63 @@ def interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def explore(folder: Path) -> int:
+def load_vault_matches(folder: Path) -> dict[str, list[str]] | None:
+    try:
+        return json.loads((folder / VAULT_FILE).read_text(encoding="utf-8"))["matches"]
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError) as error:
+        raise ClientError(f"can't read {shown_path(folder / VAULT_FILE)}: {error}; delete it to check again", 2) from error
+
+
+def match_against_vault(folder: Path, hits: list[Found], sock: Path) -> dict[str, list[str]]:
+    """Ask the broker which found values are stored keys (the console approves it), and save the answer, names and ids
+    only, beside the scan."""
+    with Connection(sock) as conn:
+        conn.send(op="match", ids=sorted({hit.fingerprint for hit in hits}), reason="envh explore: mark which keys envh scan found are in your vault")
+        reply = conn.recv_ok()
+        with waiting_notice(reply, None):
+            reply = conn.recv_ok()
+    matches: dict[str, list[str]] = reply.get("matches") or {}
+    with os.fdopen(os.open(folder / VAULT_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
+        json.dump({"matches": matches, "checked": datetime.now().isoformat(timespec="seconds")}, handle, indent=2)
+    return matches
+
+
+def vault_for(folder: Path, hits: list[Found], sock: Path) -> dict[str, list[str]] | None:
+    """The saved vault matches, or a fresh check if the person agrees; None when the scan stays unchecked."""
+    saved = load_vault_matches(folder)
+    if saved is not None:
+        return saved
+    print("")
+    print("Your envh vault can identify which of the scanned keys are actually yours.")
+    print('The explorer then marks each of them "in your vault as NAME".')
+    print("Only a short fingerprint of each key is sent, never the key itself.")
+    print("You approve the check once, on the envh console.")
+    print("")
+    answer = input("Check these keys against your vault? [Y/n] ").strip().lower()
+    if answer in ("n", "no"):
+        return None
+    try:
+        matches = match_against_vault(folder, hits, sock)
+    except ClientError as error:
+        print(f"Not checked against your vault: {error}", file=sys.stderr)
+        return None
+    stored = len({name for names in matches.values() for name in names})
+    print(f"{plural(len(matches), 'found key')} {'is' if len(matches) == 1 else 'are'} in your vault ({plural(stored, 'stored key')}).")
+    return matches
+
+
+def explore(folder: Path, sock: Path) -> int:
     if not interactive():
         raise ClientError("envh explore is an interactive view; run it in a terminal", 2)
     print(f"Opening the scan in {shown_path(folder)}…", flush=True)
     hits = load_scan(folder)
+    vault = vault_for(folder, hits, sock)
     with full_screen(sys.stdin.fileno()):
-        Explorer(hits, folder).run(Terminal(sys.stdin.fileno()))
+        Explorer(hits, folder, vault=vault).run(Terminal(sys.stdin.fileno()))
     return 0
 
 
-def main(folder: str | None) -> int:
-    return explore(Path(folder).expanduser().absolute() if folder else newest_scan(saved_files_root() / SCANS))
+def main(folder: str | None, sock: Path) -> int:
+    return explore(Path(folder).expanduser().absolute() if folder else newest_scan(saved_files_root() / SCANS), sock)

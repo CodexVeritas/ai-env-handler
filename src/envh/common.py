@@ -26,6 +26,11 @@ def peek(value: str) -> str:
     return f"{value[:shown]}…{value[-shown:]}" if shown else "…"
 
 
+def value_id(value: str) -> str:
+    """Eight hex characters of the value's SHA-256, as envh scan records a value; the console's id is the first six."""
+    return hashlib.sha256(value.encode()).hexdigest()[:8]
+
+
 def fingerprint(value: str) -> str:
     digest = hashlib.sha256(value.encode()).hexdigest()[:6]
     return f"{peek(value)} ({len(value)} chars, id {digest})"

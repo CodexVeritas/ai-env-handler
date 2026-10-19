@@ -1,4 +1,5 @@
 import fcntl
+import json
 import os
 import re
 import select
@@ -13,13 +14,14 @@ from pathlib import Path
 import pytest
 
 from envh.client.transport import ClientError
-from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, newest_scan, split_keys
+from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, load_vault_matches, newest_scan, split_keys
 from envh.tools.scanner import scan_paths, save_results, shown_value
+from tests.conftest import HEX, random_text
 
 ROOT = Path(__file__).resolve().parents[1]
-OPENROUTER = "sk-or-v1-" + "0123456789abcdef" * 4
-ANTHROPIC = "sk-ant-api03-" + "Zz9yY8xX7wW6vV5u" * 3
-FRED = "3f2a9c8b7d6e5f4a3b2c1d0e9f8a7b6c"
+OPENROUTER = "sk-or-v1-" + random_text("openrouter", 64, HEX)
+ANTHROPIC = "sk-ant-api03-" + random_text("anthropic", 48)
+FRED = random_text("fred", 32, HEX)
 
 
 class Clock:
@@ -66,7 +68,7 @@ def test_the_tree_opens_type_then_key_then_file(tmp_path: Path) -> None:
     folder = saved_scan(tmp_path, {"bot/.env": f"OPENROUTER_API_KEY={OPENROUTER}\n", "notes.md": f"{ANTHROPIC}\n{OPENROUTER}\n"})
     explorer = Explorer(load_scan(folder), folder)
     rows = screen(explorer)
-    assert "High 2" in rows[1] and any(row.strip().startswith("› ▸ openrouter") and "→ shows its keys" in row for row in rows)
+    assert "Real key?  Likely 2" in rows[1] and any(row.strip().startswith("› ▸ openrouter") and "→ shows its keys" in row for row in rows)
     press(explorer, "enter")
     rows = "\n".join(screen(explorer))
     assert f"{shown(OPENROUTER)} ({len(OPENROUTER)} chars" in rows and "2 files" in rows
@@ -83,7 +85,7 @@ def test_a_key_in_many_files_groups_them_by_folder(tmp_path: Path, monkeypatch: 
     press(explorer, "right")
     labels = [row.label for row in explorer.rows()]
     assert labels[2:] == ["~/project/editor/history", "~/project/bot/.env"]
-    choose(explorer, "group")
+    choose(explorer, "folder")
     assert any("→ shows these files" in row for row in screen(explorer))
     press(explorer, "right")
     assert sum("history/" in row.label for row in explorer.rows()) == 8
@@ -95,8 +97,8 @@ def test_tab_switches_tiers_and_the_filter_narrows(tmp_path: Path) -> None:
     assert [row.label for row in explorer.rows()] == ["openrouter"]
     press(explorer, "tab")
     assert [row.label for row in explorer.rows()] == ["fred"]
-    press(explorer, "tab", "tab", "/", *"notes", "enter")
-    assert [row.label for row in explorer.rows()] == ["openrouter"] and "filter: notes" in screen(explorer)[1]
+    press(explorer, "tab", "tab", "tab", "/", *"notes", "enter")
+    assert [row.label for row in explorer.rows()] == ["openrouter"] and "filter: notes" in screen(explorer)[2]
 
 
 def test_the_file_view_hides_the_key_until_asked_and_hides_it_again(tmp_path: Path) -> None:
@@ -123,7 +125,7 @@ def test_a_long_line_starts_near_the_key_and_other_keys_stay_hidden(tmp_path: Pa
     open_first_file(explorer)
     rows = screen(explorer, width=100)
     [key_row] = [row for row in rows if "│" in row and "…" in row]
-    assert "sk-ant-api03-Zz…vV5u" in key_row
+    assert f"sk-ant-{ANTHROPIC[7:15]}…{ANTHROPIC[-4:]}" in key_row
     assert ANTHROPIC not in key_row and OPENROUTER not in key_row and len(key_row) <= 100
 
 
@@ -162,7 +164,7 @@ def test_the_newest_scan_is_opened_by_default_and_old_ones_are_refused(tmp_path:
 
 def test_explore_needs_a_terminal(tmp_path: Path) -> None:
     with pytest.raises(ClientError, match="run it in a terminal"):
-        explore(saved_scan(tmp_path, {".env": f"{OPENROUTER}\n"}))
+        explore(saved_scan(tmp_path, {".env": f"{OPENROUTER}\n"}), tmp_path / "ctl.sock")
 
 
 ROW_WRITE = re.compile(r"\x1b\[(\d+);1H\x1b\[2K")
@@ -196,6 +198,8 @@ def test_the_real_view_on_a_terminal_shows_the_key_only_on_request(tmp_path: Pat
         raise AssertionError(f"{text!r} never appeared")
 
     try:
+        wait_for("against your vault? [Y/n]")
+        os.write(master, b"n\r")
         wait_for("Enter view")
         for keys, then in ((b"\r", "1 key in 1 file"), (b"\x1b[B\x1b[C", "1 file"), (b"\x1b[B\r", "s show the key")):
             os.write(master, keys)
@@ -221,3 +225,34 @@ def test_the_real_view_on_a_terminal_shows_the_key_only_on_request(tmp_path: Pat
         if process.poll() is None:
             process.kill()
         os.close(master)
+
+
+def test_g_groups_by_place(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"app/.env": f"{OPENROUTER}\n", "app/README.md": f"{ANTHROPIC}\n{OPENROUTER}\n"})
+    explorer = Explorer(load_scan(folder), folder)
+    press(explorer, "g")
+    assert [row.label for row in explorer.rows()] == [".env files", "docs and notes"] and "Grouped by place" in screen(explorer)[2]
+    press(explorer, "down", "right")
+    assert sorted(row.label.split()[0] for row in explorer.rows() if row.node[0] == "value") == ["anthropic", "openrouter"]
+
+
+def test_keys_in_the_vault_are_named_and_v_filters_them(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {"a/.env": f"{OPENROUTER}\n", "b/notes.md": f"{ANTHROPIC}\n"})
+    hits = load_scan(folder)
+    stored = next(hit.fingerprint for hit in hits if hit.kind == "openrouter")
+    (folder / "vault.json").write_text(json.dumps({"matches": {stored: ["TEAM_OPENROUTER_KEY"]}}))
+    explorer = Explorer(hits, folder, vault=load_vault_matches(folder))
+    press(explorer, "v")
+    assert [row.label for row in explorer.rows()] == ["openrouter"] and "in your vault (v)" in screen(explorer)[2]
+    press(explorer, "right")
+    assert any("in your vault as TEAM_OPENROUTER_KEY" in row.label for row in explorer.rows())
+    press(explorer, "v")
+    assert [row.label for row in explorer.rows()] == ["anthropic"]
+    assert load_vault_matches(tmp_path) is None
+
+
+def test_v_without_a_vault_check_says_how_to_get_one(tmp_path: Path) -> None:
+    folder = saved_scan(tmp_path, {".env": f"{OPENROUTER}\n"})
+    explorer = Explorer(load_scan(folder), folder)
+    press(explorer, "v")
+    assert "Not checked against your vault" in screen(explorer)[-2] and "vault not checked" in screen(explorer)[2]

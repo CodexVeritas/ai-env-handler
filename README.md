@@ -205,21 +205,26 @@ envh scan ~/code ~/Downloads   # specific places; add --json for machine-readabl
 envh scan --out ~/Desktop      # save the results somewhere else
 ```
 
-For every hit it records the file, the line, what kind of key it looks like and how sure it is, the length, an id, and the first and last few characters, as the console shows them (fewer for shorter values, none under 12 characters), never the value. The same id means the same value, and its first six characters match the id the console shows for a stored key, so you can tell which vault key a stray copy is. Exit code 1 means something was found. While it runs, a progress bar shows how much it has read and about how long is left.
+For every hit it records the file, the line, what kind of key it looks like and how likely it is to be a real key, the length, an id, and the first and last few characters, as the console shows them (fewer for shorter values, none under 12 characters), never the value. The same id means the same value, and its first six characters match the id the console shows for a stored key, so you can tell which vault key a stray copy is. Exit code 1 means something was found. While it runs, a progress bar shows how much it has read and about how long is left.
 
-Each hit gets a confidence:
-- **High:** the value has a provider's distinctive format, such as `sk-or-v1-...` or `AIza...`.
-- **Medium:** the value is assigned to a credential-style name, such as `EXA_API_KEY=...`, `client_secret: ...` or `DB_PASSWORD=...`. The service is taken from the name when it mentions one.
-- **Low:** the value is assigned to some other name holding KEY, TOKEN, SECRET or PASS, such as `cache_key` or `prompt_tokens`. Mostly not keys.
+Each hit says how likely it is to be a real key:
+- **Likely key:** the value has a provider's distinctive format, such as `sk-or-v1-...` or `AIza...`.
+- **Possible key:** the value is assigned to a key-like name, such as `EXA_API_KEY=...`, `client_secret: ...` or `DB_PASSWORD=...`. The service is taken from the name when it mentions one.
+- **Unlikely key:** the value is assigned to some other name holding KEY, TOKEN, SECRET or PASS, such as `cache_key` or `prompt_tokens`. Mostly not keys.
+- **Placeholder:** the value looks like a fake or default one from docs or tests: a counting run such as `123456789`, a short unit repeated, or a word such as `example` or `your` (the format's fixed prefix is left out of the check); or it is a database URL with a default or local login, such as `postgres://postgres:postgres@localhost`.
+
+A value that is just a name, such as `api_key = self.settings.openai_api_key` or `OPENAI_API_KEY: OPENAI_API_KEY_PROD`, is code reading a key, so it is not reported. Each hit also gets a place: where it is stored (editor history, trash, envh backups, docker, credential files that apps sign in with, agent transcripts, agent app data, worktree copies) or else what kind of file it is (logs, tests, docs and notes, `.env` files, data and output, code and config, other). Only your home's own `~/.claude`, `~/.cursor` and `~/.codex` count as agent folders; a project's `.claude/worktrees` is a worktree copy.
 
 A home-folder scan can find thousands of hits, so the terminal gets a short summary and the full results go to a new dated folder. At a terminal the scan first asks where; Enter accepts `~/envh-backups-and-scans/scans/` (`--out` chooses without asking):
-- `report.txt`: a summary at the top (counts by type and confidence, where the keys are), then each distinct value with every file it is in, then every hit by file, then a short recap at the bottom.
+- `report.txt`: a summary at the top (counts by type and confidence, a table by place, where the keys are), then each distinct value with every file it is in, then every hit by file, then a short recap at the bottom.
 - `files.txt`: just the paths of the files with hits, one per line.
 - `hits.json`: the same data `--json` prints.
 
 These hold no values, so unlike the import backups they are safe to keep. Later scans skip them.
 
-**Browse them** with `envh explore` (the newest scan, or `envh explore <folder>`); a scan at a terminal also offers to open it when it finishes. Arrow through each type of key, each key, and the files it is in, grouped by folder when there are many. Enter on a file shows the lines around each copy, read from the file at that moment, with every key in them shown as its first and last few characters; `s` shows the full key until it hides itself after 30 seconds. Tab switches between High, Medium, Low and All, and `/` filters by service, name or path. The view runs on the terminal's alternate screen, so nothing it shows stays in your scrollback, and it refuses to run without a terminal.
+**Browse them** with `envh explore` (the newest scan, or `envh explore <folder>`); a scan at a terminal also offers to open it when it finishes. Arrow through each type of key, each key, and the files it is in, grouped by folder when there are many. Enter on a file shows the lines around each copy, read from the file at that moment, with every key in them shown as its first and last few characters; `s` shows the full key until it hides itself after 30 seconds. Tab switches between the Likely, Possible, Unlikely and Placeholder lists and All, `g` groups by place instead of type (all the editor history copies together, say), and `/` filters by service, name, place or path. The view runs on the terminal's alternate screen, so nothing it shows stays in your scrollback, and it refuses to run without a terminal.
+
+**Which ones are yours.** Before it opens a scan, `envh explore` offers to check which found keys are in your vault. The scan's ids (8 characters of each value's SHA-256) go to the broker, and once you approve the match request on the console, it answers with the names of the stored keys among them, never a value. Keys then show "in your vault as NAME", and `v` shows only those, or only the ones that aren't. The answer is saved beside the scan as `vault.json`, names and ids only. The console asks because the answer confirms a guessed value: an agent could check guesses at a short password this way, so approve only a scan you ran.
 
 To stay fast it skips binaries, files over 25 MB (`--max-size`), and folders of installed code and caches that hold none of your keys but can hold millions of files:
 - **Installed packages and environments:** `.venv`, `venv`, `node_modules`, `site-packages`, conda, uv's Pythons, pipx, `.cargo`, `go/pkg` and the like.
