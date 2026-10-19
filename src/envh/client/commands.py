@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from envh.tools.importer import run_wizard
+from envh.tools.explorer import explore, interactive, main as explore_main
 from envh.tools.scanner import main as scan_main, skipped_folders_help
 from envh.platform import socket_path as default_socket_path
 from envh.client.transport import EXIT_USAGE, ClientError, Connection, waiting_notice
@@ -246,7 +247,15 @@ def cmd_import(args: argparse.Namespace, sock: Path) -> int:
 
 
 def cmd_scan(args: argparse.Namespace, sock: Path) -> int:
-    return scan_main(args)
+    exit_code, report_dir = scan_main(args)
+    if report_dir is not None and exit_code == 1 and not args.json and interactive():
+        if input("\nBrowse them now: each key, its files and the lines around it? [Y/n] ").strip().lower() not in ("n", "no"):
+            explore(report_dir)
+    return exit_code
+
+
+def cmd_explore(args: argparse.Namespace, sock: Path) -> int:
+    return explore_main(args.folder)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -303,8 +312,13 @@ def build_parser() -> argparse.ArgumentParser:
     scan = commands.add_parser("scan", help="find where key-shaped strings live (paths and fingerprints, never values)", epilog=skipped_folders_help())
     scan.add_argument("paths", nargs="*", help="directories or files to scan (default: your home directory)")
     scan.add_argument("--json", action="store_true")
+    scan.add_argument("--out", metavar="FOLDER", help="save the results in a new dated folder inside FOLDER (default ~/envh-backups-and-scans/scans; asked at a terminal)")
     scan.add_argument("--max-size", type=int, default=25, help="skip files larger than this many MB (default 25)")
     scan.set_defaults(func=cmd_scan)
+
+    explorer = commands.add_parser("explore", help="browse a saved scan: each key, its files and the lines around it")
+    explorer.add_argument("folder", nargs="?", help="a folder envh scan saved (default: the newest in ~/envh-backups-and-scans/scans)")
+    explorer.set_defaults(func=cmd_explore)
     return parser
 
 

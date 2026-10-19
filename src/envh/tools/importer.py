@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from envh.common import PRESET_NAME, SECRET_NAME, fingerprint
 from envh.client.transport import ClientError, Connection, waiting_notice
+from envh.tools.saved_files import IMPORT_BACKUPS, ask_where, new_dated_folder, saved_files_root, say_where_saved, styled
 
 ASSIGNMENT = re.compile(r"^(?P<indent>\s*)(?P<comment>#\s*)?(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*)$")
 SECRET_WORDS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "AUTH", "CREDENTIAL", "API", "PRIVATE", "DSN")
@@ -419,16 +420,11 @@ def build_plan(files: list[ParsedFile], decisions: list[SecretDecision], presets
     return plan
 
 
-def default_backup_root() -> Path:
-    state_home = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(state_home) / "envh" / "import-backups"
-
-
 def backup_originals(paths: list[Path], backup_root: Path, stamp: str) -> Path:
     """Copy each file to backup_root/stamp/<its absolute path>, in a folder only its owner can open."""
     backup_dir = backup_root / stamp
     try:
-        backup_dir.mkdir(mode=0o700, parents=True)
+        new_dated_folder(backup_root, stamp)
         for path in paths:
             target = backup_dir / Path(os.path.abspath(path)).relative_to("/")
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -439,7 +435,7 @@ def backup_originals(paths: list[Path], backup_root: Path, stamp: str) -> Path:
     return backup_dir
 
 
-def show_plan(plan: ImportPlan, files: list[ParsedFile], backup_root: Path, say: Callable[[str], None]) -> None:
+def show_plan(plan: ImportPlan, files: list[ParsedFile], say: Callable[[str], None]) -> None:
     say("Step 5 of 6: the change plan (nothing has been written yet)")
     say("  secrets to store:")
     for name in sorted(plan.secrets):
@@ -458,7 +454,7 @@ def show_plan(plan: ImportPlan, files: list[ParsedFile], backup_root: Path, say:
     say("  keys already in the vault: the same value is reused under its stored name; a name the vault uses for a")
     say("  different value gets a number (_2) instead, so nothing stored is overwritten. The console shows the final names.")
     if plan.rewrites:
-        say(f"  backup: before rewriting, each original file is copied to a new folder under {backup_root}")
+        say("  backup: before rewriting, each original file is copied to a new dated folder; you choose where next")
 
 
 def confirm_rewrites(plan: ImportPlan, ask: Ask) -> None:
@@ -489,7 +485,7 @@ def write_rewrites(plan: ImportPlan, say: Callable[[str], None]) -> None:
         temp_path.write_text(new_text, encoding="utf-8")
         os.chmod(temp_path, mode)
         os.replace(temp_path, target)
-        say(f"  rewrote {path}" + (f" (symlink to {target})" if path.is_symlink() else ""))
+        say(f"  {styled('32', '✓')} Rewrote {path}" + (f" (a symlink to {target})" if path.is_symlink() else ""))
 
 
 def apply_plan(plan: ImportPlan, sock: Path, backup_root: Path, say: Callable[[str], None]) -> None:
@@ -500,24 +496,24 @@ def apply_plan(plan: ImportPlan, sock: Path, backup_root: Path, say: Callable[[s
         with waiting_notice(reply, None):
             reply = conn.recv_ok()
     renames = reply.get("renames") or {}
-    say(f"  stored: {len(reply.get('added', []))} new; presets: {', '.join(reply.get('presets', [])) or '(none)'}")
+    say(f"  {styled('32', '✓')} Stored {len(reply.get('added', []))} new keys; presets: {', '.join(reply.get('presets', [])) or '(none)'}")
     for sent, final in sorted(renames.items()):
-        say(f"  {sent} is in the vault as {final}")
+        say(f"  · {sent} was already in the vault as {final}")
     apply_renames(plan, renames)
     backup_dir = None
     if plan.rewrites:
         backup_dir = backup_originals(list(plan.rewrites), backup_root, datetime.now().strftime("%Y%m%d-%H%M%S"))
-        say(f"  copied the original files to {backup_dir}")
     write_rewrites(plan, say)
     for path in plan.skipped_files:
-        say(f"  left untouched: {path} (its secrets are now ALSO in the vault; remove them by hand when ready)")
+        say(f"  {styled('33', '!')} Left {path} as it was; its keys are now also in the vault, so remove them from it by hand")
+    say("")
     if plan.presets:
         first = next(iter(plan.presets))
-        say(f"  next: envh session start {first} --minutes 60 --reason \"...\"   then   envh run --session <id> --reason \"...\" -- <command>")
-    say("  then: envh scan ~   finds leftover copies of these keys (shell history, transcripts, notebooks, other repos)")
+        say(f"  Next: envh session start {first} --minutes 60 --reason \"...\"")
+        say("        then envh run --session <id> --reason \"...\" -- <command>")
+    say("  Then: envh scan finds other copies of these keys, in shell history, transcripts and other repos.")
     if backup_dir:
-        say(f"  backup: {backup_dir} holds the old values in plaintext, readable by anything running as you, like the original files were")
-        say(f"          once the rewritten files work, delete it:  rm -r {backup_dir}")
+        say_where_saved(backup_dir, True, say)
 
 
 def run_wizard(args: argparse.Namespace, sock: Path) -> int:
@@ -536,12 +532,14 @@ def run_wizard(args: argparse.Namespace, sock: Path) -> int:
     review_names(decisions, ask, say)
     presets = review_presets(build_presets(files, decisions), files, ask, say)
     plan = build_plan(files, decisions, presets)
-    backup_root = default_backup_root()
-    show_plan(plan, files, backup_root, say)
+    show_plan(plan, files, say)
     if args.dry_run:
         say("dry run: stopping here")
         return 0
     confirm_rewrites(plan, ask)
+    backup_root = saved_files_root() / IMPORT_BACKUPS
+    if plan.rewrites:
+        backup_root = ask_where("the backups of the original files", backup_root, ask)
     if ask("Proceed? The broker will ask you to confirm on its console too. [y/N]: ").strip().lower() not in ("y", "yes"):
         say("aborted; nothing written")
         return 1
