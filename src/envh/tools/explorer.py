@@ -456,6 +456,8 @@ class Explorer:
         elif key in ("tab", "shift_tab"):
             self.tier = self.tiers[(self.tiers.index(self.tier) + (1 if key == "tab" else -1)) % len(self.tiers)]
             self.selected, self.expanded = 0, set()
+            if self.tier == "yours":
+                self.vault_filter = "all keys"
         elif key == "/":
             self.editing_filter = True
         elif key == "g":
@@ -463,6 +465,8 @@ class Explorer:
             self.selected, self.expanded = 0, set()
         elif key == "x" and row is not None:
             self.confirm = self.confirm_for(row)
+        elif key == "v" and self.tier == "yours":
+            self.message = "Yours shows only your keys already. Tab to another list to filter it by vault."
         elif key == "v" and self.vault is None:
             self.message = "Not checked against your vault. Reopen envh explore with the console running and answer y."
         elif key == "v":
@@ -679,7 +683,8 @@ class Explorer:
         """How the list is grouped and filtered, under the tabs."""
         state: list[tuple[str, str]] = [(" Start here: exact copies of your vault's keys, the safest to replace. ", "1;32")] if self.tier == "yours" else []
         state.append((f" Grouped by {self.grouping} (g)", "2"))
-        state.append((" · vault not checked" if self.vault is None else f" · {self.vault_filter} (v)", "2"))
+        if self.tier != "yours":
+            state.append((" · vault not checked" if self.vault is None else f" · {self.vault_filter} (v)", "2"))
         if self.editing_filter or self.needle:
             state.append((f" · filter: {self.needle}" + ("▏" if self.editing_filter else ""), "36"))
         return state
@@ -700,7 +705,9 @@ class Explorer:
         elif self.selected >= self.top + visible:
             self.top = self.selected - visible + 1
         self.top = min(self.top, max(len(rows) - visible, 0))
-        if not rows:
+        if not rows and self.tier == "yours" and not self.needle:
+            lines.append("  Every copy of your keys is replaced. Tab shows the other lists.")
+        elif not rows:
             lines.append("  No keys here. Tab switches between the lists; Esc clears the filter.")
         for index in range(self.top, min(self.top + visible, len(rows))):
             row = rows[index]

@@ -247,12 +247,16 @@ def test_keys_in_the_vault_open_first_under_yours_and_v_filters_the_other_lists(
     assert "Start here: exact copies of your vault's keys, the safest to replace." in rows[2]
     assert [row.label for row in explorer.rows()] == ["All your keys", "openrouter"]
     assert "Yours" not in screen(Explorer(hits, folder))[1]
+    press(explorer, "v")
+    assert explorer.message.startswith("Yours shows only your keys already") and explorer.vault_filter == "all keys"
     press(explorer, "tab", "v")
     assert [row.label for row in explorer.rows()] == ["openrouter"] and "in your vault (v)" in screen(explorer)[2]
     press(explorer, "right")
     assert any("in your vault as TEAM_OPENROUTER_KEY" in row.label for row in explorer.rows())
     press(explorer, "v")
     assert [row.label for row in explorer.rows()] == ["anthropic"]
+    press(explorer, "shift_tab")
+    assert explorer.tier == "yours" and explorer.vault_filter == "all keys" and len(explorer.rows()) == 2
     assert load_vault_matches(tmp_path) is None
 
 
@@ -302,6 +306,7 @@ def test_x_on_all_your_keys_replaces_every_copy_of_them_and_nothing_else(tmp_pat
     assert OPENROUTER not in (project / "a" / ".env").read_text() and FRED not in (project / "a" / ".env").read_text()
     assert OPENROUTER not in (project / "b" / "notes.md").read_text() and ANTHROPIC in (project / "b" / "notes.md").read_text()
     assert explorer.tier_counts["yours"] == 0 and explorer.rows() == []
+    assert "Every copy of your keys is replaced. Tab shows the other lists." in screen(explorer)[3]
 
 
 def test_the_replace_summary_warns_about_keys_outside_the_vault_and_low_values_in_code(tmp_path: Path) -> None:
