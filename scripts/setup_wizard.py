@@ -47,6 +47,7 @@ INSTALL_PREFIX = Path("/opt/envh")
 INSTALL_RECORD = INSTALL_PREFIX / "installed-from"
 ENVH_BIN = Path("/usr/local/bin/envh")
 SAVED_FILES = Path.home() / "envh-backups-and-scans"
+SCANS_FOLDER = SAVED_FILES / "scans"
 ROOT_FLAG = "--install-as-root"
 PREFLIGHT_EXIT = 3
 SUDO = "/usr/bin/sudo"
@@ -84,8 +85,22 @@ Names keys after the project, like MYAPP_OPENAI_API_KEY.
 Import more projects later with: envh import <folder>"""
 SCAN_MORE = """Checks shell history, Claude Code transcripts, notebooks and other repos.
 Skips installed packages, caches and browser profiles; the report lists what it skipped.
-Saves where each copy is, never the key itself, into ~/envh-backups-and-scans unless you pick another folder.
+Saves where each copy is, never the key itself. Then the explorer opens so you can go through it.
 Scan somewhere else with: envh scan <folder>"""
+SAVE_MORE = """Each scan gets its own dated folder inside this one: report.txt, files.txt and hits.json.
+They hold where keys are, never the keys, so they are safe to keep."""
+EXPLORER_MORE = """The explorer reads each file when you open it, so it always shows the file as it is now.
+It runs full screen; q closes it and finishes setup. Reopen it any time with: envh explore
+Details: README, "Find leftover copies\""""
+EXPLORER_PANEL = [
+    "Lists each key the scan found, the files it is in, and the lines",
+    "around each copy. Keys stay hidden unless you press s.",
+    "",
+    "  Tab    switch list: Likely, Possible, Unlikely keys, Placeholders",
+    "  ↑↓ →←  move and open            g   group by place",
+    "  v      only keys in your vault  x   replace every copy under a row",
+    "  q      close it and finish setup",
+]
 
 
 class Quit(Exception):
@@ -127,6 +142,15 @@ def warn(text: str) -> None:
 
 def note(text: str) -> None:
     line(dim("· " + text))
+
+
+def panel(title: str, rows: list[str]) -> None:
+    """A rounded box for the one thing on screen to act on."""
+    inner = max(len(title) + 2, *(len(row) for row in rows))
+    say("  " + dim("╭─ ") + bold(title) + dim(" " + "─" * (inner - len(title) - 1) + "╮"))
+    for row in rows:
+        say("  " + dim("│") + " " + row.ljust(inner) + " " + dim("│"))
+    say("  " + dim("╰" + "─" * (inner + 2) + "╯"))
 
 
 def detail(text: str) -> None:
@@ -482,20 +506,33 @@ def step_scan() -> Outcome:
     if not ENVH_BIN.exists():
         note("Skipped: envh isn't installed.")
         return Outcome(False, "skipped")
-    line("Looks for copies of keys left outside .env files. Read-only; can take a few minutes.")
+    line("Looks for copies of keys left outside .env files. Read-only; about 15 minutes for a full home folder.")
     if not ask("Scan your home folder?", SCAN_MORE):
         return Outcome(False, "skipped")
+    answer = ask_line(f"Save the results in {tilde(SCANS_FOLDER)}? Enter to accept, or type another folder:", SAVE_MORE)
+    folder = Path(answer).expanduser().absolute() if answer else SCANS_FOLDER
     say()
-    detail("Running: envh scan")
-    returncode = subprocess.run([str(ENVH_BIN), "scan"]).returncode
+    detail(f"Running: envh scan --out {tilde(folder)} --no-explore")
+    returncode = subprocess.run([str(ENVH_BIN), "scan", "--out", str(folder), "--no-explore"]).returncode
     if returncode == 0:
         ok("No stray keys found")
         return Outcome(True, "nothing found")
-    if returncode == 1:
-        say()
-        warn("Delete the copies report.txt lists, or rotate those keys.")
-        return Outcome(True, "found copies; see report.txt")
-    return Outcome(False, f"failed (exit code {returncode})")
+    if returncode != 1:
+        return Outcome(False, f"failed (exit code {returncode})")
+    say()
+    ok("Scan finished. Next, go through what it found.")
+    say()
+    panel("The explorer", EXPLORER_PANEL)
+    if ask_line("Press Enter to open the explorer (s to skip).", EXPLORER_MORE).lower() == "s":
+        note("Skipped. Open it any time with: envh explore")
+        return Outcome(True, "found keys; explorer skipped")
+    returncode = subprocess.run([str(ENVH_BIN), "explore", str(folder)]).returncode
+    say()
+    if returncode != 0:
+        warn(f"The explorer stopped (exit code {returncode}). Open it again with: envh explore")
+        return Outcome(True, "found keys; explorer stopped")
+    ok("Explorer closed. Reopen it any time with: envh explore")
+    return Outcome(True, "found keys; reviewed in the explorer")
 
 
 class Change(NamedTuple):
@@ -748,9 +785,9 @@ STEPS: list[tuple[str, Callable[[], Outcome]]] = [
     ("Start the console", step_console),
     ("Import keys", step_import),
     ("Editor .env history", step_editor_history),
-    ("Find stray keys", step_scan),
     ("Connect Claude Code", step_claude_code),
     ("Connect Cursor", step_cursor),
+    ("Find stray keys", step_scan),
 ]
 
 
@@ -779,6 +816,8 @@ def print_summary(results: list[tuple[str, Outcome]]) -> None:
         say()
     if SAVED_FILES.exists():
         line(dim("Backups and scan results are in ~/envh-backups-and-scans; its README.txt says what each holds."))
+    if any(SCANS_FOLDER.glob("*/hits.json")):
+        line(dim("Go through the scan results again any time: envh explore"))
     line(dim("Rerun this any time to update envh or import more projects."))
     line(dim("To see, rename or describe your keys, type /keys in the console."))
     say()

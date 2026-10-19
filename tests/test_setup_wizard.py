@@ -342,3 +342,44 @@ def test_the_system_checks_load_from_the_staged_source(tmp_path: Path, monkeypat
     staged_platform = tmp_path / "staging" / "src" / "envh" / "platform.py"
     staged_platform.write_text(staged_platform.read_text() + "\n\ndef preflight_problems(invoking_user):\n    return ['staged copy checked ' + invoking_user]\n")
     assert wizard.system_problems(tmp_path / "staging" / "src", "nobody") == ["staged copy checked nobody"]
+
+
+def fake_envh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scan_exit: int) -> list[list[str]]:
+    envh = tmp_path / "envh"
+    envh.write_text("")
+    monkeypatch.setattr(wizard, "ENVH_BIN", envh)
+    monkeypatch.setattr(wizard, "SCANS_FOLDER", tmp_path / "scans")
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append([Path(argv[0]).name, *argv[1:]])
+        return subprocess.CompletedProcess(argv, scan_exit if argv[1] == "scan" else 0)
+
+    monkeypatch.setattr(wizard.subprocess, "run", run)
+    return calls
+
+
+def test_a_scan_that_finds_keys_opens_the_explorer_in_the_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls = fake_envh(tmp_path, monkeypatch, scan_exit=1)
+    answer_inputs(monkeypatch, "", "", "")
+    assert wizard.step_scan() == wizard.Outcome(True, "found keys; reviewed in the explorer")
+    scans = str(tmp_path / "scans")
+    assert calls == [["envh", "scan", "--out", scans, "--no-explore"], ["envh", "explore", scans]]
+    shown = capsys.readouterr().out
+    assert "╭─ The explorer" in shown and "q      close it and finish setup" in shown and "Reopen it any time with: envh explore" in shown
+
+
+def test_the_scan_is_the_last_step_so_setup_ends_in_the_explorer() -> None:
+    assert wizard.STEPS[-1] == ("Find stray keys", wizard.step_scan)
+
+
+def test_the_explorer_can_be_skipped_and_a_clean_scan_shows_no_panel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    calls = fake_envh(tmp_path, monkeypatch, scan_exit=1)
+    answer_inputs(monkeypatch, "", str(tmp_path / "elsewhere"), "s")
+    assert wizard.step_scan() == wizard.Outcome(True, "found keys; explorer skipped")
+    assert calls == [["envh", "scan", "--out", str(tmp_path / "elsewhere"), "--no-explore"]]
+    assert "Open it any time with: envh explore" in capsys.readouterr().out
+    calls = fake_envh(tmp_path, monkeypatch, scan_exit=0)
+    answer_inputs(monkeypatch, "", "")
+    assert wizard.step_scan() == wizard.Outcome(True, "nothing found")
+    assert "The explorer" not in capsys.readouterr().out and len(calls) == 1

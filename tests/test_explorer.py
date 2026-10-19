@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from envh.client.transport import ClientError
-from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, load_vault_matches, newest_scan, split_keys
+from envh.tools.explorer import ANSI, REVEAL_SECONDS, Explorer, explore, load_scan, load_vault_matches, main, newest_scan, split_keys
 from envh.tools.scanner import scan_paths, save_results, shown_value
 from tests.conftest import HEX, random_text
 
@@ -294,6 +294,15 @@ def test_the_replace_summary_warns_about_keys_outside_the_vault_and_low_values_i
     choose(unchecked, "top")
     press(unchecked, "x")
     assert "Not checked against your vault" in "\n".join(screen(unchecked))
+
+
+def test_explore_given_a_folder_of_scans_opens_the_newest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = saved_scan(tmp_path, {".env": f"{OPENROUTER}\n"})
+    opened: list[Path] = []
+    monkeypatch.setattr("envh.tools.explorer.explore", lambda chosen, sock: opened.append(chosen) or 0)
+    main(str(folder.parent), tmp_path / "ctl.sock")
+    main(str(folder), tmp_path / "ctl.sock")
+    assert opened == [folder, folder]
 
 
 def test_all_shows_each_place_once_and_x_there_replaces_every_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

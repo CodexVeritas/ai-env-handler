@@ -248,7 +248,7 @@ def cmd_import(args: argparse.Namespace, sock: Path) -> int:
 
 def cmd_scan(args: argparse.Namespace, sock: Path) -> int:
     exit_code, report_dir = scan_main(args)
-    if report_dir is not None and exit_code == 1 and not args.json and interactive():
+    if report_dir is not None and exit_code == 1 and not args.json and not args.no_explore and interactive():
         if input("\nBrowse them now: each key, its files and the lines around it? [Y/n] ").strip().lower() not in ("n", "no"):
             explore(report_dir, sock)
     return exit_code
@@ -314,10 +314,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--json", action="store_true")
     scan.add_argument("--out", metavar="FOLDER", help="save the results in a new dated folder inside FOLDER (default ~/envh-backups-and-scans/scans; asked at a terminal)")
     scan.add_argument("--max-size", type=int, default=25, help="skip files larger than this many MB (default 25)")
+    scan.add_argument("--no-explore", action="store_true", help="don't offer to open envh explore when the scan finishes")
     scan.set_defaults(func=cmd_scan)
 
     explorer = commands.add_parser("explore", help="browse a saved scan: each key, its files and the lines around it")
-    explorer.add_argument("folder", nargs="?", help="a folder envh scan saved (default: the newest in ~/envh-backups-and-scans/scans)")
+    explorer.add_argument("folder", nargs="?", help="a folder envh scan saved, or one holding several (default: the newest in ~/envh-backups-and-scans/scans)")
     explorer.set_defaults(func=cmd_explore)
     return parser
 
