@@ -14,6 +14,8 @@ Open a **separate terminal window** (not a terminal pane inside an AI tool) and 
 sudo envh-console
 ```
 
+On RHEL, AlmaLinux, Rocky and openSUSE, sudo doesn't look in `/usr/local`, so run `sudo /usr/local/sbin/envh-console`.
+
 Or click the "envh console" launcher. Enter your sudo password, check the console phrase, enter the vault passphrase. If a window asks for the passphrase without showing the console phrase, close it: something is impersonating envh. Leave this window open; it is where you approve requests. Closing it ends all sessions.
 
 **Why it locks your terminal.** The helper chowns your terminal to the service user while the console runs and restores it afterwards. sudo may run the console on a pseudo-terminal of its own and pass on what you type (its `use_pty` setting), so the helper locks both that one and your window's. The console refuses to start while either is still yours.

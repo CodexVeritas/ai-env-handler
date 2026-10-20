@@ -40,6 +40,30 @@ def test_a_root_shell_without_sudo_is_refused_because_the_checks_need_the_accoun
     assert "from your own account" in capsys.readouterr().err
 
 
+def test_the_launcher_goes_under_usr_local_and_lets_the_desktop_pick_the_terminal(failing_checks: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(command, "SYSTEM_APPLICATIONS", tmp_path)
+    assert command.main("install", ["--dry-run", "--ignore-preflight"]) == 0
+    assert f'{command.DESKTOP_PATH}: the "envh console" app launcher' in capsys.readouterr().out
+    assert str(command.DESKTOP_PATH).startswith("/usr/local/share/applications/")
+    assert f"Exec=sudo {command.HELPER_PATH}\n" in command.DESKTOP_ENTRY and "Terminal=true\n" in command.DESKTOP_ENTRY
+    monkeypatch.setattr(command, "SYSTEM_APPLICATIONS", tmp_path / "missing")
+    assert command.main("install", ["--dry-run", "--ignore-preflight"]) == 0
+    assert "No app launcher: no desktop found" in capsys.readouterr().out
+
+
+def test_uninstall_removes_the_launcher_from_where_earlier_versions_put_it_and_skips_what_is_gone(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    legacy = tmp_path / "envh.desktop"
+    legacy.write_text("")
+    for name, path in (("HELPER_PATH", tmp_path / "missing-helper"), ("DESKTOP_PATH", tmp_path / "missing.desktop"), ("LEGACY_DESKTOP_PATH", legacy), ("ENVH_BIN", tmp_path / "missing-envh")):
+        monkeypatch.setattr(command, name, path)
+    monkeypatch.setattr(command.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(command.shutil, "rmtree", lambda path, ignore_errors: None)
+    assert command.main("uninstall", []) == 0
+    assert not legacy.exists()
+    output = capsys.readouterr().out
+    assert f"remove {legacy}" in output and "missing" not in output
+
+
 def test_a_dry_run_without_root_on_an_installed_system_explains_instead_of_crashing(failing_checks: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     command.DATA_DIR.mkdir(mode=0o700)
     monkeypatch.setattr(command.os, "access", lambda path, mode: False)

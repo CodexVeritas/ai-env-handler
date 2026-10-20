@@ -5,6 +5,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -494,3 +495,81 @@ def test_root_granting_groups_come_from_envh_platform_checks(monkeypatch: pytest
     monkeypatch.setattr(sys, "modules", dict(sys.modules))
     user = wizard.pwd.getpwuid(wizard.os.getuid()).pw_name
     assert wizard.root_granting_groups(user) == platform.root_granting_groups_of(user)
+
+
+class FakeKernel:
+    def __init__(self, tiocsti: bool | None, ptrace_scope: int | None) -> None:
+        self.tiocsti = tiocsti
+        self.ptrace_scope = ptrace_scope
+
+    def legacy_tiocsti_enabled(self) -> bool | None:
+        return self.tiocsti
+
+    def yama_ptrace_scope(self) -> int | None:
+        return self.ptrace_scope
+
+
+@pytest.mark.parametrize(
+    ("tiocsti", "ptrace_scope", "unsafe"),
+    [
+        (True, 0, ["dev.tty.legacy_tiocsti = 0", "kernel.yama.ptrace_scope = 1"]),
+        (False, 0, ["kernel.yama.ptrace_scope = 1"]),
+        (False, 1, []),
+        (False, 3, []),
+        (False, None, []),
+    ],
+)
+def test_only_the_kernel_settings_that_are_unsafe_are_changed(tiocsti: bool, ptrace_scope: int | None, unsafe: list[str]) -> None:
+    assert wizard.unsafe_kernel_settings(FakeKernel(tiocsti, ptrace_scope)) == unsafe
+
+
+def test_kernel_settings_change_only_when_asked_and_are_appended(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    kernel = FakeKernel(tiocsti=False, ptrace_scope=0)
+    monkeypatch.setattr(wizard, "load_platform", lambda source: kernel)
+    ran: list[tuple[list[str], str | None]] = []
+
+    def fake_run(command: list[str], input: str | None = None, **options: object) -> subprocess.CompletedProcess[str]:
+        ran.append((command, input))
+        if command[1:2] == [wizard.SYSCTL]:
+            kernel.ptrace_scope = 1
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(wizard.subprocess, "run", fake_run)
+    answer_inputs(monkeypatch, "")
+    assert wizard.step_kernel_settings() == wizard.Outcome(False, "kept")
+    assert ran == []
+    answer_inputs(monkeypatch, "?", "y")
+    assert wizard.step_kernel_settings() == wizard.Outcome(True, "changed")
+    assert ran == [
+        (["/usr/bin/sudo", "/usr/bin/tee", "-a", "/etc/sysctl.d/60-envh.conf"], "kernel.yama.ptrace_scope = 1\n"),
+        (["/usr/bin/sudo", "/usr/sbin/sysctl", "-p", "/etc/sysctl.d/60-envh.conf"], None),
+        (["/usr/bin/sudo", "-k"], None),
+    ]
+    assert "gdb -p" in capsys.readouterr().out
+
+
+def test_a_kernel_older_than_6_2_is_named_and_not_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wizard, "load_platform", lambda source: FakeKernel(tiocsti=None, ptrace_scope=1))
+    assert wizard.step_kernel_settings() == wizard.Outcome(False, "kernel older than 6.2")
+
+
+def test_a_supported_system_passes_and_each_unsupported_one_is_named(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(wizard, "SUDO", str(tmp_path))
+    monkeypatch.setattr(wizard, "SYSTEM_PYTHON", str(tmp_path))
+    monkeypatch.setattr(wizard.os, "confstr", lambda name: "glibc 2.39")
+    monkeypatch.setattr(wizard.os, "uname", lambda: SimpleNamespace(machine="x86_64"))
+    assert wizard.unsupported_system() is None
+    monkeypatch.setattr(wizard.os, "uname", lambda: SimpleNamespace(machine="riscv64"))
+    assert "this is glibc 2.39 on riscv64" in str(wizard.unsupported_system())
+
+    def musl(name: str) -> str:
+        raise ValueError("unrecognized configuration name")
+
+    monkeypatch.setattr(wizard.os, "confstr", musl)
+    monkeypatch.setattr(wizard.os, "uname", lambda: SimpleNamespace(machine="aarch64"))
+    assert "this is another C library on aarch64" in str(wizard.unsupported_system())
+    monkeypatch.setattr(wizard, "SUDO", str(tmp_path / "missing" / "sudo"))
+    assert wizard.unsupported_system() == f"envh's install needs {tmp_path / 'missing' / 'sudo'}, which this system doesn't have."
+    monkeypatch.setattr(wizard.sys, "version_info", (3, 9, 18))
+    assert str(wizard.unsupported_system()).startswith("The wizard needs Python 3.10 or newer")
+
