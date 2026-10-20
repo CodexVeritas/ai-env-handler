@@ -250,10 +250,11 @@ ALWAYS_LOOK = (
     ".netrc", ".npmrc", ".pypirc", ".gitconfig", ".git-credentials", ".profile", ".bashrc", ".zshrc", ".zshenv",
 )
 NOT_SCANNED_NOTE = (
-    "Not scanned: git object history (use `git log -p -S<prefix>` in a repo), binary databases such as browser profiles and VS Code",
-    "state (both can hold keys), encrypted stores such as the Claude desktop app's local environment, mounted drives outside the",
-    "paths given, and files over the size limit other than transcripts and logs, which are read in parts at any size (each file",
-    "skipped for its size or as binary is listed under Not read). Shell history and Claude Code transcripts under ~/.claude are included.",
+    "Not scanned: git object history (use `git log -p -S<prefix>` in a repo), binary databases such as SQLite files, browser",
+    "profiles and VS Code state (all can hold keys), encrypted stores such as the Claude desktop app's local environment, mounted",
+    "drives outside the paths given, and files over the size limit other than transcripts and logs, which are read in parts at any",
+    "size (each file skipped for its size or as binary is listed under Not read). Shell history and Claude Code transcripts under",
+    "~/.claude are included.",
 )
 DEFAULT_MAX_BYTES = 25 * 1024 * 1024
 # The largest file the explorer shows or rewrites: both read it whole.
@@ -954,7 +955,7 @@ def summary(
     skipped = not_read_line(not_read) if not_read is not None else None
     if skipped:
         say("  · " + skipped)
-    say("  · What the scan skips and cannot see is under Notes at the end of report.txt.")
+    say("  · It can't read databases (such as SQLite), other binary files or git history; Notes in report.txt lists all it misses.")
     say("  · Browse them, with the lines around each key: envh explore")
     say_where_saved(report_dir, False, say)
 

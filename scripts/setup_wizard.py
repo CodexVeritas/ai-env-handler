@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""envh setup: install or update, console, .env import, editor history, stray-key scan, Claude Code and Cursor, one step at a time.
+"""envh setup: docker group, install or update, console, .env import, editor history, stray-key scan, Claude Code and Cursor, one
+step at a time.
 
 Runs as you with the standard library only, because envh is not installed yet when it starts. Rerunning is safe:
 finished steps are detected. Each step prints one short sentence; `?` at a question shows a few more lines, and the
@@ -51,6 +52,7 @@ ROOT_FLAG = "--install-as-root"
 PREFLIGHT_EXIT = 3
 SUDO = "/usr/bin/sudo"
 SYSTEM_PYTHON = "/usr/bin/python3"
+GPASSWD = "/usr/bin/gpasswd"
 SERVICE_USER = "envh"
 SUDO_SECURE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 UV_ROOT_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | /usr/bin/sudo env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
@@ -83,10 +85,17 @@ Backs up each .env file first, into ~/envh-backups-and-scans unless you pick ano
 Names keys after the project, like MYAPP_OPENAI_API_KEY.
 Import more projects later with: envh import <folder>"""
 SCAN_MORE = """Checks shell history, Claude Code transcripts, notebooks and other repos.
-Skips installed packages, caches and browser profiles; the report lists what it skipped.
+Can't see: databases such as SQLite (app and editor state), other binary files, git history, encrypted stores.
+Skips installed packages, caches and browser profiles; the report lists everything it left out.
 Saves where each copy is, never the key itself. Then the explorer opens so you can go through it.
 It also offers to search for copies of your vault's keys; you approve that on the console.
+If a key may have been copied somewhere the scan can't see, rotate it at the provider.
 Scan somewhere else with: envh scan <folder>"""
+ROOT_GROUPS_MORE = """Anything running as you, agents included, can use the group to become root and read your keys.
+After you leave, commands that use it need sudo, so agents can't run them.
+Docker Desktop and rootless Docker don't need the docker group.
+It takes effect when you log out and back in.
+Details: README, "What the install changes\""""
 SAVE_MORE = """Each scan gets its own dated folder inside this one: report.txt, files.txt and hits.json.
 They hold where keys are, never the keys, so they are safe to keep."""
 EXPLORER_MORE = """The explorer reads each file when you open it, so it always shows the file as it is now.
@@ -320,6 +329,35 @@ def ensure_uv() -> bool:
     return False
 
 
+def step_root_groups() -> Outcome:
+    user = pwd.getpwuid(os.getuid()).pw_name
+    groups = root_granting_groups(user)
+    if not groups:
+        ok("You're not in docker or another group that grants root")
+        return Outcome(True, "not in one")
+    named = f"the {' and '.join(groups)} group{'s' if len(groups) > 1 else ''}"
+    line(f"Being in {named} is the same as having root without a password.")
+    if not ask(f"Leave {named}?", ROOT_GROUPS_MORE, default=False):
+        note("Kept. If the install's system checks list it, answer y there to go on.")
+        return Outcome(False, "kept")
+    try:
+        for group in groups:
+            detail(f"Running: sudo gpasswd -d {user} {group}")
+            result = subprocess.run([SUDO, GPASSWD, "-d", user, group], capture_output=True, text=True)
+            if result.returncode != 0:
+                warn(f"Couldn't leave {group}: {result.stderr.strip() or f'exit code {result.returncode}'}")
+                return Outcome(False, f"failed to leave {group}")
+    finally:
+        subprocess.run([SUDO, "-k"])
+        detail("Ran sudo -k: this terminal no longer remembers your sudo password")
+    remaining = root_granting_groups(user)
+    if remaining:
+        warn(f"Still in {' and '.join(remaining)}, likely as your primary group. Change it with: sudo usermod -g <another group> {user}")
+        return Outcome(False, f"still in {' and '.join(remaining)}")
+    ok(f"Left {named}. Log out and back in to finish.")
+    return Outcome(True, "left; log out and back in")
+
+
 def step_install() -> Outcome:
     label, changes = folder_source()
     installed = installed_source()
@@ -370,16 +408,25 @@ def stage_build_files(destination: Path) -> None:
         shutil.copy2(REPO / name, destination / name)
 
 
-def system_problems(source: Path, invoking_user: str) -> list[str]:
-    """Run envh's preflight checks from the staged root-owned source, before anything is built or changed. The module is
-    loaded from that file by path, so no copy imported earlier (for example from this user-writable folder) can stand in."""
+def load_platform(source: Path) -> Any:
+    """envh's platform module, loaded from source by path, so no copy imported earlier (for example from this
+    user-writable folder, when source is the root-owned staging copy) can stand in."""
     spec = importlib.util.spec_from_file_location("envh_staged_platform", source / "envh" / "platform.py")
     if spec is None or spec.loader is None:
         raise SystemExit(f"✗ Can't load the system checks from {source}.")
     platform = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = platform
     spec.loader.exec_module(platform)
-    return platform.preflight_problems(invoking_user)
+    return platform
+
+
+def system_problems(source: Path, invoking_user: str) -> list[str]:
+    """Run envh's preflight checks from the staged root-owned source, before anything is built or changed."""
+    return load_platform(source).preflight_problems(invoking_user)
+
+
+def root_granting_groups(user: str) -> list[str]:
+    return load_platform(REPO / "src").root_granting_groups_of(user)
 
 
 def run_with_spinner(text: str, command: list[str], environment: dict[str, str]) -> None:
@@ -510,6 +557,7 @@ def step_scan() -> Outcome:
         note("Skipped: envh isn't installed.")
         return Outcome(False, "skipped")
     line("Looks for copies of keys left outside .env files. Read-only; about 15 minutes for a full home folder.")
+    line("It will miss some: it can't read databases (such as SQLite), other binary files or git history.")
     if not ask("Scan your home folder?", SCAN_MORE):
         return Outcome(False, "skipped")
     answer = ask_line(f"Save the results in {tilde(SCANS_FOLDER)}? Enter to accept, or type another folder:", SAVE_MORE)
@@ -518,7 +566,7 @@ def step_scan() -> Outcome:
     detail(f"Running: envh scan --out {tilde(folder)} --no-explore")
     returncode = subprocess.run([str(ENVH_BIN), "scan", "--out", str(folder), "--no-explore"]).returncode
     if returncode == 0:
-        ok("No stray keys found")
+        ok("No stray keys found in the files it could read")
         return Outcome(True, "nothing found")
     if returncode != 1:
         return Outcome(False, f"failed (exit code {returncode})")
@@ -816,6 +864,7 @@ def step_editor_history() -> Outcome:
 
 
 STEPS: list[tuple[str, Callable[[], Outcome]]] = [
+    ("Docker group", step_root_groups),
     ("Install envh", step_install),
     ("Start the console", step_console),
     ("Import keys", step_import),
