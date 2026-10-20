@@ -4,7 +4,7 @@ step at a time.
 
 Runs as you with the standard library only, because envh is not installed yet when it starts. Rerunning is safe:
 finished steps are detected. Each step prints one short sentence; `?` at a question shows a few more lines, and the
-README holds the full details, so keep it that way when adding copy.
+README and docs/ hold the full details, so keep it that way when adding copy.
 
 The install step reruns this file as root (`--install-as-root`, under /usr/bin/python3) to check the system, build
 /opt/envh from a root-only copy of the source and run `envh install`. envh never runs from this folder, because agents
@@ -67,7 +67,7 @@ INSTALL_MORE = """Copies envh to /opt/envh, where only root can change it.
 Adds a system user, envh, that owns your encrypted keys.
 Adds two commands: envh, and sudo envh-console.
 Changes none of your existing settings.
-Details: README, "What the install changes\""""
+Details: docs/install.md"""
 UNCOMMITTED_MORE = "Root installs exactly what is in this folder, including these files:"
 UV_MORE = """envh is built with uv, run as root. A uv in your home folder could be swapped by anything running
 as you, agents included, before root runs it. This runs astral.sh's installer as root, into /usr/local/bin.
@@ -75,11 +75,11 @@ It changes no shell settings."""
 USER_UV_MORE = "Less safe: anything running as you, agents included, could replace it before root runs it."
 PREFLIGHT_MORE = """Each line above says what to fix. These gaps let a program running as you become root,
 and then read your keys. Continue only if you have checked each one yourself.
-Details: README, "What the install changes\""""
+Details: docs/install.md"""
 CONSOLE_MORE = """It asks for your sudo password, shows your console phrase, then asks for your vault passphrase.
 Keep that window open: closing it ends every session.
 You can also open it from the "envh console" app launcher."""
-X11_MORE = 'On X11, other programs you run can read and type into that window. See README, "Who else can see".'
+X11_MORE = 'On X11, other programs you run can read and type into that window. See docs/security.md, "Who else can see".'
 IMPORT_MORE = """Shows what will change and asks before writing anything.
 Backs up each .env file first, into ~/envh-backups-and-scans unless you pick another folder.
 Names keys after the project, like MYAPP_OPENAI_API_KEY.
@@ -95,12 +95,12 @@ ROOT_GROUPS_MORE = """Anything running as you, agents included, can use the grou
 After you leave, commands that use it need sudo, so agents can't run them.
 Docker Desktop and rootless Docker don't need the docker group.
 It takes effect when you log out and back in.
-Details: README, "What the install changes\""""
+Details: docs/install.md"""
 SAVE_MORE = """Each scan gets its own dated folder inside this one: report.txt, files.txt and hits.json.
 They hold where keys are, never the keys, so they are safe to keep."""
 EXPLORER_MORE = """The explorer reads each file when you open it, so it always shows the file as it is now.
 It runs full screen; q closes it and finishes setup. Reopen it any time with: envh explore
-Details: README, "Find leftover copies\""""
+Details: docs/scan.md"""
 EXPLORER_PANEL = [
     "Lists each key the scan found, the files it is in, and the lines",
     "around each copy. Keys stay hidden unless you press s.",
@@ -757,7 +757,7 @@ def step_connect(tool: str, tool_home: Path, changes_for: Callable[[Path], list[
     else:
         line(f"Teaches {tool} to ask for keys through envh.")
         question = f"Connect {tool}?"
-    if not ask(question, "\n".join([*details, f'Details: README, "Using it with {tool}"'])):
+    if not ask(question, "\n".join([*details, "Details: docs/agents.md"])):
         return Outcome(False, "out of date" if outdated else "skipped")
     for change in changes:
         change.apply()
@@ -825,7 +825,7 @@ def env_history_more(changes: list[Change], user_folders: list[Path]) -> str:
     more.append("Copies already saved stay; envh scan finds them.")
     if history_folders:
         more.append(f"rm -r {' '.join(history_folders)} deletes them, with every other file's local history.")
-    return "\n".join([*more, 'Details: README, "Find leftover copies"'])
+    return "\n".join([*more, "Details: docs/scan.md"])
 
 
 def step_editor_history() -> Outcome:

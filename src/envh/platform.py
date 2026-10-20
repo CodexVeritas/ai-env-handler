@@ -354,13 +354,13 @@ def preflight_problems(invoking_user: str | None) -> list[str]:
 def preflight_warnings(invoking_user: str | None) -> list[str]:
     warnings: list[str] = []
     if session_type() == "x11":
-        warnings.append("X11 session: programs you run can read and type into the console window (README: 'Who else can see and type into the console')")
+        warnings.append("X11 session: programs you run can read and type into the console window (docs/security.md: 'Who else can see and type into the console')")
     if not invoking_user:
         return warnings
     key_reading = key_reading_groups_of(invoking_user)
     if key_reading:
         warnings.append(
-            f"{invoking_user} is in group(s) {', '.join(key_reading)}: programs you run can read every key you type, the vault passphrase included (README: 'Who else can see and type into the console')"
+            f"{invoking_user} is in group(s) {', '.join(key_reading)}: programs you run can read every key you type, the vault passphrase included (docs/security.md: 'Who else can see and type into the console')"
         )
     try:
         uinput_writable = writable_by(invoking_user, [UINPUT])
@@ -368,5 +368,5 @@ def preflight_warnings(invoking_user: str | None) -> list[str]:
         warnings.append(f"could not check whether {invoking_user} can write {UINPUT}: {error}")
     else:
         if uinput_writable:
-            warnings.append(f"{invoking_user} can write {UINPUT}: programs you run can type into the console (README: 'Who else can see and type into the console')")
+            warnings.append(f"{invoking_user} can write {UINPUT}: programs you run can type into the console (docs/security.md: 'Who else can see and type into the console')")
     return warnings
