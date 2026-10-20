@@ -172,6 +172,8 @@ def main(argv: list[str]) -> int:
         try:
             phrase, terminal_warning, vault, config = unlock(data_dir)
         except KeyboardInterrupt:
+            # sudo and the console helper can each pass the same Ctrl-C on, and a second one would break the exit.
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
             say()
             say(f"  {paint('2', 'Stopped.')}")
             return 130
