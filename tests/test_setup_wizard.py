@@ -396,8 +396,9 @@ def test_the_scan_says_what_it_misses_before_it_asks(tmp_path: Path, monkeypatch
     assert "It will miss some: it can't read databases (such as SQLite)" in capsys.readouterr().out
 
 
-def fake_sudo(monkeypatch: pytest.MonkeyPatch, groups: list[str], failing: str | None = None) -> list[list[str]]:
-    monkeypatch.setattr(wizard, "root_granting_groups", lambda user: groups)
+def fake_sudo(monkeypatch: pytest.MonkeyPatch, groups: list[str], failing: str | None = None, remaining: list[str] | None = None) -> list[list[str]]:
+    lookups = [groups, remaining or []]
+    monkeypatch.setattr(wizard, "root_granting_groups", lambda user: lookups.pop(0) if len(lookups) > 1 else lookups[0])
     calls: list[list[str]] = []
 
     def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -433,6 +434,14 @@ def test_leaving_runs_gpasswd_for_each_group_then_forgets_sudo(monkeypatch: pyte
     assert wizard.step_root_groups() == wizard.Outcome(True, "left; log out and back in")
     assert calls == [[wizard.SUDO, "/usr/bin/gpasswd", "-d", user, "docker"], [wizard.SUDO, "/usr/bin/gpasswd", "-d", user, "lxd"], [wizard.SUDO, "-k"]]
     assert "Left the docker and lxd groups. Log out and back in to finish." in capsys.readouterr().out
+
+
+def test_a_group_that_remains_after_gpasswd_is_reported_not_left(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    fake_sudo(monkeypatch, ["docker"], remaining=["docker"])
+    answer_inputs(monkeypatch, "y")
+    assert wizard.step_root_groups() == wizard.Outcome(False, "still in docker")
+    shown = capsys.readouterr().out
+    assert "likely as your primary group" in shown and "sudo usermod -g" in shown and "Left the docker group" not in shown
 
 
 def test_a_failed_gpasswd_stops_the_step_and_still_forgets_sudo(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
