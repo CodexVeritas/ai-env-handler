@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""envh setup: docker group, install or update, console, .env import, editor history, stray-key scan, Claude Code and Cursor, one
-step at a time.
+"""envh setup: docker group, kernel settings, install or update, console, .env import, editor history, Claude Code and Cursor,
+stray-key scan, one step at a time.
 
 Runs as you with the standard library only, because envh is not installed yet when it starts. Rerunning is safe:
 finished steps are detected. Each step prints one short sentence; `?` at a question shows a few more lines, and the
@@ -53,6 +53,10 @@ PREFLIGHT_EXIT = 3
 SUDO = "/usr/bin/sudo"
 SYSTEM_PYTHON = "/usr/bin/python3"
 GPASSWD = "/usr/bin/gpasswd"
+TEE = "/usr/bin/tee"
+SYSCTL = "/usr/sbin/sysctl"
+SYSCTL_FILE = Path("/etc/sysctl.d/60-envh.conf")
+SUPPORTED_MACHINES = ("x86_64", "aarch64")
 SERVICE_USER = "envh"
 SUDO_SECURE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 UV_INSTALLER = "https://astral.sh/uv/install.sh"
@@ -97,6 +101,11 @@ After you leave, commands that use it need sudo, so agents can't run them.
 Docker Desktop and rootless Docker don't need the docker group.
 It takes effect when you log out and back in.
 Details: docs/install.md"""
+KERNEL_SETTINGS = {
+    "dev.tty.legacy_tiocsti = 0": "type into other terminals, the console's included",
+    "kernel.yama.ptrace_scope = 1": "read and change your other programs while they run",
+}
+DEBUGGERS_MORE = "Debuggers such as gdb -p and py-spy can then attach only to programs they started, or with sudo."
 SAVE_MORE = """Each scan gets its own dated folder inside this one: report.txt, files.txt and hits.json.
 They hold where keys are, never the keys, so they are safe to keep."""
 EXPLORER_MORE = """The explorer reads each file when you open it, so it always shows the file as it is now.
@@ -374,6 +383,53 @@ def step_root_groups() -> Outcome:
     return Outcome(True, "left; log out and back in")
 
 
+def unsafe_kernel_settings(platform: Any) -> list[str]:
+    """The sysctl lines this kernel needs for the console. A stricter ptrace_scope than 1 is left alone."""
+    unsafe = []
+    if platform.legacy_tiocsti_enabled():
+        unsafe.append("dev.tty.legacy_tiocsti = 0")
+    if platform.yama_ptrace_scope() == 0:
+        unsafe.append("kernel.yama.ptrace_scope = 1")
+    return unsafe
+
+
+def step_kernel_settings() -> Outcome:
+    platform = load_platform(REPO / "src")
+    if platform.legacy_tiocsti_enabled() is None:
+        warn("This kernel is older than Linux 6.2, so the console can't start. Update it first; see docs/install.md.")
+        return Outcome(False, "kernel older than 6.2")
+    unsafe = unsafe_kernel_settings(platform)
+    if not unsafe:
+        ok("Your kernel's settings already protect the console")
+        return Outcome(True, "already safe")
+    line(f"Your kernel lets programs you run {' and '.join(KERNEL_SETTINGS[setting] for setting in unsafe)}.")
+    more = [f"Adds to {SYSCTL_FILE} and applies now:", *(f"  {setting}" for setting in unsafe)]
+    if "kernel.yama.ptrace_scope = 1" in unsafe:
+        more.append(DEBUGGERS_MORE)
+    if not ask("Change this setting?" if len(unsafe) == 1 else "Change these settings?", "\n".join([*more, "Details: docs/install.md"]), default=False):
+        if "dev.tty.legacy_tiocsti = 0" in unsafe:
+            note("Kept. The console won't start until legacy_tiocsti is 0.")
+        else:
+            note("Kept. If the install's system checks list it, answer y there to go on.")
+        return Outcome(False, "kept")
+    settings = "".join(f"{setting}\n" for setting in unsafe)
+    try:
+        for command, given in (([SUDO, TEE, "-a", str(SYSCTL_FILE)], settings), ([SUDO, SYSCTL, "-p", str(SYSCTL_FILE)], None)):
+            detail(f"Running: {' '.join(command)}")
+            result = subprocess.run(command, input=given, capture_output=True, text=True)
+            if result.returncode != 0:
+                warn(f"Couldn't change the settings: {result.stderr.strip() or f'exit code {result.returncode}'}")
+                return Outcome(False, "failed")
+    finally:
+        subprocess.run([SUDO, "-k"])
+        detail("Ran sudo -k: this terminal no longer remembers your sudo password")
+    if unsafe_kernel_settings(platform):
+        warn(f"The kernel didn't take them. Check {SYSCTL_FILE} and other files in /etc/sysctl.d.")
+        return Outcome(False, "not taken")
+    ok("Changed, now and after a restart")
+    return Outcome(True, "changed")
+
+
 def step_install() -> Outcome:
     label, changes = folder_source()
     installed = installed_source()
@@ -467,13 +523,15 @@ def run_with_spinner(text: str, command: list[str], environment: dict[str, str])
 
 
 def build_environment(uv: str, source: Path, prefix: Path) -> None:
-    """Build prefix/env from source with uv. A Python that uv downloads goes to prefix/python: uv's default under
-    root's home only root can open, and every user runs this install."""
+    """Build prefix/env from source with uv, on a Python uv downloads into prefix/python: uv's default under root's home
+    only root can open, and every user runs this install. A distribution's own Python would break envh when an upgrade
+    of the distribution removes it."""
     environment = {
         **os.environ,
         "HOME": pwd.getpwuid(os.geteuid()).pw_dir,
         "UV_PROJECT_ENVIRONMENT": str(prefix / "env"),
         "UV_PYTHON_INSTALL_DIR": str(prefix / "python"),
+        "UV_PYTHON_PREFERENCE": "only-managed",
     }
     command = [uv, "sync", "--project", str(source), "--frozen", "--no-dev", "--no-editable", "--python", "3.12", "--quiet"]
     run_with_spinner("Building envh (about a minute)", command, environment)
@@ -873,6 +931,7 @@ def step_editor_history() -> Outcome:
 
 STEPS: list[tuple[str, Callable[[], Outcome]]] = [
     ("Docker group", step_root_groups),
+    ("Kernel settings", step_kernel_settings),
     ("Install envh", step_install),
     ("Start the console", step_console),
     ("Import keys", step_import),
@@ -883,9 +942,29 @@ STEPS: list[tuple[str, Callable[[], Outcome]]] = [
 ]
 
 
+def unsupported_system() -> str | None:
+    """Why envh can't be installed here, checked before anything changes so the reason isn't a traceback later."""
+    if sys.version_info < (3, 10):
+        return f"The wizard needs Python 3.10 or newer; this is {sys.version.split()[0]}."
+    for needed in (SUDO, SYSTEM_PYTHON):
+        if not Path(needed).exists():
+            return f"envh's install needs {needed}, which this system doesn't have."
+    try:
+        libc = os.confstr("CS_GNU_LIBC_VERSION")
+    except (ValueError, OSError):
+        libc = None
+    machine = os.uname().machine
+    if not libc or machine not in SUPPORTED_MACHINES:
+        return f"envh needs glibc on x86_64 or aarch64, which its encryption library is built for; this is {libc or 'another C library'} on {machine}."
+    return None
+
+
 def refuse_unsafe_start() -> None:
     if not sys.platform.startswith("linux"):
         raise SystemExit("envh runs on Linux only.")
+    reason = unsupported_system()
+    if reason:
+        raise SystemExit(f"{reason} docs/install.md lists the systems envh supports.")
     if not sys.stdin.isatty():
         raise SystemExit("Run the wizard in a terminal: it asks questions.")
     if os.geteuid() == 0:

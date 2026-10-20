@@ -88,6 +88,7 @@ The full list: [What envh does not do](docs/security.md#what-envh-does-not-do).
 ## Requirements
 
 - **Linux 6.2 or newer.** Check with `uname -r`.
+- **Ubuntu, Debian, Fedora, RHEL 10 and its rebuilds, Arch or openSUSE.** [docs/install.md](docs/install.md#supported-systems) has notes for each.
 - **sudo that asks for your password.**
 - **Ideally, not in the `docker` group.** Being in it is the same as having root without a password, so an agent could use it to read your keys. The wizard offers to take you out.
 - **Mac:** not yet, but it looks close. You can [port it in a fork](docs/porting.md). **Windows:** not planned.
