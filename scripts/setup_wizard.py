@@ -351,6 +351,10 @@ def step_root_groups() -> Outcome:
     finally:
         subprocess.run([SUDO, "-k"])
         detail("Ran sudo -k: this terminal no longer remembers your sudo password")
+    remaining = root_granting_groups(user)
+    if remaining:
+        warn(f"Still in {' and '.join(remaining)}, likely as your primary group. Change it with: sudo usermod -g <another group> {user}")
+        return Outcome(False, f"still in {' and '.join(remaining)}")
     ok(f"Left {named}. Log out and back in to finish.")
     return Outcome(True, "left; log out and back in")
 
