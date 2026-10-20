@@ -14,7 +14,9 @@ from envh.platform import SERVICE_USER, preflight_problems, preflight_warnings
 from envh.server.init_cmd import run_init
 
 HELPER_PATH = Path("/usr/local/sbin/envh-console")
-DESKTOP_PATH = Path("/usr/share/applications/envh.desktop")
+DESKTOP_PATH = Path("/usr/local/share/applications/envh.desktop")
+LEGACY_DESKTOP_PATH = Path("/usr/share/applications/envh.desktop")
+SYSTEM_APPLICATIONS = Path("/usr/share/applications")
 ENVH_BIN = Path("/usr/local/bin/envh")
 DATA_DIR = Path("/var/lib/envh")
 
@@ -81,13 +83,13 @@ done
 exit "$status"
 """.replace("SERVICE_USER", SERVICE_USER).replace("ENVH_BIN", str(ENVH_BIN))
 
-DESKTOP_ENTRY = """[Desktop Entry]
+DESKTOP_ENTRY = f"""[Desktop Entry]
 Type=Application
 Name=envh console
 Comment=Approve secret access for scripts and agents
-Exec=TERMINAL_COMMAND
+Exec=sudo {HELPER_PATH}
 Icon=dialog-password
-Terminal=false
+Terminal=true
 Categories=Utility;Security;
 """
 
@@ -110,14 +112,6 @@ def user_exists(name: str) -> bool:
         return True
     except KeyError:
         return False
-
-
-def terminal_command() -> str | None:
-    if shutil.which("gnome-terminal"):
-        return f"gnome-terminal --title=envh -- sudo {HELPER_PATH}"
-    if shutil.which("x-terminal-emulator"):
-        return f"x-terminal-emulator -e sudo {HELPER_PATH}"
-    return None
 
 
 def run(command: list[str], dry_run: bool) -> None:
@@ -177,16 +171,17 @@ def install(args: argparse.Namespace) -> int:
         report(f"System user {SERVICE_USER}: already there")
     else:
         report(f"System user {SERVICE_USER}, home {DATA_DIR} (only {SERVICE_USER} can open it)")
-        run(["useradd", "--system", "--create-home", "--home-dir", str(DATA_DIR), "--shell", "/usr/sbin/nologin", SERVICE_USER], args.dry_run)
+        run(["useradd", "--system", "--user-group", "--create-home", "--home-dir", str(DATA_DIR), "--shell", "/usr/sbin/nologin", SERVICE_USER], args.dry_run)
     run(["chmod", "700", str(DATA_DIR)], args.dry_run)
     report(f"{HELPER_PATH}: starts the console as {SERVICE_USER}")
     write_root_file(HELPER_PATH, HELPER_SCRIPT, 0o755, args.dry_run)
-    command = terminal_command()
-    if command and DESKTOP_PATH.parent.exists():
+    if SYSTEM_APPLICATIONS.is_dir():
         report(f'{DESKTOP_PATH}: the "envh console" app launcher')
-        write_root_file(DESKTOP_PATH, DESKTOP_ENTRY.replace("TERMINAL_COMMAND", command), 0o644, args.dry_run)
+        write_root_file(DESKTOP_PATH, DESKTOP_ENTRY, 0o644, args.dry_run)
+        if LEGACY_DESKTOP_PATH.exists() and not args.dry_run:
+            LEGACY_DESKTOP_PATH.unlink()
     else:
-        report("No app launcher: no desktop terminal found")
+        report("No app launcher: no desktop found")
     if args.dry_run:
         if not (DATA_DIR / "vault.age").exists():
             report(f"The vault and policy in {DATA_DIR} (users: {invoking_user}), after asking for a vault passphrase")
@@ -205,10 +200,11 @@ def install(args: argparse.Namespace) -> int:
 
 def uninstall(args: argparse.Namespace) -> int:
     require_root(args.dry_run)
-    for path in (HELPER_PATH, DESKTOP_PATH, ENVH_BIN):
-        say(f"  remove {path}")
-        if not args.dry_run:
-            path.unlink(missing_ok=True)
+    for path in (HELPER_PATH, DESKTOP_PATH, LEGACY_DESKTOP_PATH, ENVH_BIN):
+        if path.exists() or path.is_symlink():
+            say(f"  remove {path}")
+            if not args.dry_run:
+                path.unlink()
     say("  remove /opt/envh")
     if not args.dry_run:
         shutil.rmtree("/opt/envh", ignore_errors=True)
