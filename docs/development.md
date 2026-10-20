@@ -8,6 +8,12 @@ uv run pytest -q                       # no root, no network, no environment var
 uv run envh --help
 ```
 
+**Test the install on other distributions** with Docker or Podman. `scripts/ci/install_matrix.sh` sets up a fresh container the way a desktop install has it, then runs the setup wizard end to end: install, console, a client, the Claude Code hook, closing the console's window, uninstall. CI runs it on ten distributions (`.github/workflows/install-matrix.yml`). Containers share your kernel, so this tests each distribution's userspace, not its kernel settings:
+
+```bash
+docker run --rm -v "$PWD:/src:ro" ubuntu:26.04 sh /src/scripts/ci/install_matrix.sh
+```
+
 ## Record the demo video
 
 The walkthrough video at the top of the README is a real recording of a development broker with fake keys. After the console changes, record it again and render it (needs ffmpeg, Google Chrome, and network access to load xterm.js from jsDelivr). `--small` writes a copy under GitHub's 10 MB limit for videos:

@@ -1,0 +1,56 @@
+name: install-matrix
+# Runs the setup wizard end to end in a fresh container of each supported distribution: install, console, a client,
+# the Claude Code hook, uninstall. Containers share the runner's kernel, so this covers each distribution's userspace
+# (sudo, sudoers, python3, coreutils, useradd), not its kernel settings.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+  pull_request:
+    paths:
+      - "src/**"
+      - "scripts/setup_wizard.py"
+      - "scripts/ci/**"
+      - "claude/hooks/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/install-matrix.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/setup_wizard.py"
+      - "scripts/ci/**"
+      - "claude/hooks/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/install-matrix.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro:
+          - ubuntu:22.04
+          - ubuntu:24.04
+          - ubuntu:26.04
+          - debian:12
+          - debian:13
+          - fedora:latest
+          - almalinux:10
+          - archlinux:latest
+          - opensuse/tumbleweed
+          - opensuse/leap:16.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Give the shared kernel the settings the console needs
+        run: sudo sysctl -w dev.tty.legacy_tiocsti=0 kernel.yama.ptrace_scope=1
+      - name: Install and use envh on ${{ matrix.distro }}
+        run: docker run --rm -v "$PWD:/src:ro" ${{ matrix.distro }} sh /src/scripts/ci/install_matrix.sh
