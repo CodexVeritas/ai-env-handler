@@ -8,7 +8,7 @@ https://github.com/user-attachments/assets/d9ada2fc-4999-4a00-a756-6ed6b49f5aa6
 
 A five-minute walkthrough of setup and daily use, recorded with fake keys. If it doesn't play, [download it](docs/demo.mp4).
 
-> **Status:** early, and Linux only. Largely AI-written, then tested and red-teamed with AI; it has had no independent security review. It is defense in depth, not a guarantee: see [what it covers and what it doesn't](#what-it-covers-and-what-it-doesnt).
+> **Status:** early, and Linux only. Largely AI-written, then tested and red-teamed with AI (two Opus 4.8 ultracode sessions); it has had no independent security review. It is defense in depth, not a guarantee: see [what it covers and what it doesn't](#what-it-covers-and-what-it-doesnt).
 
 ## Why
 
