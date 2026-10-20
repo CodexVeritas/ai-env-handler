@@ -253,7 +253,7 @@ def test_a_tool_that_is_not_set_up_is_skipped(tmp_path: Path) -> None:
 
 
 def editor_user_folders(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *present: str) -> dict[str, Path]:
-    folders = {"VS Code": tmp_path / "Code" / "User", "Cursor": tmp_path / "Cursor" / "User"}
+    folders = {editor: tmp_path / editor / "User" for editor in wizard.EDITOR_USER_FOLDERS}
     for editor in present:
         folders[editor].mkdir(parents=True)
     monkeypatch.setattr(wizard, "EDITOR_USER_FOLDERS", folders)
@@ -279,10 +279,11 @@ def test_a_second_env_history_run_changes_nothing(tmp_path: Path, monkeypatch: p
     (folders["VS Code"] / "settings.json").write_text('{"editor.fontSize": 14}\n')
     answer_inputs(monkeypatch, "")
     assert wizard.step_editor_history() == wizard.Outcome(True, "turned off")
-    written = {editor: (folder / "settings.json").read_text() for editor, folder in folders.items()}
+    settings_paths = [folders["VS Code"] / "settings.json", folders["Cursor"] / "settings.json"]
+    written = [settings_path.read_text() for settings_path in settings_paths]
     answer_inputs(monkeypatch)
     assert wizard.step_editor_history() == wizard.Outcome(True, "already off")
-    assert {editor: (folder / "settings.json").read_text() for editor, folder in folders.items()} == written
+    assert [settings_path.read_text() for settings_path in settings_paths] == written
     assert len(list(tmp_path.rglob("*.before-envh-*"))) == 1
 
 
@@ -307,8 +308,36 @@ def test_editors_that_are_not_set_up_are_skipped(tmp_path: Path, monkeypatch: py
     editor_user_folders(monkeypatch, tmp_path)
     answer_inputs(monkeypatch)
     assert wizard.step_editor_history() == wizard.Outcome(False, "skipped")
-    assert "neither VS Code nor Cursor" in capsys.readouterr().out
+    assert "Skipped: no VS Code, VSCodium or Cursor settings found for this user." in capsys.readouterr().out
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("editor", ["Flatpak VS Code", "Code - OSS", "VSCodium"])
+def test_env_history_is_turned_off_in_other_vs_code_builds(
+    editor: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folders = editor_user_folders(monkeypatch, tmp_path, editor)
+    answer_inputs(monkeypatch, "")
+    assert wizard.step_editor_history() == wizard.Outcome(True, "turned off")
+    assert json.loads((folders[editor] / "settings.json").read_text()) == {"workbench.localHistory.exclude": {"**/.env*": True}}
+    assert f"Local history in {editor} now leaves out .env files" in capsys.readouterr().out
+
+
+def test_three_editors_are_named_in_one_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    editor_user_folders(monkeypatch, tmp_path, "VS Code", "VSCodium", "Cursor")
+    answer_inputs(monkeypatch, "")
+    wizard.step_editor_history()
+    assert "Local history in VS Code, VSCodium and Cursor now leaves out .env files" in capsys.readouterr().out
+
+
+def test_the_history_delete_command_quotes_a_folder_with_spaces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    user_folder = tmp_path / ".config" / "Code - OSS" / "User"
+    (user_folder / "History").mkdir(parents=True)
+    more = wizard.env_history_more([], [user_folder])
+    command = next(text for text in more.splitlines() if text.startswith("rm -r ")).split(" deletes them")[0]
+    assert command == "rm -r ~/'.config/Code - OSS/User/History'"
+    assert shlex.split(command) == ["rm", "-r", "~/.config/Code - OSS/User/History"]
 
 
 @pytest.mark.parametrize("settings", [[], {"workbench.localHistory.exclude": ["**/.env*"]}])

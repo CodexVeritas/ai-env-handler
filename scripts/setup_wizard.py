@@ -28,7 +28,7 @@ import tempfile
 import termios
 import time
 import tty
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -38,7 +38,13 @@ BUILD_FILES = ("pyproject.toml", "uv.lock", "README.md", "LICENSE")
 CLAUDE_SOURCE = REPO / "claude"
 CLAUDE_HOME = Path.home() / ".claude"
 CURSOR_HOME = Path.home() / ".cursor"
-EDITOR_USER_FOLDERS = {"VS Code": Path.home() / ".config" / "Code" / "User", "Cursor": Path.home() / ".config" / "Cursor" / "User"}
+EDITOR_USER_FOLDERS = {
+    "VS Code": Path.home() / ".config" / "Code" / "User",
+    "Flatpak VS Code": Path.home() / ".var" / "app" / "com.visualstudio.code" / "config" / "Code" / "User",
+    "Code - OSS": Path.home() / ".config" / "Code - OSS" / "User",
+    "VSCodium": Path.home() / ".config" / "VSCodium" / "User",
+    "Cursor": Path.home() / ".config" / "Cursor" / "User",
+}
 HISTORY_EXCLUDE_SETTING = "workbench.localHistory.exclude"
 ENV_FILES_GLOB = "**/.env*"
 HISTORY_EXCLUDE_LINE = f"{json.dumps(HISTORY_EXCLUDE_SETTING)}: {json.dumps({ENV_FILES_GLOB: True})},"
@@ -263,6 +269,19 @@ def tilde(path: Path) -> str:
         return "~/" + str(path.relative_to(Path.home()))
     except ValueError:
         return str(path)
+
+
+def shell_path(path: Path) -> str:
+    """tilde(path) quoted for a shell command, with the leading ~/ left outside the quotes so it still expands."""
+    shown = tilde(path)
+    if shown.startswith("~/"):
+        return "~/" + shlex.quote(shown.removeprefix("~/"))
+    return shlex.quote(shown)
+
+
+def and_list(names: Iterable[str]) -> str:
+    listed = list(names)
+    return ", ".join(listed[:-1]) + " and " + listed[-1] if len(listed) > 1 else "".join(listed)
 
 
 def write_atomically(path: Path, text: str) -> None:
@@ -886,7 +905,7 @@ def env_history_change(settings_path: Path) -> Change | None:
 
 
 def env_history_more(changes: list[Change], user_folders: list[Path]) -> str:
-    history_folders = [tilde(folder / "History") for folder in user_folders if (folder / "History").is_dir()]
+    history_folders = [shell_path(folder / "History") for folder in user_folders if (folder / "History").is_dir()]
     more = [f"Adds this setting: {HISTORY_EXCLUDE_LINE.rstrip(',')}", *(change.description for change in changes)]
     more.append("Copies already saved stay; envh scan finds them.")
     if history_folders:
@@ -897,7 +916,7 @@ def env_history_more(changes: list[Change], user_folders: list[Path]) -> str:
 def step_editor_history() -> Outcome:
     user_folders = {editor: folder for editor, folder in EDITOR_USER_FOLDERS.items() if folder.is_dir()}
     if not user_folders:
-        note("Skipped: neither VS Code nor Cursor is set up for this user.")
+        note("Skipped: no VS Code, VSCodium or Cursor settings found for this user.")
         return Outcome(False, "skipped")
     changes: dict[str, Change] = {}
     left_alone: dict[str, str] = {}
@@ -911,19 +930,19 @@ def step_editor_history() -> Outcome:
         if change is not None:
             changes[editor] = change
     if not changes and not left_alone:
-        ok(f"Local history in {' and '.join(user_folders)} already leaves out .env files")
+        ok(f"Local history in {and_list(user_folders)} already leaves out .env files")
         return Outcome(True, "already off")
-    line(f"Local history in {' and '.join([*changes, *left_alone])} keeps a copy of each file you save, .env files included.")
+    line(f"Local history in {and_list([*changes, *left_alone])} keeps a copy of each file you save, .env files included.")
     if changes:
         if not ask("Leave .env files out of it?", env_history_more(list(changes.values()), list(user_folders.values()))):
             return Outcome(False, "skipped")
         for change in changes.values():
             change.apply()
             detail(change.description)
-        ok(f"Local history in {' and '.join(changes)} now leaves out .env files")
+        ok(f"Local history in {and_list(changes)} now leaves out .env files")
     for warning in left_alone.values():
         warn(warning)
-    by_hand = f"add it by hand for {' and '.join(left_alone)}"
+    by_hand = f"add it by hand for {and_list(left_alone)}"
     if not changes:
         return Outcome(False, by_hand)
     return Outcome(True, "turned off" + (f"; {by_hand}" if left_alone else ""))

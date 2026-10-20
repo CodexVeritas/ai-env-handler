@@ -2,7 +2,7 @@
 
 `envh scan` looks through your home folder for copies of keys outside `.env` files and saves where each one is, never the key. `envh explore` then lets you go through them and replace copies. The setup wizard runs both as its last step.
 
-Keys end up in more places than `.env` files: shell history, Claude Code transcripts under `~/.claude/projects`, notebooks, scratch scripts, other repos, git remotes with embedded tokens, and the local history of VS Code and Cursor (`~/.config/Code/User/History`, `~/.config/Cursor/User/History`), which keeps a copy of a file each time you save it (the setup wizard turns that off for `.env` files, but copies saved before stay). After importing, find them:
+Keys end up in more places than `.env` files: shell history, Claude Code transcripts under `~/.claude/projects`, notebooks, scratch scripts, other repos, git remotes with embedded tokens, and the local history of VS Code, VSCodium and Cursor (`User/History` under `~/.config/Code`, `~/.config/Code - OSS`, `~/.config/VSCodium`, `~/.config/Cursor`, or `~/.var/app/com.visualstudio.code/config/Code` for Flatpak VS Code), which keeps a copy of a file each time you save it (the setup wizard turns that off for `.env` files, but copies saved before stay). After importing, find them:
 
 ```bash
 envh scan                      # your home directory
