@@ -39,6 +39,8 @@ UINPUT = Path("/dev/uinput")
 DOAS_CONFIG = Path("/etc/doas.conf")
 DOAS_OPTIONS = ("nopass", "nolog", "persist", "keepenv")
 SHARED_SUDO_TICKETS = ("!tty_tickets", "timestamp_type=global")
+UNSET_PATH = "/envh-path-unset"
+CONSOLE_HELPER_FOLDER = "/usr/local/sbin"
 PR_SET_DUMPABLE = 4
 
 
@@ -228,14 +230,26 @@ def sudo_defaults(listing: str) -> list[str]:
     return entries
 
 
-def sudo_default_problems(username: str, defaults: list[str]) -> list[str]:
+def sudo_secure_path(listing: str) -> str | None:
+    """The secure_path sudo applies: the last one its listing shows, since a later Defaults line overrides an earlier
+    one. A sudo whose listing shows no Defaults, as sudo-rs never does, is asked for the PATH it gives a command."""
+    defaults = sudo_defaults(listing)
+    if defaults:
+        paths = [entry.split("=", 1)[1].strip('"').replace("\\:", ":") for entry in defaults if entry.startswith("secure_path=")]
+        return paths[-1] if paths else None
+    result = subprocess.run(["/usr/bin/sudo", "-n", "/usr/bin/printenv", "PATH"], capture_output=True, text=True, env={"PATH": UNSET_PATH, "LC_ALL": "C"})
+    path = result.stdout.strip()
+    return path if result.returncode == 0 and path != UNSET_PATH else None
+
+
+def sudo_default_problems(username: str, defaults: list[str], secure_path: str | None) -> list[str]:
     problems: list[str] = []
     shared = [entry for entry in defaults if entry in SHARED_SUDO_TICKETS]
     if shared:
         problems.append(
             f"sudo's {', '.join(shared)} lets every terminal of {username} reuse a sudo password typed in one, so agents can run sudo after you start the console: remove it with visudo"
         )
-    if not any(entry.startswith("secure_path=") for entry in defaults):
+    if secure_path is None:
         problems.append(
             "sudo has no secure_path, so `sudo envh-console` runs the first envh-console in your PATH, which programs you run can change: "
             "add a secure_path with visudo, or start the console with `sudo /usr/local/sbin/envh-console`"
@@ -286,7 +300,19 @@ def sudo_problems(username: str) -> list[str]:
             f"{username} can run these with sudo without a password, so agents can too:{listed}\n"
             "Fine only if each is a fixed root-owned command that reads no file you can write."
         )
-    return problems + sudo_default_problems(username, sudo_defaults(listing))
+    return problems + sudo_default_problems(username, sudo_defaults(listing), sudo_secure_path(listing))
+
+
+def console_path_warnings(username: str) -> list[str]:
+    """Some distributions leave /usr/local out of sudo's secure_path; there `sudo envh-console` says command not found.
+    A sudo that can't be asked is already a problem in sudo_problems."""
+    try:
+        secure_path = sudo_secure_path(sudo_listing(username))
+    except PlatformError:
+        return []
+    if secure_path is None or CONSOLE_HELPER_FOLDER in secure_path.split(":"):
+        return []
+    return [f"sudo's secure_path leaves out {CONSOLE_HELPER_FOLDER}, so start the console with `sudo {CONSOLE_HELPER_FOLDER}/envh-console`"]
 
 
 def doas_problems(username: str) -> list[str]:
@@ -362,6 +388,7 @@ def preflight_warnings(invoking_user: str | None) -> list[str]:
         warnings.append(
             f"{invoking_user} is in group(s) {', '.join(key_reading)}: programs you run can read every key you type, the vault passphrase included (docs/security.md: 'Who else can see and type into the console')"
         )
+    warnings.extend(console_path_warnings(invoking_user))
     try:
         uinput_writable = writable_by(invoking_user, [UINPUT])
     except PlatformError as error:

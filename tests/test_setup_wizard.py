@@ -342,15 +342,39 @@ def test_only_the_build_files_are_staged_for_root(tmp_path: Path) -> None:
 
 
 def test_root_half_refuses_to_run_without_sudo() -> None:
-    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "setup_wizard.py"), "--install-as-root", "--source", "test"], capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+    arguments = ["--install-as-root", "--source", "test", "--uv", "/usr/local/bin/uv"]
+    result = subprocess.run([sys.executable, str(ROOT / "scripts" / "setup_wizard.py"), *arguments], capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
     assert result.returncode == 1
     assert "root half" in result.stderr
 
 
 def test_root_runs_the_wizard_with_the_system_python_and_sudo_by_absolute_path() -> None:
-    command = wizard.root_install_command("abc123 from /repo", ["--ignore-preflight"])
+    command = wizard.root_install_command("abc123 from /repo", Path("/usr/local/bin/uv"), ["--ignore-preflight"])
     assert command[:2] == ["/usr/bin/sudo", "/usr/bin/python3"]
-    assert command[3:] == ["--install-as-root", "--source", "abc123 from /repo", "--ignore-preflight"]
+    assert command[3:] == ["--install-as-root", "--source", "abc123 from /repo", "--uv", "/usr/local/bin/uv", "--ignore-preflight"]
+
+
+@pytest.mark.parametrize(("found", "fetch"), [({"curl", "wget"}, "curl -LsSf "), ({"wget"}, "wget -nv -O- ")])
+def test_uv_for_root_is_fetched_with_curl_or_else_wget(monkeypatch: pytest.MonkeyPatch, found: set[str], fetch: str) -> None:
+    monkeypatch.setattr(wizard.shutil, "which", lambda name: f"/usr/bin/{name}" if name in found else None)
+    assert wizard.uv_root_install_command() == f"{fetch}{wizard.UV_INSTALLER} | /usr/bin/sudo env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
+    monkeypatch.setattr(wizard.shutil, "which", lambda name: None)
+    with pytest.raises(SystemExit, match="needs curl or wget"):
+        wizard.uv_root_install_command()
+
+
+def test_root_builds_with_the_uv_the_user_half_chose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root_uv = tmp_path / "uv"
+    monkeypatch.setattr(wizard, "root_owned_uv", lambda: root_uv)
+    assert wizard.ensure_uv() == root_uv
+    monkeypatch.setattr(wizard, "root_owned_uv", lambda: None)
+    monkeypatch.setattr(wizard.Path, "home", lambda: tmp_path)
+    (tmp_path / ".local" / "bin").mkdir(parents=True)
+    (tmp_path / ".local" / "bin" / "uv").write_text("")
+    answer_inputs(monkeypatch, "n", "y")
+    assert wizard.ensure_uv() == tmp_path / ".local" / "bin" / "uv"
+    answer_inputs(monkeypatch, "n", "n")
+    assert wizard.ensure_uv() is None
 
 
 def test_the_system_checks_load_from_the_staged_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

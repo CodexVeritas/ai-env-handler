@@ -18,6 +18,7 @@ from envh.platform import (
     preflight_problems,
     preflight_warnings,
     sudo_defaults,
+    sudo_secure_path,
     terminal_path,
 )
 from envh.server import hardening
@@ -91,6 +92,33 @@ def test_sudo_tickets_shared_across_terminals_and_a_missing_secure_path_are_prob
     monkeypatch.setattr(platform, "sudo_listing", lambda username: PASSWORD_ONLY_LISTING.replace("secure_path", "env_keep"))
     [problem] = preflight_problems("alice")
     assert "sudo has no secure_path" in problem and "sudo /usr/local/sbin/envh-console" in problem
+
+
+def test_the_last_secure_path_counts_and_one_without_usr_local_sbin_is_a_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    suse_style = PASSWORD_ONLY_LISTING.replace("use_pty", "use_pty, secure_path=/usr/sbin\\:/usr/bin\\:/sbin\\:/bin")
+    assert sudo_secure_path(PASSWORD_ONLY_LISTING) == "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+    assert sudo_secure_path(suse_style) == "/usr/sbin:/usr/bin:/sbin:/bin"
+    monkeypatch.setattr(platform, "sudo_listing", lambda username: suse_style)
+    assert platform.console_path_warnings("alice") == ["sudo's secure_path leaves out /usr/local/sbin, so start the console with `sudo /usr/local/sbin/envh-console`"]
+    monkeypatch.setattr(platform, "sudo_listing", lambda username: PASSWORD_ONLY_LISTING)
+    assert platform.console_path_warnings("alice") == []
+
+
+@pytest.mark.parametrize(("printed", "secure_path"), [("/usr/local/sbin:/usr/bin\n", "/usr/local/sbin:/usr/bin"), (f"{platform.UNSET_PATH}\n", None)])
+def test_a_sudo_that_lists_no_defaults_is_asked_for_the_path_it_gives_a_command(safe_kernel: None, monkeypatch: pytest.MonkeyPatch, printed: str, secure_path: str | None) -> None:
+    sudo_rs_listing = "User alice may run the following commands on host:\n    (ALL : ALL) ALL\n"
+    asked: list[list[str]] = []
+
+    def fake_run(command: list[str], **options: object) -> SimpleNamespace:
+        asked.append(command)
+        return SimpleNamespace(returncode=0, stdout=printed, stderr="")
+
+    monkeypatch.setattr(platform.subprocess, "run", fake_run)
+    assert sudo_secure_path(sudo_rs_listing) == secure_path
+    assert asked == [["/usr/bin/sudo", "-n", "/usr/bin/printenv", "PATH"]]
+    monkeypatch.setattr(platform, "sudo_listing", lambda username: sudo_rs_listing)
+    expected = [] if secure_path else ["sudo has no secure_path"]
+    assert [problem.split(",")[0] for problem in preflight_problems("alice")] == expected
 
 
 def test_doas_rules_that_skip_the_password_are_found_by_user_or_group_name_or_id() -> None:
@@ -168,6 +196,7 @@ def test_writable_by_asks_the_kernel_as_the_account(tmp_path: Path) -> None:
 
 
 def test_keyboard_reading_groups_and_a_writable_uinput_are_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(platform, "sudo_listing", lambda username: PASSWORD_ONLY_LISTING)
     monkeypatch.setattr(platform, "session_type", lambda: "wayland")
     monkeypatch.setattr(platform, "group_names_of", lambda username: ["alice", "input"])
     monkeypatch.setattr(platform, "writable_by", lambda username, paths: list(paths))

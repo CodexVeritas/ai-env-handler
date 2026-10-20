@@ -152,6 +152,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--socket", type=Path, default=None)
     args = parser.parse_args(argv)
+    # The console helper starts this as a background job, which a shell starts with SIGINT ignored.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     data_dir = args.data_dir or default_data_dir()
     socket_path = args.socket or default_socket_path()
     try:

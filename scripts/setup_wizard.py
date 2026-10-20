@@ -55,7 +55,8 @@ SYSTEM_PYTHON = "/usr/bin/python3"
 GPASSWD = "/usr/bin/gpasswd"
 SERVICE_USER = "envh"
 SUDO_SECURE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
-UV_ROOT_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | /usr/bin/sudo env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
+UV_INSTALLER = "https://astral.sh/uv/install.sh"
+CONSOLE_HELPER = "/usr/local/sbin/envh-console"
 CLAUDE_MD_MARKER = "API keys are managed by `envh`"
 INTERACTIVE = sys.stdout.isatty()
 COLOR = INTERACTIVE and "NO_COLOR" not in os.environ
@@ -306,27 +307,42 @@ def installed_source() -> str | None:
         return None
 
 
-def root_install_command(label: str, flags: list[str]) -> list[str]:
-    return [SUDO, SYSTEM_PYTHON, str(Path(__file__).resolve()), ROOT_FLAG, "--source", label, *flags, *(["--verbose"] if verbose else [])]
+def root_install_command(label: str, uv: Path, flags: list[str]) -> list[str]:
+    return [SUDO, SYSTEM_PYTHON, str(Path(__file__).resolve()), ROOT_FLAG, "--source", label, "--uv", str(uv), *flags, *(["--verbose"] if verbose else [])]
 
 
-def ensure_uv() -> bool:
-    if root_owned_uv():
-        return True
+def uv_root_install_command() -> str:
+    """astral.sh's installer, run as root. Ubuntu's desktop installs have wget but no curl."""
+    if shutil.which("curl"):
+        fetch = f"curl -LsSf {UV_INSTALLER}"
+    elif shutil.which("wget"):
+        fetch = f"wget -nv -O- {UV_INSTALLER}"
+    else:
+        raise SystemExit("✗ Installing uv needs curl or wget. Install either one, then rerun the wizard.")
+    return f"{fetch} | {SUDO} env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
+
+
+def ensure_uv() -> Path | None:
+    """The uv root builds envh with: root's own, or the user's when they choose it."""
+    found = root_owned_uv()
+    if found:
+        return found
     say()
     line("envh is built with uv, and root needs its own copy.")
     if ask("Install uv for root?", UV_MORE):
-        detail(f"Running: {UV_ROOT_INSTALL}")
-        result = subprocess.run(UV_ROOT_INSTALL, shell=True, capture_output=True, text=True)
-        if result.returncode != 0 or root_owned_uv() is None:
+        command = uv_root_install_command()
+        detail(f"Running: {command}")
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        installed = root_owned_uv()
+        if result.returncode != 0 or installed is None:
             say(result.stdout + result.stderr)
             raise SystemExit("✗ Installing uv failed; see the output above.")
         ok("uv installed for root")
-        return True
+        return installed
     user_uv = Path.home() / ".local" / "bin" / "uv"
     if user_uv.exists() and ask(f"Use your own uv ({tilde(user_uv)}) instead?", USER_UV_MORE, default=False):
-        return True
-    return False
+        return user_uv
+    return None
 
 
 def step_root_groups() -> Outcome:
@@ -379,16 +395,17 @@ def step_install() -> Outcome:
         if not ask("Install them?", "\n".join([UNCOMMITTED_MORE, *changes]), default=False):
             return Outcome(False, "skipped (uncommitted changes)")
     try:
-        if not ensure_uv():
+        uv = ensure_uv()
+        if uv is None:
             return Outcome(False, "skipped (no uv)")
         say()
         detail(f"Running as root: {SYSTEM_PYTHON} {tilde(Path(__file__).resolve())} {ROOT_FLAG}")
-        returncode = subprocess.run(root_install_command(label, [])).returncode
+        returncode = subprocess.run(root_install_command(label, uv, [])).returncode
         if returncode == PREFLIGHT_EXIT:
             if not ask("Continue anyway?", PREFLIGHT_MORE, default=False):
                 return Outcome(False, "stopped at the system checks")
             say()
-            returncode = subprocess.run(root_install_command(label, ["--ignore-preflight"])).returncode
+            returncode = subprocess.run(root_install_command(label, uv, ["--ignore-preflight"])).returncode
         if returncode != 0:
             raise SystemExit("✗ The install failed; see the error above.")
     finally:
@@ -462,16 +479,6 @@ def build_environment(uv: str, source: Path, prefix: Path) -> None:
     run_with_spinner("Building envh (about a minute)", command, environment)
 
 
-def uv_for_root(invoking_user: str) -> str:
-    found = shutil.which("uv")
-    if found:
-        return found
-    user_uv = Path(pwd.getpwnam(invoking_user).pw_dir) / ".local" / "bin" / "uv"
-    if user_uv.exists():
-        return str(user_uv)
-    raise SystemExit("✗ uv not found. Rerun the wizard and let it install uv for root.")
-
-
 def link_envh_bin(target: Path) -> None:
     temp_link = ENVH_BIN.with_name(".envh-link-tmp")
     temp_link.unlink(missing_ok=True)
@@ -482,6 +489,7 @@ def link_envh_bin(target: Path) -> None:
 def install_as_root(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog=f"setup_wizard.py {ROOT_FLAG}", description="the wizard's root half; run the wizard instead")
     parser.add_argument("--source", required=True, help="where the code comes from, recorded in /opt/envh/installed-from")
+    parser.add_argument("--uv", required=True, help="the uv to build with, as the wizard chose it")
     parser.add_argument("--ignore-preflight", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -490,7 +498,6 @@ def install_as_root(argv: list[str]) -> int:
     invoking_user = os.environ.get("SUDO_USER")
     if os.geteuid() != 0 or not invoking_user:
         raise SystemExit(f"{ROOT_FLAG} is the wizard's root half; run python3 scripts/setup_wizard.py instead")
-    uv = uv_for_root(invoking_user)
     with tempfile.TemporaryDirectory(prefix="envh-install-") as scratch:
         staging = Path(scratch) / "source"
         stage_build_files(staging)
@@ -502,8 +509,8 @@ def install_as_root(argv: list[str]) -> int:
             if problems:
                 return PREFLIGHT_EXIT
             ok("System checks passed")
-        build_environment(uv, staging, INSTALL_PREFIX)
-    detail(f"Built {INSTALL_PREFIX / 'env'} with {uv}: Python 3.12 and the versions pinned in uv.lock")
+        build_environment(args.uv, staging, INSTALL_PREFIX)
+    detail(f"Built {INSTALL_PREFIX / 'env'} with {args.uv}: Python 3.12 and the versions pinned in uv.lock")
     subprocess.run(["chown", "-R", "root:root", str(INSTALL_PREFIX)], check=True)
     subprocess.run(["chmod", "-R", "go-w", str(INSTALL_PREFIX)], check=True)
     detail(f"Made {INSTALL_PREFIX} owned and writable by root only")
@@ -534,6 +541,7 @@ def step_console() -> Outcome:
             ok("Connected to the console")
             return Outcome(True, "running")
         warn("Can't reach the console yet.")
+        note(f"If sudo can't find envh-console, run: sudo {CONSOLE_HELPER}")
 
 
 def step_import() -> Outcome:
