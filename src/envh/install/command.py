@@ -53,16 +53,32 @@ restore() {
         chmod "${owner_and_mode#*:}" "$terminal" 2>/dev/null || true
     done
 }
-trap restore EXIT INT TERM HUP
+# sudo passes a hangup (the window closing), INT or TERM to the console's whole process group, but sudo-rs only to this
+# script, and a shell acts on a signal only once the command it waits on has ended. So the console runs in the
+# background, while this script waits and passes such a signal on to the group itself.
+pass_on() {
+    trap '' HUP INT TERM
+    kill -s "$1" 0
+}
+trap restore EXIT
+trap 'pass_on HUP' HUP
+trap 'pass_on INT' INT
+trap 'pass_on TERM' TERM
 for terminal in $terminals; do
     chown SERVICE_USER "$terminal"
     chmod 600 "$terminal"
 done
 if command -v runuser >/dev/null 2>&1; then
-    runuser -u SERVICE_USER -- ENVH_BIN serve "$@"
+    runuser -u SERVICE_USER -- ENVH_BIN serve "$@" <"$tty_path" &
 else
-    sudo -u SERVICE_USER -H ENVH_BIN serve "$@"
+    sudo -u SERVICE_USER -H ENVH_BIN serve "$@" <"$tty_path" &
 fi
+console=$!
+status=0
+while kill -0 "$console" 2>/dev/null; do
+    if wait "$console"; then status=0; else status=$?; fi
+done
+exit "$status"
 """.replace("SERVICE_USER", SERVICE_USER).replace("ENVH_BIN", str(ENVH_BIN))
 
 DESKTOP_ENTRY = """[Desktop Entry]
