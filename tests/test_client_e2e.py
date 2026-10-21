@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import os
 import re
 import subprocess
@@ -29,7 +30,7 @@ async def test_run_prompts_then_injects_env(control: Path, harness: Harness) -> 
     await approve_next(harness)
     code, out, err = await asyncio.wait_for(task, timeout=20)
     assert code == 7
-    assert out.strip() == "sk-openai"
+    assert out.strip() == "[envh:OPENAI_API_KEY]"
     assert "waiting for approval" in err
     await asyncio.sleep(0.05)
     assert harness.broker.state.active_runs() == []
@@ -46,7 +47,7 @@ async def test_one_command_with_a_preset_needs_no_session(control: Path, harness
     await approve_next(harness)
     code, out, err = await asyncio.wait_for(task, timeout=20)
     assert code == 0, err
-    assert out.split() == ["postgres://x", "sk-openai"]
+    assert out.split() == ["[envh:DATABASE_URL]", "[envh:OPENAI_API_KEY]"]
     assert harness.broker.state.live_sessions() == []
 
 
@@ -80,7 +81,7 @@ async def test_session_start_then_run_and_end(control: Path, harness: Harness) -
     assert code == 0, err
     assert out.strip() == "['OPENAI_API_KEY']"
     code, out, err = await run_cli(control, "run", "--session", session_id, "--", sys.executable, "-c", "import os; print(os.environ['OPENROUTER_API_KEY'])")
-    assert code == 0 and out.strip() == "sk-or-team"
+    assert code == 0 and out.strip() == "[envh:OPENROUTER_API_KEY]"
     code, out, err = await run_cli(control, "run", "--session", session_id, "--with", "DATABASE_URL", "--", "true")
     assert code == 5 and "not covered" in err
     code, out, err = await run_cli(control, "session", "end")
@@ -131,16 +132,97 @@ async def test_background_processes_are_terminated_after_the_run(control: Path, 
 
 
 async def test_keep_background_leaves_processes_alone(control: Path, harness: Harness) -> None:
-    sleeper = "import subprocess; subprocess.Popen(['sleep', '2345.6'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); print('started')"
+    sleeper = "import os, subprocess; subprocess.Popen(['sleep', '2345.6'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); print('started', os.environ['OPENAI_API_KEY'])"
     task = asyncio.create_task(run_cli(control, "run", "--keep-background", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", sleeper))
     await approve_next(harness)
     code, out, err = await asyncio.wait_for(task, timeout=20)
     assert code == 0 and "terminated" not in err
+    assert out.strip() == "started sk-openai"
     found = subprocess.run(["pgrep", "-f", "sleep 2345.6"], capture_output=True, text=True)
     assert found.returncode == 0
     for pid in found.stdout.split():
         subprocess.run(["kill", pid])
     assert any("run_end" in line and "lingering_terminated=0" in line for line in harness.echoed)
+
+
+async def test_values_are_hidden_in_what_the_command_prints(control: Path, harness: Harness) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    printer = "import os, sys; key = os.environ['OPENAI_API_KEY']; print('key', key); print(key[:4], end='', file=sys.stderr, flush=True); print(key[4:], file=sys.stderr)"
+    code, out, err = await run_cli(control, "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", printer)
+    assert code == 0, err
+    assert out == "key [envh:OPENAI_API_KEY]\n"
+    assert "\n[envh:OPENAI_API_KEY]\n" in err and "sk-openai" not in err
+    assert "envh: hid the value of OPENAI_API_KEY in the output" in err
+
+
+async def test_a_terminal_stays_a_terminal(control: Path, harness: Harness) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    controller, terminal = os.openpty()
+    printer = "import os; print(os.isatty(1), os.isatty(2), os.environ['OPENAI_API_KEY'])"
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "envh", "--socket", str(control), "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", printer,
+        stdin=subprocess.DEVNULL, stdout=terminal, stderr=terminal, env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+    )
+    os.close(terminal)
+    try:
+        assert await asyncio.wait_for(process.wait(), timeout=20) == 0
+        output = b""
+        while chunk := read_terminal(controller):
+            output += chunk
+    finally:
+        os.close(controller)
+    assert b"True True [envh:OPENAI_API_KEY]\r\n" in output and b"sk-openai" not in output
+
+
+def read_terminal(controller: int) -> bytes:
+    try:
+        return os.read(controller, 4096)
+    except OSError as error:
+        if error.errno != errno.EIO:
+            raise
+        return b""
+
+
+async def test_output_shows_while_the_command_runs(control: Path, harness: Harness) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    prompt = "import sys; sys.stdout.write('Continue as'); sys.stdout.flush(); sys.stdin.readline(); print('done')"
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "envh", "--socket", str(control), "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", prompt,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+    )
+    assert process.stdout is not None
+    assert await asyncio.wait_for(process.stdout.readexactly(len("Continue as")), timeout=10) == b"Continue as"
+    out, err = await asyncio.wait_for(process.communicate(b"\n"), timeout=20)
+    assert process.returncode == 0, err
+    assert out == b"done\n"
+
+
+async def test_a_reader_that_stops_early_ends_the_run(control: Path, harness: Harness) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    endless = "import itertools; [print(number) for number in itertools.count()]"
+    reader, writer = os.pipe()
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "envh", "--socket", str(control), "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", endless,
+        stdout=writer, stderr=asyncio.subprocess.DEVNULL, env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+    )
+    os.close(writer)
+    first = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(None, os.read, reader, 2), timeout=20)
+    assert first.startswith(b"0")
+    os.close(reader)
+    assert await asyncio.wait_for(process.wait(), timeout=20) != 0
+
+
+async def test_a_leftover_process_holding_the_output_does_not_keep_the_run_open(control: Path, harness: Harness) -> None:
+    make_auto(harness, "OPENAI_API_KEY")
+    marked = "import subprocess; subprocess.Popen(['sleep', '3456.7']); print('started')"
+    code, out, err = await asyncio.wait_for(run_cli(control, "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", marked), timeout=20)
+    assert code == 0 and out == "started\n" and "terminated 1 process" in err, err
+    unmarked = "import subprocess; subprocess.Popen(['sleep', '4567.8'], env={}); print('started')"
+    try:
+        code, out, err = await asyncio.wait_for(run_cli(control, "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", unmarked), timeout=20)
+        assert code == 0 and out == "started\n", err
+    finally:
+        subprocess.run(["pkill", "-f", "sleep 4567.8"])
 
 
 async def test_signal_killed_command_exits_like_a_shell(control: Path, harness: Harness) -> None:
@@ -200,7 +282,7 @@ async def test_keys_that_need_no_approval_run_at_once_and_show_in_list(control: 
     make_auto(harness, "OPENAI_API_KEY")
     code, out, err = await run_cli(control, "run", "--with", "OPENAI_API_KEY", "--reason", "free", "--", sys.executable, "-c", "import os; print(os.environ['OPENAI_API_KEY'])")
     assert code == 0, err
-    assert out.strip() == "sk-openai" and "waiting for approval" not in err
+    assert out.strip() == "[envh:OPENAI_API_KEY]" and "waiting for approval" not in err
     code, out, err = await run_cli(control, "session", "start", "dbwork", "--minutes", "5", "--reason", "free", "--quiet")
     assert code == 0, err
     assert harness.broker.state.session(out.strip()).mapping == {"OPENAI_API_KEY": "OPENAI_API_KEY"}

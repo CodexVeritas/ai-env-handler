@@ -39,6 +39,8 @@ envh session end <id>
 
 - `--reason` is optional but the console shows its absence loudly. Write what you would want to read before approving.
 - A running command is never killed when its session expires; expiry only stops new approvals. When the command itself exits, any process it left running is terminated so the values do not outlive the run (`--keep-background` to opt out).
+- `envh run` hides the values in what the command prints. Where a value would show in stdout or stderr you see `[envh:OPENAI_API_KEY]`, and envh says which keys it hid when the run ends. It matches the exact value only, and leaves values under 8 characters alone. A command run in a terminal still sees a terminal, so colors and progress output work as before.
+- To write a value into a file on purpose, redirect inside the command: `envh run ... -- sh -c 'render-config > config.yaml'`. `--keep-background` turns hiding off, because envh can't filter what a process prints after `envh run` exits.
 - One user can have 32 `envh` commands running or waiting at once; another is refused until one finishes. A `--reason` can be up to 1,000 characters, and the audit log keeps the first 4,000 characters of a command line.
 - `envh status` shows pending requests, active runs and live sessions as JSON. Neither it nor `envh list` shows session ids: `envh session start` prints yours, and the console's `/sessions` shows them all.
 - If `envh session start` stops waiting before you approve (an agent's tool call timed out), the request still waits for 10 minutes. `envh session wait <code>` picks it up again, with the code `envh session start` printed. A request id from `envh status` is not enough, so another program running as you can't collect the session.
