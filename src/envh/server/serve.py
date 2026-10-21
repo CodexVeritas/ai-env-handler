@@ -10,6 +10,7 @@ import signal
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import FrameType
 
 from envh.platform import listed_user_warnings, socket_path as default_socket_path
 from envh.core.audit import AUDIT_FILE, Audit
@@ -101,6 +102,18 @@ def unlock(data_dir: Path) -> tuple[str, str | None, Vault, Config]:
     return phrase, terminal_warning, vault, config
 
 
+def ignore_signal(signum: int, frame: FrameType | None) -> None:
+    pass
+
+
+def interrupt_once(signum: int, frame: FrameType | None) -> None:
+    """sudo and the console helper can each pass the same Ctrl-C on, at any moment until the process ends, so only the
+    first one interrupts. Blocked rather than left to the no-op, as Python restores the default action while exiting."""
+    signal.signal(signal.SIGINT, ignore_signal)
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    raise KeyboardInterrupt
+
+
 async def run_broker(data_dir: Path, socket_path: Path, phrase: str, terminal_warning: str | None, vault: Vault, config: Config) -> None:
     loop = asyncio.get_running_loop()
     state = StateTable(local_now)
@@ -169,14 +182,14 @@ def main(argv: list[str]) -> int:
         print(failed(f"The console can't start: {error}"), file=sys.stderr)
         return 1
     try:
+        signal.signal(signal.SIGINT, interrupt_once)
         try:
             phrase, terminal_warning, vault, config = unlock(data_dir)
         except KeyboardInterrupt:
-            # sudo and the console helper can each pass the same Ctrl-C on, and a second one would break the exit.
-            signal.signal(signal.SIGINT, signal.SIG_IGN)
             say()
             say(f"  {paint('2', 'Stopped.')}")
             return 130
+        signal.signal(signal.SIGINT, signal.default_int_handler)
         asyncio.run(run_broker(data_dir, socket_path, phrase, terminal_warning, vault, config))
     finally:
         os.close(lock_descriptor)

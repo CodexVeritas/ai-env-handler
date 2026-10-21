@@ -23,7 +23,7 @@ from pathlib import Path
 PASSWORD = os.environ["CI_PASSWORD"]
 VAULT_PASSPHRASE = "ci vault passphrase"
 SUDO_PROMPT = r"[Pp]assword[^:\n]*:"
-TERMINAL_CODES = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
+TERMINAL_CODES = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r")
 WIZARD_SECONDS = 900
 CONSOLE_SECONDS = 120
 CONSOLE_HELPER = "/usr/local/sbin/envh-console"
@@ -196,8 +196,8 @@ def main() -> int:
             failures.append("Ctrl-C at the vault passphrase prompt didn't stop the console")
             console.close()
             console.wait(30)
-        if "Traceback" in console.text:
-            failures.append("Ctrl-C at the vault passphrase prompt showed a traceback")
+        if not re.search(r"Stopped\.\s*$", console.text):
+            failures.append('Ctrl-C at the vault passphrase prompt didn\'t end with just "Stopped."')
 
     def uninstall() -> None:
         terminal = Terminal("uninstall", ["sudo", *full_path_if_told("envh"), "uninstall", "--purge"])
