@@ -158,20 +158,24 @@ async def test_values_are_hidden_in_what_the_command_prints(control: Path, harne
 async def test_a_terminal_stays_a_terminal(control: Path, harness: Harness) -> None:
     make_auto(harness, "OPENAI_API_KEY")
     controller, terminal = os.openpty()
-    printer = "import os; print(os.isatty(1), os.isatty(2), os.environ['OPENAI_API_KEY'])"
+    printer = "import os, sys; print(os.isatty(1), os.isatty(2), os.environ['OPENAI_API_KEY']); sys.stdin.readline()"
     process = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "envh", "--socket", str(control), "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", printer,
-        stdin=subprocess.DEVNULL, stdout=terminal, stderr=terminal, env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+        stdin=asyncio.subprocess.PIPE, stdout=terminal, stderr=terminal, env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
     )
     os.close(terminal)
+    output = b""
     try:
-        assert await asyncio.wait_for(process.wait(), timeout=20) == 0
-        output = b""
+        while b"True True [envh:OPENAI_API_KEY]\r\n" not in output:
+            chunk = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(None, read_terminal, controller), timeout=10)
+            assert chunk, output
+            output += chunk
+        await asyncio.wait_for(process.communicate(b"\n"), timeout=20)
         while chunk := read_terminal(controller):
             output += chunk
     finally:
         os.close(controller)
-    assert b"True True [envh:OPENAI_API_KEY]\r\n" in output and b"sk-openai" not in output
+    assert process.returncode == 0 and b"sk-openai" not in output
 
 
 def read_terminal(controller: int) -> bytes:
@@ -222,7 +226,9 @@ async def test_a_leftover_process_holding_the_output_does_not_keep_the_run_open(
         code, out, err = await asyncio.wait_for(run_cli(control, "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", unmarked), timeout=20)
         assert code == 0 and out == "started\n", err
     finally:
-        subprocess.run(["pkill", "-f", "sleep 4567.8"])
+        found = subprocess.run(["pgrep", "-f", "sleep 4567.8"], capture_output=True, text=True)
+        for pid in found.stdout.split():
+            subprocess.run(["kill", pid])
 
 
 async def test_signal_killed_command_exits_like_a_shell(control: Path, harness: Harness) -> None:
