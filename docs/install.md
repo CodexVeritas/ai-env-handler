@@ -47,7 +47,7 @@ The wizard walks through nine short steps and asks before each change. Type `?` 
 | 3. Install envh | Asks for your sudo password, copies envh to `/opt/envh` and creates your vault. You choose a **vault passphrase** and get a **console phrase** to write down. |
 | 4. Start the console | You run `sudo envh-console` in a new window and leave it open. See [console.md](console.md). |
 | 5. Import keys | Moves one project's `.env` keys into the vault. Optional. See [import.md](import.md). |
-| 6. Editor `.env` history | Stops VS Code and Cursor from keeping copies of `.env` files each time you save. |
+| 6. Editor `.env` history | Stops VS Code (including Code - OSS, VSCodium and Flatpak VS Code) and Cursor from keeping copies of `.env` files each time you save. |
 | 7. Connect Claude Code | Adds the envh skill, the hook and three lines to `~/.claude/CLAUDE.md`. See [agents.md](agents.md). |
 | 8. Connect Cursor | Adds the same skill and hook for Cursor. |
 | 9. Find stray keys | Scans your home folder for leftover copies of keys, then opens the explorer. It will miss some. See [scan.md](scan.md). |
