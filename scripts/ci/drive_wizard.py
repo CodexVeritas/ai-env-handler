@@ -191,12 +191,15 @@ def main() -> int:
         console.answer_until([(SUDO_PROMPT, PASSWORD)], "Vault passphrase:", CONSOLE_SECONDS)
         os.write(console.descriptor, b"\x03")
         try:
-            console.wait(15)
+            status = console.wait(15)
         except Failure:
             failures.append("Ctrl-C at the vault passphrase prompt didn't stop the console")
             console.close()
             console.wait(30)
-        if not re.search(r"Stopped\.\s*$", console.text):
+            return
+        if status != 130:
+            failures.append(f"Ctrl-C at the vault passphrase prompt exited with status {status}, not 130")
+        if "Traceback" in console.text or not re.search(r"Stopped\.\s*$", console.text):
             failures.append('Ctrl-C at the vault passphrase prompt didn\'t end with just "Stopped."')
 
     def uninstall() -> None:
