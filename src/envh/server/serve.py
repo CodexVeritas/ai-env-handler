@@ -10,11 +10,12 @@ import signal
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import FrameType
 
 from envh.platform import listed_user_warnings, socket_path as default_socket_path
 from envh.core.audit import AUDIT_FILE, Audit
 from envh.core.broker import Broker
-from envh.core.config import ConfigError, load_config
+from envh.core.config import Config, ConfigError, load_config
 from envh.server.console.activity import Activity
 from envh.server.console.app import ConsoleApp
 from envh.server.console.summaries import plural
@@ -86,8 +87,7 @@ def unlock_vault(data_dir: Path, phrase: str) -> Vault:
     raise SystemExit(failed("Couldn't unlock the vault."))
 
 
-async def run_broker(data_dir: Path, socket_path: Path) -> None:
-    loop = asyncio.get_running_loop()
+def unlock(data_dir: Path) -> tuple[str, str | None, Vault, Config]:
     phrase = read_phrase(data_dir)
     terminal_warning = shared_terminal_warning()
     if terminal_warning:
@@ -99,6 +99,23 @@ async def run_broker(data_dir: Path, socket_path: Path) -> None:
     except ConfigError as error:
         raise SystemExit(failed(f"The policy files have a problem: {error}"))
     ok(f"Policy loaded · {plural(len(config.presets), 'preset')}")
+    return phrase, terminal_warning, vault, config
+
+
+def ignore_signal(signum: int, frame: FrameType | None) -> None:
+    pass
+
+
+def interrupt_once(signum: int, frame: FrameType | None) -> None:
+    """sudo and the console helper can each pass the same Ctrl-C on, at any moment until the process ends, so only the
+    first one interrupts. Blocked rather than left to the no-op, as Python restores the default action while exiting."""
+    signal.signal(signal.SIGINT, ignore_signal)
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    raise KeyboardInterrupt
+
+
+async def run_broker(data_dir: Path, socket_path: Path, phrase: str, terminal_warning: str | None, vault: Vault, config: Config) -> None:
+    loop = asyncio.get_running_loop()
     state = StateTable(local_now)
     activity = Activity(local_now)
     audit = Audit(data_dir / AUDIT_FILE, activity.add, local_now)
@@ -165,7 +182,15 @@ def main(argv: list[str]) -> int:
         print(failed(f"The console can't start: {error}"), file=sys.stderr)
         return 1
     try:
-        asyncio.run(run_broker(data_dir, socket_path))
+        signal.signal(signal.SIGINT, interrupt_once)
+        try:
+            phrase, terminal_warning, vault, config = unlock(data_dir)
+        except KeyboardInterrupt:
+            say()
+            say(f"  {paint('2', 'Stopped.')}")
+            return 130
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        asyncio.run(run_broker(data_dir, socket_path, phrase, terminal_warning, vault, config))
     finally:
         os.close(lock_descriptor)
     return 0

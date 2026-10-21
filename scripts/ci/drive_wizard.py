@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Runs the setup wizard end to end the way a person would, answering each prompt on a terminal of its own: installs
 envh, starts the console with `sudo envh-console`, checks a client and the Claude Code hook reach it, closes the console's
-terminal, checks Ctrl-C (twice) stops the console at its passphrase prompt, then uninstalls.
+terminal, checks one Ctrl-C stops the console at its passphrase prompt, then uninstalls.
 
 Run by scripts/ci/install_matrix.sh as a user who can sudo with the password in CI_PASSWORD. Standard library only, so
 it runs on each distribution's own python3. Any system check problem fails the run, after the remaining steps have
@@ -23,7 +23,7 @@ from pathlib import Path
 PASSWORD = os.environ["CI_PASSWORD"]
 VAULT_PASSPHRASE = "ci vault passphrase"
 SUDO_PROMPT = r"[Pp]assword[^:\n]*:"
-TERMINAL_CODES = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
+TERMINAL_CODES = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r")
 WIZARD_SECONDS = 900
 CONSOLE_SECONDS = 120
 CONSOLE_HELPER = "/usr/local/sbin/envh-console"
@@ -96,6 +96,7 @@ class Terminal:
         while time.monotonic() < deadline:
             finished, status = os.waitpid(self.pid, os.WNOHANG)
             if finished:
+                self.read(0)
                 return os.waitstatus_to_exitcode(status)
             self.read(0.5)
         raise Failure(f"{self.name} didn't exit within {seconds:.0f} seconds")
@@ -188,16 +189,18 @@ def main() -> int:
     def interrupt_console() -> None:
         console = Terminal("console, then Ctrl-C", ["sudo", *full_path_if_told("envh-console")])
         console.answer_until([(SUDO_PROMPT, PASSWORD)], "Vault passphrase:", CONSOLE_SECONDS)
-        # asyncio takes the first Ctrl-C as a request to cancel, which can't happen while the prompt blocks.
-        for _ in range(2):
-            os.write(console.descriptor, b"\x03")
-            time.sleep(1)
+        os.write(console.descriptor, b"\x03")
         try:
-            console.wait(15)
+            status = console.wait(15)
         except Failure:
-            failures.append("Ctrl-C twice at the vault passphrase prompt didn't stop the console")
+            failures.append("Ctrl-C at the vault passphrase prompt didn't stop the console")
             console.close()
             console.wait(30)
+            return
+        if status != 130:
+            failures.append(f"Ctrl-C at the vault passphrase prompt exited with status {status}, not 130")
+        if "Traceback" in console.text or not re.search(r"Stopped\.\s*$", console.text):
+            failures.append('Ctrl-C at the vault passphrase prompt didn\'t end with just "Stopped."')
 
     def uninstall() -> None:
         terminal = Terminal("uninstall", ["sudo", *full_path_if_told("envh"), "uninstall", "--purge"])
