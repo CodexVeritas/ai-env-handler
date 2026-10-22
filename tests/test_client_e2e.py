@@ -147,7 +147,7 @@ async def test_keep_background_leaves_processes_alone(control: Path, harness: Ha
 
 async def test_values_are_hidden_in_what_the_command_prints(control: Path, harness: Harness) -> None:
     make_auto(harness, "OPENAI_API_KEY")
-    printer = "import os, sys; key = os.environ['OPENAI_API_KEY']; print('key', key); print(key[:4], end='', file=sys.stderr, flush=True); print(key[4:], file=sys.stderr)"
+    printer = "import os, sys, time; key = os.environ['OPENAI_API_KEY']; print('key', key); print(key[:4], end='', file=sys.stderr, flush=True); time.sleep(0.5); print(key[4:], file=sys.stderr)"
     code, out, err = await run_cli(control, "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", printer)
     assert code == 0, err
     assert out == "key [envh:OPENAI_API_KEY]\n"
@@ -189,13 +189,13 @@ def read_terminal(controller: int) -> bytes:
 
 async def test_output_shows_while_the_command_runs(control: Path, harness: Harness) -> None:
     make_auto(harness, "OPENAI_API_KEY")
-    prompt = "import sys; sys.stdout.write('Continue as'); sys.stdout.flush(); sys.stdin.readline(); print('done')"
+    prompt = "import sys; sys.stdout.write('Continue? '); sys.stdout.flush(); sys.stdin.readline(); print('done')"
     process = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "envh", "--socket", str(control), "run", "--with", "OPENAI_API_KEY", "--", sys.executable, "-c", prompt,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
     )
     assert process.stdout is not None
-    assert await asyncio.wait_for(process.stdout.readexactly(len("Continue as")), timeout=10) == b"Continue as"
+    assert await asyncio.wait_for(process.stdout.readexactly(len("Continue? ")), timeout=10) == b"Continue? "
     out, err = await asyncio.wait_for(process.communicate(b"\n"), timeout=20)
     assert process.returncode == 0, err
     assert out == b"done\n"

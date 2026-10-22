@@ -17,14 +17,15 @@ from types import FrameType, TracebackType
 
 PLACEHOLDER = "[envh:{}]"
 SHORTEST_HIDDEN_VALUE = 8
-IDLE_FLUSH_SECONDS = 0.1
+POLL_SECONDS = 0.1
 DRAIN_SECONDS = 1.0
 READ_SIZE = 65536
 
 
 class Scrubber:
     """Replaces each value with a placeholder naming its variable, even when the value arrives split across writes. An
-    ending that could be the start of a value is held back until the next write or flush()."""
+    ending that could be the start of a value is held back until the next write or flush(), however long that takes:
+    releasing it early would let the rest of a slowly written value through."""
 
     def __init__(self, env: dict[str, str]) -> None:
         self.names: dict[bytes, str] = {}
@@ -110,17 +111,15 @@ class Channel:
         while True:
             if deadline is None and stopping.is_set():
                 deadline = time.monotonic() + DRAIN_SECONDS
-            if select.select([self.read_fd], [], [], IDLE_FLUSH_SECONDS)[0]:
+            if select.select([self.read_fd], [], [], POLL_SECONDS)[0]:
                 data = self.read()
                 if not data:
                     break
                 self.write(self.scrubber.feed(data))
                 if deadline is not None and time.monotonic() > deadline:
                     break
-            else:
-                self.write(self.scrubber.flush())
-                if deadline is not None:
-                    break
+            elif deadline is not None:
+                break
         self.write(self.scrubber.flush())
 
     def read(self) -> bytes:
