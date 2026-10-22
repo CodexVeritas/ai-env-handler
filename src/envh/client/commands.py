@@ -19,6 +19,7 @@ from envh.tools.explorer import explore, interactive, load_vault_matches, main a
 from envh.tools.vault_search import vault_search
 from envh.tools.scanner import main as scan_main, skipped_folders_help
 from envh.platform import socket_path as default_socket_path
+from envh.client.scrub import ScrubbedOutput
 from envh.client.transport import EXIT_USAGE, ClientError, Connection, waiting_notice
 
 RUN_MARKER_VAR = "ENVH_RUN_MARKER"
@@ -52,10 +53,20 @@ def cmd_run(args: argparse.Namespace, sock: Path) -> int:
         env = reply["env"]
         print(f"envh: run #{reply['run_id']} with {', '.join(sorted(env))}", file=sys.stderr, flush=True)
         marker = secrets.token_hex(16)
-        exit_code = spawn(command, {**env, RUN_MARKER_VAR: marker})
-        lingering = [] if args.keep_background else terminate_lingering(marker)
+        run_env = {**env, RUN_MARKER_VAR: marker}
+        lingering: list[int] = []
+        hidden: list[str] = []
+        if args.keep_background:
+            exit_code = spawn(command, run_env)
+        else:
+            with ScrubbedOutput(env) as output:
+                exit_code = spawn(command, run_env, output)
+                lingering = terminate_lingering(marker)
+            hidden = output.hidden
         if lingering:
             print(f"envh: terminated {len(lingering)} process(es) the run left behind that still held the values: pids {', '.join(map(str, lingering))}", file=sys.stderr)
+        if hidden:
+            print(f"envh: hid the {'value' if len(hidden) == 1 else 'values'} of {', '.join(hidden)} in the output", file=sys.stderr)
         try:
             conn.send(op="run_done", exit_code=exit_code, lingering_terminated=len(lingering))
         except OSError:
@@ -63,11 +74,13 @@ def cmd_run(args: argparse.Namespace, sock: Path) -> int:
     return exit_code
 
 
-def spawn(command: list[str], extra_env: dict[str, str]) -> int:
+def spawn(command: list[str], extra_env: dict[str, str], output: ScrubbedOutput | None = None) -> int:
     try:
-        child = subprocess.Popen(command, env={**os.environ, **extra_env})
+        child = subprocess.Popen(command, env={**os.environ, **extra_env}, stdout=output.stdout if output else None, stderr=output.stderr if output else None)
     except FileNotFoundError as error:
         raise ClientError(f"command not found: {command[0]}", EXIT_USAGE) from error
+    if output:
+        output.command_started()
 
     def forward(signum: int, _frame: object) -> None:
         try:
@@ -270,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--preset", dest="presets", action="append", metavar="PRESET[,PRESET...]", help="repeat or use commas to combine presets")
     run.add_argument("--with", dest="with_", action="append", metavar="VAR[=SECRET],...")
     run.add_argument("--reason", help="why you need these secrets; shown to the approver")
-    run.add_argument("--keep-background", action="store_true", help="do not terminate processes the command leaves running (they keep the values)")
+    run.add_argument("--keep-background", action="store_true", help="do not terminate processes the command leaves running (they keep the values), and do not hide values in the output")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=cmd_run)
 

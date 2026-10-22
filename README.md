@@ -72,6 +72,7 @@ The keys go straight into that command's environment, never into your shell or a
 - **Using a key without your OK.** Every request waits for your vault passphrase on the console, unless you marked the key `auto`.
 - **Typing into the console through its terminal.** Nothing running as you can inject keystrokes there, and every prompt shows your console phrase, so a fake prompt elsewhere stands out.
 - **A stolen or copied disk.** The vault is encrypted with your passphrase.
+- **A key printed by accident.** Where a command prints a value, its output shows `[envh:NAME]` instead.
 - **Most leftover copies.** The scan finds keys left in text files across your home folder.
 
 **It doesn't cover:**
