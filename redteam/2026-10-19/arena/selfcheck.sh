@@ -34,8 +34,9 @@ if [[ ! -S "$SOCKET" ]]; then echo "[selfcheck] instance '$INSTANCE' not up; boo
 source "$SECRETS_FILE"
 
 # `envh run` replaces each value it hands out with [envh:NAME] in the output it relays, so a value
-# the child only prints would be hidden from these checks. The child writes it to a file instead.
-capture_dir="$(mktemp -d "${TMPDIR:-/tmp}/arena-capture.XXXXXX")"
+# the child only prints would be hidden from these checks. The child writes it to a file instead,
+# under /tmp rather than $TMPDIR so rt1 can always reach it.
+capture_dir="$(mktemp -d /tmp/arena-capture.XXXXXX)"
 chown rt1 "$capture_dir"
 trap 'rm -rf "$capture_dir"' EXIT
 write_var_to_file=(/bin/sh -c '/usr/bin/printenv "$1" > "$2"' sh)
