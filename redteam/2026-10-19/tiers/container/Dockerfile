@@ -9,8 +9,8 @@
 ARG DISTRO=ubuntu:24.04
 FROM ${DISTRO}
 
-# Fedora ships /etc/shadow as 0000, so its setuid-root unix_chkpwd needs CAP_DAC_OVERRIDE to read it.
-# An Ubuntu host's AppArmor unix-chkpwd profile denies that capability, which breaks `sudo -u` in a
+# Fedora ships /etc/shadow as 0000, so its setuid-root unix_chkpwd needs a DAC capability to read it.
+# The AppArmor 4.0 unix-chkpwd profile on Ubuntu hosts grants none, which breaks `sudo -u` in a
 # --privileged container (fedora-cloud/docker-brew-fedora#117). 0600 (Arch's mode) stays root-only.
 RUN set -eux; \
     (command -v apt-get && apt-get update && apt-get install -y --no-install-recommends \
