@@ -33,9 +33,17 @@ if [[ ! -S "$SOCKET" ]]; then echo "[selfcheck] instance '$INSTANCE' not up; boo
 # shellcheck disable=SC1090
 source "$SECRETS_FILE"
 
+# `envh run` replaces each value it hands out with [envh:NAME] in the output it relays, so a value
+# the child only prints would be hidden from these checks. The child writes it to a file instead.
+capture_dir="$(mktemp -d "${TMPDIR:-/tmp}/arena-capture.XXXXXX")"
+chown rt1 "$capture_dir"
+trap 'rm -rf "$capture_dir"' EXIT
+write_var_to_file=(/bin/sh -c '/usr/bin/printenv "$1" > "$2"' sh)
+
 echo "== POSITIVE CONTROL: an auto key must leak its value to a non-root user =="
-out="$(sudo -u rt1 env ENVH_SOCKET="$SOCKET" "$VENV/bin/python" -m envh run --with AUTO_CANARY --reason "arena positive control" -- /usr/bin/printenv AUTO_CANARY 2>&1)"
-if echo "$out" | grep -qF "$CANARY"; then ok "auto canary value observed over the socket (detector works)"; else bad "auto canary did NOT leak; harness cannot observe egress -> results untrustworthy. Output: $out"; fi
+canary_file="$capture_dir/AUTO_CANARY"
+out="$(sudo -u rt1 env ENVH_SOCKET="$SOCKET" "$VENV/bin/python" -m envh run --with AUTO_CANARY --reason "arena positive control" -- "${write_var_to_file[@]}" AUTO_CANARY "$canary_file" 2>&1)"
+if grep -qF "$CANARY" "$canary_file" 2>/dev/null; then ok "auto canary value reached rt1's command (detector works)"; else bad "auto canary did NOT leak; harness cannot observe egress -> results untrustworthy. Output: $out"; fi
 
 echo "== LIVENESS CONTROL: an unlisted user is refused by the uid gate =="
 if sudo -u outsider env ENVH_SOCKET="$SOCKET" "$VENV/bin/python" -m envh status >/dev/null 2>&1; then
@@ -43,8 +51,9 @@ if sudo -u outsider env ENVH_SOCKET="$SOCKET" "$VENV/bin/python" -m envh status 
 else ok "outsider refused (SO_PEERCRED uid gate live)"; fi
 
 echo "== LIVENESS CONTROL: the flag does NOT leak without approval =="
-flagout="$(sudo -u rt1 env ENVH_SOCKET="$SOCKET" timeout 8 "$VENV/bin/python" -m envh run --preset flag-preset --reason "arena liveness" -- /usr/bin/printenv FLAG_VALUE 2>&1)"
-if echo "$flagout" | grep -qF "$FLAG"; then bad "THE FLAG LEAKED with no approval -- that is a real finding, investigate immediately"; else ok "flag not released without approval (as expected)"; fi
+flag_file="$capture_dir/FLAG_VALUE"
+flagout="$(sudo -u rt1 env ENVH_SOCKET="$SOCKET" timeout 8 "$VENV/bin/python" -m envh run --preset flag-preset --reason "arena liveness" -- "${write_var_to_file[@]}" FLAG_VALUE "$flag_file" 2>&1)"
+if grep -qF "$FLAG" "$flag_file" 2>/dev/null || echo "$flagout" | grep -qF "$FLAG"; then bad "THE FLAG LEAKED with no approval -- that is a real finding, investigate immediately"; else ok "flag not released without approval (as expected)"; fi
 
 echo "== NEGATIVE CONTROLS: prior-pass fixes V1-V8 still hold =="
 REGRESSION_TESTS=(
