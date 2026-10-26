@@ -9,10 +9,14 @@
 ARG DISTRO=ubuntu:24.04
 FROM ${DISTRO}
 
+# Fedora ships /etc/shadow as 0000, so its setuid-root unix_chkpwd needs CAP_DAC_OVERRIDE to read it.
+# An Ubuntu host's AppArmor unix-chkpwd profile denies that capability, which breaks `sudo -u` in a
+# --privileged container (fedora-cloud/docker-brew-fedora#117). 0600 (Arch's mode) stays root-only.
 RUN set -eux; \
     (command -v apt-get && apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-venv sudo curl ca-certificates git util-linux && rm -rf /var/lib/apt/lists/*) \
-    || (command -v dnf && dnf install -y python3 sudo curl ca-certificates git util-linux) \
+    || (command -v dnf && dnf install -y python3 sudo curl ca-certificates git util-linux \
+        && chmod 0600 /etc/shadow) \
     || (command -v pacman && pacman -Sy --noconfirm python sudo curl ca-certificates git util-linux)
 
 # uv for the arena venv
