@@ -407,6 +407,27 @@ def test_root_builds_with_the_uv_the_user_half_chose(tmp_path: Path, monkeypatch
     assert wizard.ensure_uv() is None
 
 
+@pytest.mark.parametrize(("returncode", "said"), [(0, "✓ Updated uv for root"), (1, "! Couldn't update uv for root")])
+def test_only_the_uv_the_wizard_installed_for_root_is_updated_before_a_build(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], returncode: int, said: str
+) -> None:
+    commands: list[str] = []
+
+    def run(command: str, **options: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, returncode, "", "")
+
+    monkeypatch.setattr(wizard, "uv_root_install_command", lambda: "the uv installer")
+    monkeypatch.setattr(wizard.subprocess, "run", run)
+    monkeypatch.setattr(wizard, "root_owned_uv", lambda: Path("/usr/bin/uv"))
+    assert wizard.ensure_uv() == Path("/usr/bin/uv")
+    assert commands == []
+    monkeypatch.setattr(wizard, "root_owned_uv", lambda: wizard.UV_FOR_ROOT)
+    assert wizard.ensure_uv() == wizard.UV_FOR_ROOT
+    assert commands == ["the uv installer"]
+    assert said in capsys.readouterr().out
+
+
 def test_the_system_checks_load_from_the_staged_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "modules", dict(sys.modules))
     wizard.stage_build_files(tmp_path / "staging")
