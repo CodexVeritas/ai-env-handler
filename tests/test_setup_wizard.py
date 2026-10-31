@@ -384,7 +384,7 @@ def test_root_runs_the_wizard_with_the_system_python_and_sudo_by_absolute_path()
     assert command[3:] == ["--install-as-root", "--source", "abc123 from /repo", "--uv", "/usr/local/bin/uv", "--ignore-preflight"]
 
 
-@pytest.mark.parametrize(("found", "fetch"), [({"curl", "wget"}, "/usr/bin/curl -LsSf "), ({"wget"}, "/usr/bin/wget -nv -O- ")])
+@pytest.mark.parametrize(("found", "fetch"), [({"curl", "wget"}, "/usr/bin/curl -q -LsSf "), ({"wget"}, "/usr/bin/wget --no-config -nv -O- ")])
 def test_uv_for_root_is_fetched_with_curl_or_else_wget_from_the_secure_path(monkeypatch: pytest.MonkeyPatch, found: set[str], fetch: str) -> None:
     def which(name: str, path: str | None = None) -> str | None:
         return f"/usr/bin/{name}" if name in found and path == wizard.SUDO_SECURE_PATH else None

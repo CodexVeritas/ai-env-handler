@@ -343,11 +343,12 @@ def root_install_command(label: str, uv: Path, flags: list[str]) -> list[str]:
 
 def uv_installer_fetch() -> str | None:
     """Fetches astral.sh's installer with curl, or wget (Ubuntu's desktop installs have no curl), found on sudo's secure
-    path so a copy earlier on the user's PATH can't supply the script root runs."""
+    path and ignoring config files, so neither a copy earlier on the user's PATH nor a ~/.curlrc or ~/.wgetrc can change
+    the script root runs."""
     if curl := shutil.which("curl", path=SUDO_SECURE_PATH):
-        return f"{curl} -LsSf {UV_INSTALLER}"
+        return f"{curl} -q -LsSf {UV_INSTALLER}"
     if wget := shutil.which("wget", path=SUDO_SECURE_PATH):
-        return f"{wget} -nv -O- {UV_INSTALLER}"
+        return f"{wget} --no-config -nv -O- {UV_INSTALLER}"
     return None
 
 
