@@ -341,13 +341,20 @@ def root_install_command(label: str, uv: Path, flags: list[str]) -> list[str]:
     return [SUDO, SYSTEM_PYTHON, str(Path(__file__).resolve()), ROOT_FLAG, "--source", label, "--uv", str(uv), *flags, *(["--verbose"] if verbose else [])]
 
 
+def uv_installer_fetch() -> str | None:
+    """Fetches astral.sh's installer with curl, or wget (Ubuntu's desktop installs have no curl), found on sudo's secure
+    path so a copy earlier on the user's PATH can't supply the script root runs."""
+    if curl := shutil.which("curl", path=SUDO_SECURE_PATH):
+        return f"{curl} -LsSf {UV_INSTALLER}"
+    if wget := shutil.which("wget", path=SUDO_SECURE_PATH):
+        return f"{wget} -nv -O- {UV_INSTALLER}"
+    return None
+
+
 def uv_root_install_command() -> str:
-    """astral.sh's installer, run as root. Ubuntu's desktop installs have wget but no curl."""
-    if shutil.which("curl"):
-        fetch = f"curl -LsSf {UV_INSTALLER}"
-    elif shutil.which("wget"):
-        fetch = f"wget -nv -O- {UV_INSTALLER}"
-    else:
+    """astral.sh's installer, run as root."""
+    fetch = uv_installer_fetch()
+    if fetch is None:
         raise SystemExit("✗ Installing uv needs curl or wget. Install either one, then rerun the wizard.")
     return f"{fetch} | {SUDO} env UV_UNMANAGED_INSTALL={UV_FOR_ROOT.parent} sh"
 
@@ -363,7 +370,7 @@ def ensure_uv() -> Path | None:
     reinstalled first because that installer turns off `uv self update`; a distribution's or snap's uv updates with them."""
     found = root_owned_uv()
     if found == UV_FOR_ROOT:
-        if not (shutil.which("curl") or shutil.which("wget")):
+        if uv_installer_fetch() is None:
             warn("Can't update uv for root without curl or wget; building with the one it has.")
             return found
         result = run_uv_root_installer()
