@@ -57,6 +57,7 @@ SCANS_FOLDER = SAVED_FILES / "scans"
 ROOT_FLAG = "--install-as-root"
 PREFLIGHT_EXIT = 3
 SUDO = "/usr/bin/sudo"
+BASH = "/bin/bash"
 SYSTEM_PYTHON = "/usr/bin/python3"
 GPASSWD = "/usr/bin/gpasswd"
 TEE = "/usr/bin/tee"
@@ -354,7 +355,7 @@ def uv_root_install_command() -> str:
 def run_uv_root_installer() -> subprocess.CompletedProcess[str]:
     command = uv_root_install_command()
     detail(f"Running: {command}")
-    return subprocess.run(command, shell=True, capture_output=True, text=True)
+    return subprocess.run([BASH, "-o", "pipefail", "-c", command], capture_output=True, text=True)
 
 
 def ensure_uv() -> Path | None:
@@ -362,6 +363,9 @@ def ensure_uv() -> Path | None:
     reinstalled first because that installer turns off `uv self update`; a distribution's or snap's uv updates with them."""
     found = root_owned_uv()
     if found == UV_FOR_ROOT:
+        if not (shutil.which("curl") or shutil.which("wget")):
+            warn("Can't update uv for root without curl or wget; building with the one it has.")
+            return found
         result = run_uv_root_installer()
         if result.returncode == 0:
             ok("Updated uv for root")
@@ -475,7 +479,7 @@ def step_install() -> Outcome:
         question, more = "Install envh?", INSTALL_MORE
     else:
         line("Updates envh to the version in this folder. Your keys and settings stay.")
-        question, more = "Update envh?", f"Installed:   {installed or 'unknown'}\nThis folder: {label}\nAlso updates the uv the wizard installed for root."
+        question, more = "Update envh?", f"Installed:   {installed or 'unknown'}\nThis folder: {label}\nAlso updates root's uv, if the wizard installed it."
     if not ask(question, more):
         return Outcome(False, "skipped")
     if changes:

@@ -413,11 +413,12 @@ def test_only_the_uv_the_wizard_installed_for_root_is_updated_before_a_build(
 ) -> None:
     commands: list[str] = []
 
-    def run(command: str, **options: object) -> subprocess.CompletedProcess[str]:
-        commands.append(command)
+    def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command[-1])
         return subprocess.CompletedProcess(command, returncode, "", "")
 
     monkeypatch.setattr(wizard, "uv_root_install_command", lambda: "the uv installer")
+    monkeypatch.setattr(wizard.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(wizard.subprocess, "run", run)
     monkeypatch.setattr(wizard, "root_owned_uv", lambda: Path("/usr/bin/uv"))
     assert wizard.ensure_uv() == Path("/usr/bin/uv")
@@ -426,6 +427,18 @@ def test_only_the_uv_the_wizard_installed_for_root_is_updated_before_a_build(
     assert wizard.ensure_uv() == wizard.UV_FOR_ROOT
     assert commands == ["the uv installer"]
     assert said in capsys.readouterr().out
+
+
+def test_a_failed_download_fails_the_uv_installer_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wizard, "uv_root_install_command", lambda: "false | cat")
+    assert wizard.run_uv_root_installer().returncode != 0
+
+
+def test_root_keeps_its_uv_when_there_is_no_curl_or_wget(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(wizard, "root_owned_uv", lambda: wizard.UV_FOR_ROOT)
+    monkeypatch.setattr(wizard.shutil, "which", lambda name: None)
+    assert wizard.ensure_uv() == wizard.UV_FOR_ROOT
+    assert "Can't update uv for root without curl or wget" in capsys.readouterr().out
 
 
 def test_the_system_checks_load_from_the_staged_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
