@@ -57,6 +57,7 @@ SCANS_FOLDER = SAVED_FILES / "scans"
 ROOT_FLAG = "--install-as-root"
 PREFLIGHT_EXIT = 3
 SUDO = "/usr/bin/sudo"
+BASH = "/bin/bash"
 SYSTEM_PYTHON = "/usr/bin/python3"
 GPASSWD = "/usr/bin/gpasswd"
 TEE = "/usr/bin/tee"
@@ -66,6 +67,7 @@ SUPPORTED_MACHINES = ("x86_64", "aarch64")
 SERVICE_USER = "envh"
 SUDO_SECURE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
 UV_INSTALLER = "https://astral.sh/uv/install.sh"
+UV_FOR_ROOT = Path("/usr/local/bin/uv")
 CONSOLE_HELPER = "/usr/local/sbin/envh-console"
 CLAUDE_MD_MARKER = "API keys are managed by `envh`"
 INTERACTIVE = sys.stdout.isatty()
@@ -82,7 +84,7 @@ Details: docs/install.md"""
 UNCOMMITTED_MORE = "Root installs exactly what is in this folder, including these files:"
 UV_MORE = """envh is built with uv, run as root. A uv in your home folder could be swapped by anything running
 as you, agents included, before root runs it. This runs astral.sh's installer as root, into /usr/local/bin.
-It changes no shell settings."""
+Each later envh update reruns it, so this uv stays current. It changes no shell settings."""
 USER_UV_MORE = "Less safe: anything running as you, agents included, could replace it before root runs it."
 PREFLIGHT_MORE = """Each line above says what to fix. These gaps let a program running as you become root,
 and then read your keys. Continue only if you have checked each one yourself.
@@ -339,28 +341,52 @@ def root_install_command(label: str, uv: Path, flags: list[str]) -> list[str]:
     return [SUDO, SYSTEM_PYTHON, str(Path(__file__).resolve()), ROOT_FLAG, "--source", label, "--uv", str(uv), *flags, *(["--verbose"] if verbose else [])]
 
 
+def uv_installer_fetch() -> str | None:
+    """Fetches astral.sh's installer with curl, or wget (Ubuntu's desktop installs have no curl), found on sudo's secure
+    path and ignoring config files, so neither a copy earlier on the user's PATH nor a ~/.curlrc or ~/.wgetrc can change
+    the script root runs."""
+    if curl := shutil.which("curl", path=SUDO_SECURE_PATH):
+        return f"{curl} -q -LsSf {UV_INSTALLER}"
+    if wget := shutil.which("wget", path=SUDO_SECURE_PATH):
+        return f"{wget} --no-config -nv -O- {UV_INSTALLER}"
+    return None
+
+
 def uv_root_install_command() -> str:
-    """astral.sh's installer, run as root. Ubuntu's desktop installs have wget but no curl."""
-    if shutil.which("curl"):
-        fetch = f"curl -LsSf {UV_INSTALLER}"
-    elif shutil.which("wget"):
-        fetch = f"wget -nv -O- {UV_INSTALLER}"
-    else:
+    """astral.sh's installer, run as root."""
+    fetch = uv_installer_fetch()
+    if fetch is None:
         raise SystemExit("✗ Installing uv needs curl or wget. Install either one, then rerun the wizard.")
-    return f"{fetch} | {SUDO} env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
+    return f"{fetch} | {SUDO} env UV_UNMANAGED_INSTALL={UV_FOR_ROOT.parent} sh"
+
+
+def run_uv_root_installer() -> subprocess.CompletedProcess[str]:
+    command = uv_root_install_command()
+    detail(f"Running: {command}")
+    return subprocess.run([BASH, "-o", "pipefail", "-c", command], capture_output=True, text=True)
 
 
 def ensure_uv() -> Path | None:
-    """The uv root builds envh with: root's own, or the user's when they choose it."""
+    """The uv root builds envh with: root's own, or the user's when they choose it. The copy in UV_FOR_ROOT is
+    reinstalled first because that installer turns off `uv self update`; a distribution's or snap's uv updates with them."""
     found = root_owned_uv()
+    if found == UV_FOR_ROOT:
+        if uv_installer_fetch() is None:
+            warn("Can't update uv for root without curl or wget; building with the one it has.")
+            return found
+        result = run_uv_root_installer()
+        if result.returncode == 0:
+            ok("Updated uv for root")
+        else:
+            say(result.stdout + result.stderr)
+            warn("Couldn't update uv for root; building with the one it has.")
+        return found
     if found:
         return found
     say()
     line("envh is built with uv, and root needs its own copy.")
     if ask("Install uv for root?", UV_MORE):
-        command = uv_root_install_command()
-        detail(f"Running: {command}")
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        result = run_uv_root_installer()
         installed = root_owned_uv()
         if result.returncode != 0 or installed is None:
             say(result.stdout + result.stderr)
@@ -461,7 +487,7 @@ def step_install() -> Outcome:
         question, more = "Install envh?", INSTALL_MORE
     else:
         line("Updates envh to the version in this folder. Your keys and settings stay.")
-        question, more = "Update envh?", f"Installed:   {installed or 'unknown'}\nThis folder: {label}"
+        question, more = "Update envh?", f"Installed:   {installed or 'unknown'}\nThis folder: {label}\nAlso updates root's uv, if the wizard installed it."
     if not ask(question, more):
         return Outcome(False, "skipped")
     if changes:
