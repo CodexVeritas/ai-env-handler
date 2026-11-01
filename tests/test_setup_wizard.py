@@ -385,15 +385,21 @@ def test_root_runs_the_wizard_with_the_system_python_and_sudo_by_absolute_path()
 
 
 @pytest.mark.parametrize(("found", "fetch"), [({"curl", "wget"}, "/usr/bin/curl -q -LsSf "), ({"wget"}, "/usr/bin/wget --no-config -nv -O- ")])
-def test_uv_for_root_is_fetched_with_curl_or_else_wget_from_the_secure_path(monkeypatch: pytest.MonkeyPatch, found: set[str], fetch: str) -> None:
-    def which(name: str, path: str | None = None) -> str | None:
-        return f"/usr/bin/{name}" if name in found and path == wizard.SUDO_SECURE_PATH else None
-
-    monkeypatch.setattr(wizard.shutil, "which", which)
+def test_uv_for_root_is_fetched_with_curl_or_else_wget(monkeypatch: pytest.MonkeyPatch, found: set[str], fetch: str) -> None:
+    monkeypatch.setattr(wizard, "root_only_program", lambda name: Path(f"/usr/bin/{name}") if name in found else None)
     assert wizard.uv_root_install_command() == f"{fetch}{wizard.UV_INSTALLER} | /usr/bin/sudo env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
-    monkeypatch.setattr(wizard.shutil, "which", lambda name, path=None: None)
+    monkeypatch.setattr(wizard, "root_only_program", lambda name: None)
     with pytest.raises(SystemExit, match="needs curl or wget"):
         wizard.uv_root_install_command()
+
+
+def test_a_fetcher_the_user_can_change_is_passed_over_on_the_secure_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    planted = tmp_path / "env"
+    planted.write_text("#!/bin/sh\n")
+    planted.chmod(0o755)
+    monkeypatch.setattr(wizard, "SUDO_SECURE_PATH", f"{tmp_path}:/usr/bin")
+    assert not wizard.only_root_can_change(planted)
+    assert wizard.root_only_program("env") == Path("/usr/bin/env")
 
 
 def test_root_builds_with_the_uv_the_user_half_chose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -421,7 +427,7 @@ def test_only_the_uv_the_wizard_installed_for_root_is_updated_before_a_build(
         return subprocess.CompletedProcess(command, returncode, "", "")
 
     monkeypatch.setattr(wizard, "uv_root_install_command", lambda: "the uv installer")
-    monkeypatch.setattr(wizard.shutil, "which", lambda name, path=None: f"/usr/bin/{name}")
+    monkeypatch.setattr(wizard, "root_only_program", lambda name: Path(f"/usr/bin/{name}"))
     monkeypatch.setattr(wizard.subprocess, "run", run)
     monkeypatch.setattr(wizard, "root_owned_uv", lambda: Path("/usr/bin/uv"))
     assert wizard.ensure_uv() == Path("/usr/bin/uv")
@@ -437,9 +443,19 @@ def test_a_failed_download_fails_the_uv_installer_run(monkeypatch: pytest.Monkey
     assert wizard.run_uv_root_installer().returncode != 0
 
 
+def test_the_uv_installer_shell_ignores_bash_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    marker = tmp_path / "ran"
+    startup = tmp_path / "startup.sh"
+    startup.write_text(f"touch {marker}\n")
+    monkeypatch.setenv("BASH_ENV", str(startup))
+    monkeypatch.setattr(wizard, "uv_root_install_command", lambda: "true")
+    assert wizard.run_uv_root_installer().returncode == 0
+    assert not marker.exists()
+
+
 def test_root_keeps_its_uv_when_there_is_no_curl_or_wget(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(wizard, "root_owned_uv", lambda: wizard.UV_FOR_ROOT)
-    monkeypatch.setattr(wizard.shutil, "which", lambda name, path=None: None)
+    monkeypatch.setattr(wizard, "root_only_program", lambda name: None)
     assert wizard.ensure_uv() == wizard.UV_FOR_ROOT
     assert "Can't update uv for root without curl or wget" in capsys.readouterr().out
 

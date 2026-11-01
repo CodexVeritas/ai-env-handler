@@ -341,13 +341,29 @@ def root_install_command(label: str, uv: Path, flags: list[str]) -> list[str]:
     return [SUDO, SYSTEM_PYTHON, str(Path(__file__).resolve()), ROOT_FLAG, "--source", label, "--uv", str(uv), *flags, *(["--verbose"] if verbose else [])]
 
 
+def only_root_can_change(program: Path) -> bool:
+    return all(
+        (status := checked.stat()).st_uid == 0 and not status.st_mode & 0o022
+        for checked in (program.parent, program.resolve(), program.resolve().parent)
+    )
+
+
+def root_only_program(name: str) -> Path | None:
+    """The first copy of name on sudo's secure path whose file and folder only root can change; the system checks that
+    would catch a writable folder run only later, in the root half."""
+    for folder in SUDO_SECURE_PATH.split(":"):
+        program = Path(folder) / name
+        if os.access(program, os.X_OK) and only_root_can_change(program):
+            return program
+    return None
+
+
 def uv_installer_fetch() -> str | None:
-    """Fetches astral.sh's installer with curl, or wget (Ubuntu's desktop installs have no curl), found on sudo's secure
-    path and ignoring config files, so neither a copy earlier on the user's PATH nor a ~/.curlrc or ~/.wgetrc can change
-    the script root runs."""
-    if curl := shutil.which("curl", path=SUDO_SECURE_PATH):
+    """Fetches astral.sh's installer with curl, or wget (Ubuntu's desktop installs have no curl), ignoring config files,
+    so neither a copy the user can change nor a ~/.curlrc or ~/.wgetrc can change the script root runs."""
+    if curl := root_only_program("curl"):
         return f"{curl} -q -LsSf {UV_INSTALLER}"
-    if wget := shutil.which("wget", path=SUDO_SECURE_PATH):
+    if wget := root_only_program("wget"):
         return f"{wget} --no-config -nv -O- {UV_INSTALLER}"
     return None
 
@@ -356,14 +372,16 @@ def uv_root_install_command() -> str:
     """astral.sh's installer, run as root."""
     fetch = uv_installer_fetch()
     if fetch is None:
-        raise SystemExit("✗ Installing uv needs curl or wget. Install either one, then rerun the wizard.")
+        raise SystemExit("✗ Installing uv needs curl or wget in a system folder. Install either one, then rerun the wizard.")
     return f"{fetch} | {SUDO} env UV_UNMANAGED_INSTALL={UV_FOR_ROOT.parent} sh"
 
 
 def run_uv_root_installer() -> subprocess.CompletedProcess[str]:
+    """Runs under bash for pipefail, without BASH_ENV, which would run a file of the user's choosing first."""
     command = uv_root_install_command()
     detail(f"Running: {command}")
-    return subprocess.run([BASH, "-o", "pipefail", "-c", command], capture_output=True, text=True)
+    environment = {key: value for key, value in os.environ.items() if key != "BASH_ENV"}
+    return subprocess.run([BASH, "-o", "pipefail", "-c", command], capture_output=True, text=True, env=environment)
 
 
 def ensure_uv() -> Path | None:
@@ -372,7 +390,7 @@ def ensure_uv() -> Path | None:
     found = root_owned_uv()
     if found == UV_FOR_ROOT:
         if uv_installer_fetch() is None:
-            warn("Can't update uv for root without curl or wget; building with the one it has.")
+            warn("Can't update uv for root without curl or wget in a system folder; building with the one it has.")
             return found
         result = run_uv_root_installer()
         if result.returncode == 0:
