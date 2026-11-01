@@ -387,7 +387,7 @@ def test_root_runs_the_wizard_with_the_system_python_and_sudo_by_absolute_path()
 @pytest.mark.parametrize(("found", "fetch"), [({"curl", "wget"}, "/usr/bin/curl -q -LsSf "), ({"wget"}, "/usr/bin/wget --no-config -nv -O- ")])
 def test_uv_for_root_is_fetched_with_curl_or_else_wget(monkeypatch: pytest.MonkeyPatch, found: set[str], fetch: str) -> None:
     monkeypatch.setattr(wizard, "root_only_program", lambda name: Path(f"/usr/bin/{name}") if name in found else None)
-    assert wizard.uv_root_install_command() == f"{fetch}{wizard.UV_INSTALLER} | /usr/bin/sudo env UV_UNMANAGED_INSTALL=/usr/local/bin sh"
+    assert wizard.uv_root_install_command() == f"{fetch}{wizard.UV_INSTALLER} | /usr/bin/sudo /usr/bin/env UV_UNMANAGED_INSTALL=/usr/local/bin /bin/sh"
     monkeypatch.setattr(wizard, "root_only_program", lambda name: None)
     with pytest.raises(SystemExit, match="needs curl or wget"):
         wizard.uv_root_install_command()
@@ -443,14 +443,19 @@ def test_a_failed_download_fails_the_uv_installer_run(monkeypatch: pytest.Monkey
     assert wizard.run_uv_root_installer().returncode != 0
 
 
-def test_the_uv_installer_shell_ignores_bash_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_uv_installer_shell_gets_only_the_proxy_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     marker = tmp_path / "ran"
     startup = tmp_path / "startup.sh"
     startup.write_text(f"touch {marker}\n")
     monkeypatch.setenv("BASH_ENV", str(startup))
-    monkeypatch.setattr(wizard, "uv_root_install_command", lambda: "true")
-    assert wizard.run_uv_root_installer().returncode == 0
+    monkeypatch.setenv("CURL_CA_BUNDLE", str(tmp_path / "ca.pem"))
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:3128")
+    monkeypatch.setattr(wizard, "uv_root_install_command", lambda: "/usr/bin/env")
+    result = wizard.run_uv_root_installer()
+    assert result.returncode == 0
     assert not marker.exists()
+    assert "HTTPS_PROXY=http://proxy.internal:3128" in result.stdout
+    assert "CURL_CA_BUNDLE" not in result.stdout
 
 
 def test_root_keeps_its_uv_when_there_is_no_curl_or_wget(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

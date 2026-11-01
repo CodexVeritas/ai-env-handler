@@ -58,6 +58,9 @@ ROOT_FLAG = "--install-as-root"
 PREFLIGHT_EXIT = 3
 SUDO = "/usr/bin/sudo"
 BASH = "/bin/bash"
+ENV = "/usr/bin/env"
+SH = "/bin/sh"
+PROXY_VARIABLES = ("http_proxy", "https_proxy", "all_proxy", "no_proxy")
 SYSTEM_PYTHON = "/usr/bin/python3"
 GPASSWD = "/usr/bin/gpasswd"
 TEE = "/usr/bin/tee"
@@ -344,7 +347,7 @@ def root_install_command(label: str, uv: Path, flags: list[str]) -> list[str]:
 def only_root_can_change(program: Path) -> bool:
     return all(
         (status := checked.stat()).st_uid == 0 and not status.st_mode & 0o022
-        for checked in (program.parent, program.resolve(), program.resolve().parent)
+        for checked in (program.resolve(), *program.parents, *program.resolve().parents)
     )
 
 
@@ -373,14 +376,15 @@ def uv_root_install_command() -> str:
     fetch = uv_installer_fetch()
     if fetch is None:
         raise SystemExit("✗ Installing uv needs curl or wget in a system folder. Install either one, then rerun the wizard.")
-    return f"{fetch} | {SUDO} env UV_UNMANAGED_INSTALL={UV_FOR_ROOT.parent} sh"
+    return f"{fetch} | {SUDO} {ENV} UV_UNMANAGED_INSTALL={UV_FOR_ROOT.parent} {SH}"
 
 
 def run_uv_root_installer() -> subprocess.CompletedProcess[str]:
-    """Runs under bash for pipefail, without BASH_ENV, which would run a file of the user's choosing first."""
+    """Runs under bash for pipefail, with only the user's proxy settings, so nothing else in their environment (BASH_ENV,
+    LD_PRELOAD, a CA bundle override) can change the script root runs."""
     command = uv_root_install_command()
     detail(f"Running: {command}")
-    environment = {key: value for key, value in os.environ.items() if key != "BASH_ENV"}
+    environment = {key: value for key, value in os.environ.items() if key.lower() in PROXY_VARIABLES}
     return subprocess.run([BASH, "-o", "pipefail", "-c", command], capture_output=True, text=True, env=environment)
 
 
